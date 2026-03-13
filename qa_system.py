@@ -12,7 +12,7 @@ import sys
 
 # Конфигурация
 OLLAMA_URL = "http://localhost:11434"
-OLLAMA_MODEL = "nomic-embed-text"  # Модель для эмбеддингов
+OLLAMA_MODEL = "bge-m3"  # Модель для эмбеддингов (соответствует create_vector_db.py)
 OLLAMA_CHAT_MODEL = "qwen2.5:7b"  # Модель для генерации ответов
 CHROMA_PERSIST_DIR = "./chroma_db"
 TOP_K_RESULTS = 3  # Количество релевантных документов для поиска
@@ -93,16 +93,12 @@ def generate_answer(query: str, context_docs: List[Dict]) -> str:
 3. Если в контексте нет информации для ответа, честно скажи об этом
 4. Приводи ссылки на источники (названия документов)
 5. Будь кратким и по существу
+6. Если вопрос совсем не касается контекста - ответь в шуточной манере 
+
 
 Ответ:"""
 
     try:
-        # Логирование перед запросом
-        print(f"[DEBUG] Отправка запроса к Ollama API...")
-        print(f"[DEBUG] URL: {OLLAMA_URL}/api/generate")
-        print(f"[DEBUG] Модель: {OLLAMA_CHAT_MODEL}")
-        print(f"[DEBUG] Длина промпта: {len(prompt)} символов")
-        
         response = requests.post(
             f"{OLLAMA_URL}/api/generate",
             json={
@@ -118,27 +114,16 @@ def generate_answer(query: str, context_docs: List[Dict]) -> str:
             timeout=120
         )
         
-        # Логирование ответа
-        print(f"[DEBUG] Статус ответа: {response.status_code}")
-        print(f"[DEBUG] Заголовки ответа: {dict(response.headers)}")
-        
         response.raise_for_status()
         result = response.json()
         return result.get("response", "").strip()
     except requests.exceptions.HTTPError as e:
-        print(f"[DEBUG] HTTP ошибка: {e}")
-        print(f"[DEBUG] Тело ответа: {e.response.text if hasattr(e, 'response') and e.response else 'N/A'}")
         return f"Произошла ошибка при генерации ответа: HTTP {e.response.status_code if hasattr(e, 'response') and e.response else 'Unknown'}"
-    except requests.exceptions.Timeout as e:
-        print(f"[DEBUG] Таймаут запроса: {e}")
+    except requests.exceptions.Timeout:
         return "Произошла ошибка при генерации ответа: Превышено время ожидания"
-    except requests.exceptions.ConnectionError as e:
-        print(f"[DEBUG] Ошибка соединения: {e}")
+    except requests.exceptions.ConnectionError:
         return "Произошла ошибка при генерации ответа: Не удалось подключиться к Ollama"
     except Exception as e:
-        print(f"[DEBUG] Неожиданная ошибка: {e}")
-        import traceback
-        traceback.print_exc()
         return f"Произошла ошибка при генерации ответа: {str(e)}"
 
 

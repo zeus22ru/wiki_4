@@ -12,3 +12,7 @@ requests>=2.31.0
 
 # Дополнительные утилиты
 python-dotenv>=1.0.0
+
+# Веб-интерфейс (Flask)
+flask>=3.0.0
+flask-cors>=4.0.0
