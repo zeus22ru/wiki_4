@@ -12,6 +12,7 @@ const statusText = document.getElementById('statusText');
 const sourcesPanel = document.getElementById('sourcesPanel');
 const sourcesList = document.getElementById('sourcesList');
 const closeSources = document.getElementById('closeSources');
+const newChatBtn = document.getElementById('newChatBtn');
 
 // Инициализация
 document.addEventListener('DOMContentLoaded', () => {
@@ -21,6 +22,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Обработчики событий
     messageForm.addEventListener('submit', handleSubmit);
     closeSources.addEventListener('click', closeSourcesPanel);
+    newChatBtn.addEventListener('click', startNewChat);
     
     // Фокус на поле ввода
     messageInput.focus();
@@ -232,6 +234,30 @@ function closeSourcesPanel() {
 // Прокрутка вниз
 function scrollToBottom() {
     messagesContainer.scrollTop = messagesContainer.scrollHeight;
+}
+
+// Начать новый чат
+function startNewChat() {
+    // Очищаем все сообщения кроме приветственного
+    messagesContainer.innerHTML = '';
+    
+    // Добавляем приветственное сообщение
+    const welcomeDiv = document.createElement('div');
+    welcomeDiv.className = 'message bot-message';
+    welcomeDiv.innerHTML = `
+        <div class="message-avatar">🤖</div>
+        <div class="message-content">
+            <p>Привет! Я AI-ассистент по базе знаний компании. Задайте мне любой вопрос, и я постараюсь найти ответ в документации.</p>
+        </div>
+    `;
+    messagesContainer.appendChild(welcomeDiv);
+    
+    // Очищаем источники
+    currentSources = [];
+    closeSourcesPanel();
+    
+    // Фокус на поле ввода
+    messageInput.focus();
 }
 
 // Обработка Enter (отправка сообщения)
