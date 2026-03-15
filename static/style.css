@@ -18,6 +18,7 @@
     --user-message-text: #ffffff;
     --bot-message-bg: #f5f7fa;
     --bot-message-text: #333333;
+    --bot-message-border: #e5e5e5;
     --border-color: #e5e5e5;
     --text-color: #333333;
     --secondary-text: #666666;
@@ -25,6 +26,34 @@
     --error-color: #dc3545;
     --warning-color: #ffc107;
     --mono-font: 'Fira Code', 'JetBrains Mono', 'Consolas', 'Monaco', 'Courier New', monospace;
+    --shadow-sm: rgba(0, 0, 0, 0.1);
+    --shadow-color: rgba(0, 0, 0, 0.15);
+    --header-bg: #ffffff;
+    --header-border: #e5e5e5;
+    --header-text: #333333;
+    --sources-panel-bg: #ffffff;
+    --sources-panel-border: #e5e5e5;
+    --badge-bg: #e6f0ff;
+    --badge-text: #0066cc;
+    --link-color: #0066cc;
+    --link-hover: #0052a3;
+    --scrollbar-track: #f1f1f1;
+    --scrollbar-thumb: #c1c1c1;
+    --code-bg: #f8f9fa;
+    --code-text: #333333;
+    --blockquote-bg: #f8f9fa;
+    --blockquote-border: #e5e5e5;
+    --table-header-bg: #f0f0f0;
+    --table-border: #e5e5e5;
+    --table-hover: #f8f9fa;
+    --copy-btn-bg: #f5f5f5;
+    --copy-btn-hover: #e5e5e5;
+    --copy-btn-text: #666666;
+    --toast-bg: #333333;
+    --toast-text: #ffffff;
+    --input-bg: #ffffff;
+    --input-border: #d0d0d0;
+    --input-placeholder: #999999;
 }
 
 body {
@@ -267,6 +296,7 @@ body {
     border-radius: 12px;
     line-height: 1.5;
     word-wrap: break-word;
+    position: relative;
 }
 
 .user-message .message-content {
