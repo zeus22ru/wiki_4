@@ -177,10 +177,17 @@ def search_documents(query: str, collection, top_k: int = None) -> List[Dict]:
     documents = []
     if results['documents'] and results['documents'][0]:
         for i, doc in enumerate(results['documents'][0]):
+            score = results['distances'][0][i] if results['distances'] else 0.0
+            # Преобразуем косинусное расстояние в оценку релевантности
+            # Для косинусного расстояния: 0 = идентичные векторы, 1 = противоположные
+            # Ограничиваем диапазон [0, 1]
+            relevance_score = max(0.0, min(1.0, 1.0 - score))
+            
             documents.append({
                 "text": doc,
+                "score": relevance_score,
                 "metadata": results['metadatas'][0][i] if results['metadatas'] else {},
-                "distance": results['distances'][0][i] if results['distances'] else 0
+                "distance": score
             })
     
     logger.info(f"Найдено {len(documents)} релевантных документов")

@@ -13,6 +13,7 @@ import time
 from pathlib import Path
 import logging
 import logging.handlers
+import requests
 
 from config import settings, get_logger
 from utils.embeddings import get_embedding
@@ -113,22 +114,27 @@ class RAGSystem:
     def retrieve_documents(
         self,
         query: str,
-        top_k: int = 3,
-        min_score: float = 0.0
+        top_k: Optional[int] = None,
+        min_score: Optional[float] = None
     ) -> List[Dict]:
         """
         Поиск релевантных документов
         
         Args:
             query: Поисковый запрос
-            top_k: Количество документов для возврата
-            min_score: Минимальный порог релевантности
+            top_k: Количество документов для возврата (по умолчанию из settings.RAG_TOP_K)
+            min_score: Минимальный порог релевантности (по умолчанию из settings.RAG_MIN_SCORE)
             
         Returns:
             Список релевантных документов с метаданными
         """
         rag_logger.info(f"--- Поиск документов ---")
         rag_logger.debug(f"Запрос: '{query}'")
+        
+        # Используем значения из настроек по умолчанию
+        top_k = top_k if top_k is not None else settings.RAG_TOP_K
+        min_score = min_score if min_score is not None else settings.RAG_MIN_SCORE
+        
         rag_logger.debug(f"Параметры: top_k={top_k}, min_score={min_score}")
         
         start_time = time.time()
@@ -157,8 +163,10 @@ class RAGSystem:
                 rag_logger.debug(f"Обработка {len(results['documents'][0])} найденных документов")
                 for i, doc in enumerate(results['documents'][0]):
                     score = results['distances'][0][i] if results['distances'] else 0.0
-                    # Преобразуем расстояние в оценку релевантности (чем меньше расстояние, тем выше релевантность)
-                    relevance_score = 1.0 - min(score, 1.0)
+                    # Преобразуем косинусное расстояние в оценку релевантности
+                    # Для косинусного расстояния: 0 = идентичные векторы, 1 = противоположные
+                    # Ограничиваем диапазон [0, 1]
+                    relevance_score = max(0.0, min(1.0, 1.0 - score))
                     
                     rag_logger.debug(f"Документ {i+1}: score={score:.4f}, relevance={relevance_score:.4f}")
                     
@@ -174,6 +182,10 @@ class RAGSystem:
                             'metadata': metadata,
                             'chunk_id': chunk_id
                         })
+            
+            # Сортируем документы по релевантности (от высокого к низкому)
+            documents.sort(key=lambda x: x['score'], reverse=True)
+            rag_logger.debug(f"Документы отсортированы по релевантности")
             
             elapsed = time.time() - start_time
             rag_logger.info(f"Поиск завершен за {elapsed:.3f} сек. Найдено документов: {len(documents)}")
@@ -283,7 +295,7 @@ class RAGSystem:
         self,
         answer: str,
         citations: List[Citation],
-        max_citations: int = 3
+        max_citations: Optional[int] = None
     ) -> str:
         """
         Форматирование ответа с цитатами
@@ -291,7 +303,7 @@ class RAGSystem:
         Args:
             answer: Исходный ответ
             citations: Список цитат
-            max_citations: Максимальное количество цитат для отображения
+            max_citations: Максимальное количество цитат для отображения (по умолчанию из settings.RAG_MAX_CITATIONS)
             
         Returns:
             Отформатированный ответ с цитатами
@@ -299,6 +311,9 @@ class RAGSystem:
         rag_logger.info(f"--- Форматирование ответа с цитатами ---")
         rag_logger.debug(f"Исходный ответ: {answer[:100]}...")
         rag_logger.debug(f"Найдено цитат: {len(citations)}, max для отображения: {max_citations}")
+        
+        # Используем значение из настроек по умолчанию
+        max_citations = max_citations if max_citations is not None else settings.RAG_MAX_CITATIONS
         
         start_time = time.time()
         
@@ -337,7 +352,7 @@ class RAGSystem:
         self,
         query: str,
         documents: List[Dict],
-        max_context_length: int = 3000
+        max_context_length: Optional[int] = None
     ) -> str:
         """
         Генерация промпта для RAG с контекстом
@@ -345,7 +360,7 @@ class RAGSystem:
         Args:
             query: Пользовательский запрос
             documents: Список найденных документов
-            max_context_length: Максимальная длина контекста
+            max_context_length: Максимальная длина контекста (по умолчанию из settings.RAG_MAX_CONTEXT_LENGTH)
             
         Returns:
             Сформированный промпт
@@ -353,6 +368,9 @@ class RAGSystem:
         rag_logger.info(f"--- Генерация промпта ---")
         rag_logger.debug(f"Запрос: '{query}'")
         rag_logger.debug(f"Документов: {len(documents)}, max_context_length: {max_context_length}")
+        
+        # Используем значение из настроек по умолчанию
+        max_context_length = max_context_length if max_context_length is not None else settings.RAG_MAX_CONTEXT_LENGTH
         
         start_time = time.time()
         
@@ -415,29 +433,79 @@ class RAGSystem:
         
         return prompt
     
+    def _generate_answer(self, prompt: str) -> str:
+        """
+        Генерация ответа через Ollama API
+        
+        Args:
+            prompt: Промпт для генерации
+            
+        Returns:
+            Сгенерированный ответ
+        """
+        rag_logger.debug("Генерация ответа через Ollama API...")
+        try:
+            response = requests.post(
+                f"{settings.OLLAMA_URL}/api/generate",
+                json={
+                    "model": settings.OLLAMA_CHAT_MODEL,
+                    "prompt": prompt,
+                    "stream": False,
+                    "options": {
+                        "temperature": 0.3,
+                        "top_p": 0.9,
+                        "num_predict": 500
+                    }
+                },
+                timeout=120
+            )
+            response.raise_for_status()
+            result = response.json()
+            answer = result.get("response", "").strip()
+            rag_logger.debug(f"Ответ сгенерирован, длина: {len(answer)} символов")
+            return answer
+        except requests.exceptions.HTTPError as e:
+            rag_logger.error(f"HTTP ошибка при генерации ответа: {e.response.status_code if hasattr(e, 'response') and e.response else 'Unknown'}")
+            return f"Произошла ошибка при генерации ответа: HTTP {e.response.status_code if hasattr(e, 'response') and e.response else 'Unknown'}"
+        except requests.exceptions.Timeout:
+            rag_logger.error("Таймаут при генерации ответа")
+            return "Произошла ошибка при генерации ответа: Превышено время ожидания"
+        except requests.exceptions.ConnectionError:
+            rag_logger.error("Ошибка подключения к Ollama")
+            return "Произошла ошибка при генерации ответа: Не удалось подключиться к Ollama"
+        except Exception as e:
+            rag_logger.error(f"Ошибка при генерации ответа: {str(e)}")
+            return f"Произошла ошибка при генерации ответа: {str(e)}"
+    
     def query(
         self,
         query: str,
-        top_k: int = 5,
-        min_score: float = 0.0,
+        top_k: Optional[int] = None,
+        min_score: Optional[float] = None,
         include_citations: bool = True,
-        max_citations: int = 5
+        max_citations: Optional[int] = None
     ) -> RAGResult:
         """
         Выполнение RAG запроса
         
         Args:
             query: Пользовательский запрос
-            top_k: Количество документов для поиска
-            min_score: Минимальный порог релевантности
+            top_k: Количество документов для поиска (по умолчанию из settings.RAG_TOP_K)
+            min_score: Минимальный порог релевантности (по умолчанию из settings.RAG_MIN_SCORE)
             include_citations: Включать ли цитаты в ответ
-            max_citations: Максимальное количество цитат
+            max_citations: Максимальное количество цитат (по умолчанию из settings.RAG_MAX_CITATIONS)
             
         Returns:
             Результат RAG с ответом и цитатами
         """
         rag_logger.info(f"=== Выполнение RAG запроса ===")
         rag_logger.debug(f"Запрос: '{query}'")
+        
+        # Используем значения из настроек по умолчанию
+        top_k = top_k if top_k is not None else settings.RAG_TOP_K
+        min_score = min_score if min_score is not None else settings.RAG_MIN_SCORE
+        max_citations = max_citations if max_citations is not None else settings.RAG_MAX_CITATIONS
+        
         rag_logger.debug(f"Параметры: top_k={top_k}, min_score={min_score}, include_citations={include_citations}, max_citations={max_citations}")
         
         start_time = time.time()
@@ -461,37 +529,25 @@ class RAGSystem:
         rag_logger.debug("Шаг 2: Генерация промпта с контекстом")
         prompt = self.generate_rag_prompt(query, documents)
         
-        # 3. Генерация ответа (будет выполняться в qa_system.py)
-        # Здесь мы возвращаем промпт и документы для дальнейшей обработки
-        rag_logger.debug("Шаг 3: Формирование источников")
-        sources = [
-            {
-                'source': doc['metadata'].get('source', 'Неизвестный источник'),
-                'chunk_id': doc['chunk_id'],
-                'score': doc['score'],
-                'text': doc['text'][:200] + "..." if len(doc['text']) > 200 else doc['text']
-            }
-            for doc in documents
-        ]
+        # 3. Генерация ответа через Ollama
+        rag_logger.debug("Шаг 3: Генерация ответа через Ollama")
+        answer = self._generate_answer(prompt)
         
-        rag_logger.debug(f"Сформировано источников: {len(sources)}")
+        # 4. Обогащение ответа цитатами
+        rag_logger.debug("Шаг 4: Обогащение ответа цитатами")
+        rag_result = self.enrich_answer_with_citations(answer, documents, max_citations)
         
-        # Возвращаем результат (ответ будет сгенерирован позже)
         elapsed = time.time() - start_time
         rag_logger.info(f"RAG запрос завершен за {elapsed:.3f} сек")
-        rag_logger.debug(f"Результат: {len(documents)} документов, {len(sources)} источников")
+        rag_logger.debug(f"Результат: {len(documents)} документов, {len(rag_result.citations)} цитат")
         
-        return RAGResult(
-            answer="",  # Будет заполнен после генерации
-            citations=[],
-            sources=sources
-        )
+        return rag_result
     
     def enrich_answer_with_citations(
         self,
         answer: str,
         documents: List[Dict],
-        max_citations: int = 3
+        max_citations: Optional[int] = None
     ) -> RAGResult:
         """
         Обогащение сгенерированного ответа цитатами
@@ -499,7 +555,7 @@ class RAGSystem:
         Args:
             answer: Сгенерированный ответ
             documents: Список найденных документов
-            max_citations: Максимальное количество цитат
+            max_citations: Максимальное количество цитат (по умолчанию из settings.RAG_MAX_CITATIONS)
             
         Returns:
             RAG результат с цитатами
@@ -507,6 +563,9 @@ class RAGSystem:
         rag_logger.info(f"--- Обогащение ответа цитатами ---")
         rag_logger.debug(f"Длина ответа: {len(answer)} символов")
         rag_logger.debug(f"Документов: {len(documents)}, max_citations: {max_citations}")
+        
+        # Используем значение из настроек по умолчанию
+        max_citations = max_citations if max_citations is not None else settings.RAG_MAX_CITATIONS
         
         start_time = time.time()
         

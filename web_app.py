@@ -158,6 +158,15 @@ def chat():
         logger.warning("Получено пустое сообщение")
         return jsonify({"error": "Пустое сообщение"}), 400
     
+    # Валидация длины запроса
+    if len(query) < 3:
+        logger.warning(f"Слишком короткий запрос: {len(query)} символов")
+        return jsonify({"error": "Слишком короткий запрос. Минимальная длина: 3 символа"}), 400
+    
+    if len(query) > 1000:
+        logger.warning(f"Слишком длинный запрос: {len(query)} символов")
+        return jsonify({"error": "Слишком длинный запрос. Максимальная длина: 1000 символов"}), 400
+    
     # Инициализируем базу данных и RAG систему
     coll, rag = initialize_database()
     if not coll or not rag:
@@ -175,47 +184,30 @@ def chat():
     # Используем RAG систему для поиска и генерации ответа с цитированием
     logger.info(f"Выполнение RAG запроса: '{query}'")
     
-    # Поиск релевантных документов через RAG
-    docs = rag.retrieve_documents(query, top_k=settings.TOP_K_RESULTS)
-    logger.info(f"Найдено {len(docs)} релевантных документов")
+    # Поиск релевантных документов через RAG с использованием min_score
+    try:
+        docs = rag.retrieve_documents(query, top_k=settings.TOP_K_RESULTS, min_score=0.0)
+        logger.info(f"Найдено {len(docs)} релевантных документов")
+    except Exception as e:
+        logger.error(f"Ошибка при поиске документов: {e}")
+        return jsonify({"error": "Ошибка при поиске в базе знаний"}), 500
     
     if not docs:
         logger.info("Не найдено релевантных документов")
         return jsonify({
-            "answer": "Не найдено релевантных документов в базе знаний.",
+            "answer": "К сожалению, я не нашёл релевантной информации для ответа на ваш вопрос.",
             "sources": [],
             "citations": []
         })
     
-    # Генерация промпта с контекстом
-    prompt = rag.generate_rag_prompt(query, docs)
-    
-    # Генерация ответа через Ollama
+    # Используем новый метод query() для полной RAG-цепочки
     try:
-        response = requests.post(
-            f"{settings.OLLAMA_URL}/api/generate",
-            json={
-                "model": settings.OLLAMA_CHAT_MODEL,
-                "prompt": prompt,
-                "stream": False,
-                "options": {
-                    "temperature": 0.3,
-                    "top_p": 0.9,
-                    "num_predict": 500
-                }
-            },
-            timeout=120
-        )
-        response.raise_for_status()
-        answer = response.json().get("response", "").strip()
+        rag_result = rag.query(query, top_k=settings.TOP_K_RESULTS, min_score=0.0, max_citations=5)
+        logger.info(f"Сгенерирован ответ длиной {len(rag_result.answer)} символов")
+        logger.info(f"Извлечено {len(rag_result.citations)} цитат")
     except Exception as e:
-        logger.error(f"Ошибка при генерации ответа: {e}")
-        return jsonify({"error": f"Ошибка при генерации ответа: {str(e)}"}), 500
-    
-    # Обогащение ответа цитатами
-    rag_result = rag.enrich_answer_with_citations(answer, docs)
-    logger.info(f"Сгенерирован ответ длиной {len(rag_result.answer)} символов")
-    logger.info(f"Извлечено {len(rag_result.citations)} цитат")
+        logger.error(f"Ошибка при выполнении RAG запроса: {e}")
+        return jsonify({"error": f"Ошибка при обработке запроса: {str(e)}"}), 500
     
     # Формируем список источников
     sources = []

@@ -33,10 +33,16 @@ class Settings:
     CHUNK_OVERLAP: int = int(os.getenv("CHUNK_OVERLAP", "50"))
     BATCH_SIZE: int = int(os.getenv("BATCH_SIZE", "10"))
 
-    # API настройки
+    # API настройка
     API_HOST: str = os.getenv("API_HOST", "0.0.0.0")
     API_PORT: int = int(os.getenv("API_PORT", "5000"))
     TOP_K_RESULTS: int = int(os.getenv("TOP_K_RESULTS", "3"))
+
+    # RAG настройка
+    RAG_TOP_K: int = int(os.getenv("RAG_TOP_K", "5"))
+    RAG_MAX_CITATIONS: int = int(os.getenv("RAG_MAX_CITATIONS", "5"))
+    RAG_MIN_SCORE: float = float(os.getenv("RAG_MIN_SCORE", "0.5"))
+    RAG_MAX_CONTEXT_LENGTH: int = int(os.getenv("RAG_MAX_CONTEXT_LENGTH", "3000"))
 
     # Logging настройки
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
