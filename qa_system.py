@@ -10,21 +10,30 @@ import requests
 from typing import List, Dict
 import sys
 
-# Конфигурация
-OLLAMA_URL = "http://localhost:11434"
-OLLAMA_MODEL = "bge-m3"  # Модель для эмбеддингов (соответствует create_vector_db.py)
-OLLAMA_CHAT_MODEL = "qwen2.5:7b"  # Модель для генерации ответов
-CHROMA_PERSIST_DIR = "./chroma_db"
-TOP_K_RESULTS = 3  # Количество релевантных документов для поиска
+# Импорт конфигурации и логирования
+from config import settings, get_logger
+
+# Импорт кэширования
+from utils import get_cached_embedding, cache_embedding
+
+# Получаем логгер для этого модуля
+logger = get_logger(__name__)
 
 
 def get_embedding(text: str) -> List[float]:
-    """Получить эмбеддинг текста через ollama (API v2)"""
+    """Получить эмбеддинг текста через ollama (API v2) с кэшированием"""
+    # Проверяем кэш
+    cached = get_cached_embedding(text, settings.OLLAMA_EMBEDDING_MODEL)
+    if cached is not None:
+        logger.debug(f"Эмбеддинг получен из кэша для текста: {text[:50]}...")
+        return cached
+    
+    # Получаем эмбеддинг из Ollama
     try:
         response = requests.post(
-            f"{OLLAMA_URL}/api/embed",
+            f"{settings.OLLAMA_URL}/api/embed",
             json={
-                "model": OLLAMA_MODEL,
+                "model": settings.OLLAMA_EMBEDDING_MODEL,
                 "input": text
             },
             timeout=60
@@ -33,24 +42,33 @@ def get_embedding(text: str) -> List[float]:
         result = response.json()
         # API v2 возвращает embeddings (массив) или embedding (один)
         if "embeddings" in result:
-            return result["embeddings"][0]
+            embedding = result["embeddings"][0]
         elif "embedding" in result:
-            return result["embedding"]
-        return []
+            embedding = result["embedding"]
+        else:
+            return []
+        
+        # Кэшируем эмбеддинг
+        cache_embedding(text, settings.OLLAMA_EMBEDDING_MODEL, embedding)
+        logger.debug(f"Эмбеддинг закэширован для текста: {text[:50]}...")
+        
+        return embedding
     except Exception as e:
-        print(f"Ошибка при получении эмбеддинга: {e}")
+        logger.error(f"Ошибка при получении эмбеддинга: {e}")
         return []
 
 
-def search_documents(query: str, collection, top_k: int = TOP_K_RESULTS) -> List[Dict]:
+def search_documents(query: str, collection, top_k: int = None) -> List[Dict]:
     """Поиск релевантных документов в векторной базе"""
-    print(f"Поиск релевантных документов для запроса: '{query}'")
+    if top_k is None:
+        top_k = settings.TOP_K_RESULTS
+    logger.info(f"Поиск релевантных документов для запроса: '{query}'")
     
     # Получаем эмбеддинг запроса
     query_embedding = get_embedding(query)
     
     if not query_embedding:
-        print("Не удалось получить эмбеддинг запроса")
+        logger.warning("Не удалось получить эмбеддинг запроса")
         return []
     
     # Ищем релевантные документы
@@ -68,7 +86,7 @@ def search_documents(query: str, collection, top_k: int = TOP_K_RESULTS) -> List
                 "distance": results['distances'][0][i] if results['distances'] else 0
             })
     
-    print(f"Найдено {len(documents)} релевантных документов")
+    logger.info(f"Найдено {len(documents)} релевантных документов")
     return documents
 
 
@@ -101,9 +119,9 @@ def generate_answer(query: str, context_docs: List[Dict]) -> str:
 
     try:
         response = requests.post(
-            f"{OLLAMA_URL}/api/generate",
+            f"{settings.OLLAMA_URL}/api/generate",
             json={
-                "model": OLLAMA_CHAT_MODEL,
+                "model": settings.OLLAMA_CHAT_MODEL,
                 "prompt": prompt,
                 "stream": False,
                 "options": {
@@ -119,27 +137,31 @@ def generate_answer(query: str, context_docs: List[Dict]) -> str:
         result = response.json()
         return result.get("response", "").strip()
     except requests.exceptions.HTTPError as e:
+        logger.error(f"HTTP ошибка при генерации ответа: {e.response.status_code if hasattr(e, 'response') and e.response else 'Unknown'}")
         return f"Произошла ошибка при генерации ответа: HTTP {e.response.status_code if hasattr(e, 'response') and e.response else 'Unknown'}"
     except requests.exceptions.Timeout:
+        logger.error("Таймаут при генерации ответа")
         return "Произошла ошибка при генерации ответа: Превышено время ожидания"
     except requests.exceptions.ConnectionError:
+        logger.error("Ошибка подключения к Ollama")
         return "Произошла ошибка при генерации ответа: Не удалось подключиться к Ollama"
     except Exception as e:
+        logger.error(f"Ошибка при генерации ответа: {str(e)}")
         return f"Произошла ошибка при генерации ответа: {str(e)}"
 
 
 def interactive_mode(collection):
     """Интерактивный режим вопрос-ответ"""
-    print("\n" + "=" * 60)
-    print("Режим вопрос-ответ (введите 'exit' для выхода)")
-    print("=" * 60 + "\n")
+    logger.info("\n" + "=" * 60)
+    logger.info("Режим вопрос-ответ (введите 'exit' для выхода)")
+    logger.info("=" * 60 + "\n")
     
     while True:
         try:
             query = input("Ваш вопрос: ").strip()
             
             if query.lower() in ['exit', 'quit', 'выход', 'q']:
-                print("До свидания!")
+                logger.info("До свидания!")
                 break
             
             if not query:
@@ -149,11 +171,11 @@ def interactive_mode(collection):
             docs = search_documents(query, collection)
             
             if not docs:
-                print("\nНе найдено релевантных документов в базе знаний.\n")
+                logger.warning("\nНе найдено релевантных документов в базе знаний.\n")
                 continue
             
             # Генерируем ответ
-            print("\nГенерация ответа...")
+            logger.info("\nГенерация ответа...")
             answer = generate_answer(query, docs)
             
             print("\n" + "-" * 60)
@@ -163,10 +185,10 @@ def interactive_mode(collection):
             print("-" * 60 + "\n")
             
         except KeyboardInterrupt:
-            print("\n\nДо свидания!")
+            logger.info("\n\nДо свидания!")
             break
         except Exception as e:
-            print(f"\nОшибка: {e}\n")
+            logger.error(f"\nОшибка: {e}\n")
 
 
 def single_query_mode(collection, query: str):
@@ -175,13 +197,13 @@ def single_query_mode(collection, query: str):
     docs = search_documents(query, collection)
     
     if not docs:
-        print("\nНе найдено релевантных документов в базе знаний.")
+        logger.warning("\nНе найдено релевантных документов в базе знаний.")
         return
     
     # Выводим найденные документы
-    print("\n" + "=" * 60)
-    print("РЕЛЕВАНТНЫЕ ДОКУМЕНТЫ:")
-    print("=" * 60)
+    logger.info("\n" + "=" * 60)
+    logger.info("РЕЛЕВАНТНЫЕ ДОКУМЕНТЫ:")
+    logger.info("=" * 60)
     for i, doc in enumerate(docs, 1):
         print(f"\n--- Документ {i} ---")
         print(f"Источник: {doc['metadata'].get('title', 'Без названия')}")
@@ -190,9 +212,9 @@ def single_query_mode(collection, query: str):
         print(f"Текст: {doc['text'][:300]}...")
     
     # Генерируем ответ
-    print("\n" + "=" * 60)
-    print("Генерация ответа...")
-    print("=" * 60)
+    logger.info("\n" + "=" * 60)
+    logger.info("Генерация ответа...")
+    logger.info("=" * 60)
     answer = generate_answer(query, docs)
     
     print("\n" + "-" * 60)
@@ -204,29 +226,29 @@ def single_query_mode(collection, query: str):
 
 def main():
     """Главная функция"""
-    print("=" * 60)
-    print("Вопрос-ответная система на базе знаний")
-    print("=" * 60)
+    logger.info("=" * 60)
+    logger.info("Вопрос-ответная система на базе знаний")
+    logger.info("=" * 60)
     
     # Проверяем доступность ollama
     try:
-        response = requests.get(f"{OLLAMA_URL}/api/tags", timeout=5)
+        response = requests.get(f"{settings.OLLAMA_URL}/api/tags", timeout=5)
         response.raise_for_status()
-        print(f"Ollama доступен по адресу: {OLLAMA_URL}")
+        logger.info(f"Ollama доступен по адресу: {settings.OLLAMA_URL}")
     except Exception as e:
-        print(f"Ошибка: Ollama недоступен по адресу {OLLAMA_URL}")
-        print(f"Убедитесь, что ollama запущен в Docker")
+        logger.error(f"Ошибка: Ollama недоступен по адресу {settings.OLLAMA_URL}")
+        logger.error(f"Убедитесь, что ollama запущен в Docker")
         return
     
     # Подключаемся к ChromaDB
     try:
-        client = chromadb.PersistentClient(path=CHROMA_PERSIST_DIR)
-        collection = client.get_collection("wiki_knowledge")
+        client = chromadb.PersistentClient(path=settings.CHROMA_PERSIST_DIR)
+        collection = client.get_collection(settings.CHROMA_COLLECTION_NAME)
         count = collection.count()
-        print(f"Загружена векторная база данных: {count} документов")
+        logger.info(f"Загружена векторная база данных: {count} документов")
     except Exception as e:
-        print(f"Ошибка при загрузке векторной базы данных: {e}")
-        print(f"Запустите сначала create_vector_db.py для создания базы")
+        logger.error(f"Ошибка при загрузке векторной базы данных: {e}")
+        logger.error(f"Запустите сначала create_vector_db.py для создания базы")
         return
     
     # Определяем режим работы

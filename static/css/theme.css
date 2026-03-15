@@ -1,0 +1,366 @@
+/* Переменные для светлой темы (по умолчанию) RGB (168,134,86), HEX: #a88656 */
+:root {
+    --primary-color: #0066cc;
+    --primary-hover: #0052a3;
+    --primary-light: #e6f0ff;
+    --bg-color: #f8f9fa;
+    --chat-bg: #ffffff;
+    --sidebar-bg: #ffffff;
+    --sidebar-text: #333333;
+    --sidebar-border: #e5e5e5;
+    --sidebar-hover: #f5f5f5;
+    --user-message-bg: #336a30;
+    --user-message-text: #333333;
+    --bot-message-bg: #ffffff;
+    --bot-message-text: #1a1a1a;
+    --bot-message-border: #e5e5e5;
+    --border-color: #e5e5e5;
+    --text-color: #333333;
+    --secondary-text: #666666;
+    --success-color: #28a745;
+    --error-color: #dc3545;
+    --warning-color: #ffc107;
+    --input-bg: #ffffff;
+    --input-border: #d0d0d0;
+    --input-placeholder: #999999;
+    --shadow-color: rgba(0, 0, 0, 0.08);
+    --shadow-sm: rgba(0, 0, 0, 0.05);
+    --code-bg: #f8f9fa;
+    --code-text: #333333;
+    --blockquote-bg: #f8f9fa;
+    --blockquote-border: #e5e5e5;
+    --table-header-bg: #f0f0f0;
+    --table-border: #e5e5e5;
+    --table-hover: #f8f9fa;
+    --scrollbar-track: #f1f1f1;
+    --scrollbar-thumb: #c1c1c1;
+    --sources-panel-bg: #ffffff;
+    --sources-panel-border: #e5e5e5;
+    --copy-btn-bg: #f5f5f5;
+    --copy-btn-hover: #e5e5e5;
+    --copy-btn-text: #666666;
+    --toast-bg: #333333;
+    --toast-text: #ffffff;
+    --header-bg: #ffffff;
+    --header-border: #e5e5e5;
+    --header-text: #333333;
+    --badge-bg: #e6f0ff;
+    --badge-text: #0066cc;
+    --link-color: #0066cc;
+    --link-hover: #0052a3;
+}
+
+/* Переменные для тёмной темы */
+[data-theme="dark"] {
+    --primary-color: #5da9ff;
+    --primary-hover: #4a90d9;
+    --bg-color: #0d1117;
+    --chat-bg: #161b22;
+    --sidebar-bg: linear-gradient(180deg, #0d1117 0%, #161b22 100%);
+    --sidebar-text: #e6edf3;
+    --user-message-bg: #238636;
+    --user-message-text: #ffffff;
+    --bot-message-bg: #21262d;
+    --bot-message-text: #e6edf3;
+    --border-color: #30363d;
+    --text-color: #e6edf3;
+    --secondary-text: #8b949e;
+    --success-color: #3fb950;
+    --error-color: #f85149;
+    --warning-color: #d29922;
+    --input-bg: #0d1117;
+    --input-border: #30363d;
+    --input-placeholder: #484f58;
+    --shadow-color: rgba(0, 0, 0, 0.3);
+    --code-bg: #0d1117;
+    --code-text: #e6edf3;
+    --blockquote-bg: #161b22;
+    --blockquote-border: #30363d;
+    --table-header-bg: #161b22;
+    --table-border: #30363d;
+    --table-hover: #21262d;
+    --scrollbar-track: #161b22;
+    --scrollbar-thumb: #484f58;
+    --sources-panel-bg: #161b22;
+    --sources-panel-border: #30363d;
+    --copy-btn-bg: rgba(255, 255, 255, 0.05);
+    --copy-btn-hover: rgba(255, 255, 255, 0.1);
+    --copy-btn-text: #8b949e;
+    --toast-bg: #21262d;
+    --toast-text: #e6edf3;
+}
+
+/* Переключатель тем */
+.theme-toggle {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 1rem;
+    background: var(--copy-btn-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    color: var(--text-color);
+    font-size: 0.875rem;
+}
+
+.theme-toggle:hover {
+    background: var(--copy-btn-hover);
+    border-color: var(--primary-color);
+}
+
+.theme-toggle svg {
+    width: 20px;
+    height: 20px;
+    transition: transform 0.3s ease;
+}
+
+.theme-toggle:hover svg {
+    transform: rotate(15deg);
+}
+
+/* Иконка солнца (светлая тема) */
+.theme-toggle .sun-icon {
+    display: block;
+}
+
+.theme-toggle .moon-icon {
+    display: none;
+}
+
+/* Иконка луны (тёмная тема) */
+[data-theme="dark"] .theme-toggle .sun-icon {
+    display: none;
+}
+
+[data-theme="dark"] .theme-toggle .moon-icon {
+    display: block;
+}
+
+/* Плавный переход при смене темы */
+* {
+    transition: background-color 0.3s ease, 
+                color 0.3s ease, 
+                border-color 0.3s ease,
+                box-shadow 0.3s ease;
+}
+
+/* Исключения для анимаций */
+*::before,
+*::after,
+.message-content,
+.message-avatar,
+.send-button svg {
+    transition: none !important;
+}
+
+/* Кнопка копирования */
+.copy-button {
+    position: absolute;
+    top: 0.5rem;
+    right: 0.5rem;
+    width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--copy-btn-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    cursor: pointer;
+    opacity: 0;
+    transition: all 0.2s ease;
+    color: var(--copy-btn-text);
+}
+
+.copy-button svg {
+    width: 16px;
+    height: 16px;
+}
+
+.message-content:hover .copy-button {
+    opacity: 1;
+}
+
+.copy-button:hover {
+    background: var(--copy-btn-hover);
+    border-color: var(--primary-color);
+    color: var(--primary-color);
+}
+
+.copy-button:active {
+    transform: scale(0.95);
+}
+
+/* Уведомление о копировании */
+.toast {
+    position: fixed;
+    bottom: 2rem;
+    left: 50%;
+    transform: translateX(-50%) translateY(100px);
+    background: var(--toast-bg);
+    color: var(--toast-text);
+    padding: 0.75rem 1.5rem;
+    border-radius: 8px;
+    box-shadow: 0 4px 12px var(--shadow-color);
+    font-size: 0.875rem;
+    opacity: 0;
+    transition: all 0.3s ease;
+    z-index: 1000;
+}
+
+.toast.show {
+    transform: translateX(-50%) translateY(0);
+    opacity: 1;
+}
+
+.toast.success {
+    border-left: 4px solid var(--success-color);
+}
+
+.toast.error {
+    border-left: 4px solid var(--error-color);
+}
+
+/* Обновление стилей для существующих элементов с учётом тем */
+.chat-container {
+    background: var(--chat-bg);
+}
+
+.chat-header {
+    background: var(--chat-bg);
+    border-bottom: 1px solid var(--border-color);
+}
+
+.messages {
+    background: var(--bg-color);
+}
+
+.bot-message {
+    background: var(--bot-message-bg);
+    color: var(--bot-message-text);
+}
+
+.message-input {
+    background: var(--input-bg);
+    border: 1px solid var(--input-border);
+    color: var(--text-color);
+}
+
+.message-input::placeholder {
+    color: var(--input-placeholder);
+}
+
+.message-input:focus {
+    border-color: var(--primary-color);
+    outline: none;
+}
+
+.sources-panel {
+    background: var(--sources-panel-bg);
+    border-top: 1px solid var(--sources-panel-border);
+}
+
+/* Скроллбар */
+.messages::-webkit-scrollbar {
+    width: 8px;
+}
+
+.messages::-webkit-scrollbar-track {
+    background: var(--scrollbar-track);
+}
+
+.messages::-webkit-scrollbar-thumb {
+    background: var(--scrollbar-thumb);
+    border-radius: 4px;
+}
+
+.messages::-webkit-scrollbar-thumb:hover {
+    background: var(--secondary-text);
+}
+
+/* Кодовые блоки */
+pre {
+    background: var(--code-bg) !important;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+}
+
+code {
+    background: var(--code-bg);
+    color: var(--code-text);
+    padding: 0.2rem 0.4rem;
+    border-radius: 3px;
+    font-size: 0.9em;
+}
+
+pre code {
+    background: transparent;
+    padding: 0;
+}
+
+/* Цитаты */
+blockquote {
+    background: var(--blockquote-bg);
+    border-left: 4px solid var(--blockquote-border);
+    padding: 1rem;
+    margin: 1rem 0;
+    border-radius: 0 6px 6px 0;
+}
+
+/* Таблицы */
+table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 1rem 0;
+}
+
+th {
+    background: var(--table-header-bg);
+    border: 1px solid var(--table-border);
+    padding: 0.75rem;
+    text-align: left;
+}
+
+td {
+    border: 1px solid var(--table-border);
+    padding: 0.75rem;
+}
+
+tr:hover {
+    background: var(--table-hover);
+}
+
+/* Ссылки */
+a {
+    color: var(--primary-color);
+    text-decoration: none;
+}
+
+a:hover {
+    color: var(--primary-hover);
+    text-decoration: underline;
+}
+
+/* Статус индикатор */
+.status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--success-color);
+}
+
+.status-dot.offline {
+    background: var(--error-color);
+}
+
+.status-dot.checking {
+    background: var(--warning-color);
+    animation: pulse 1s infinite;
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}

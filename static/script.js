@@ -128,17 +128,48 @@ function addMessage(text, type) {
     return messageDiv;
 }
 
-// Форматирование сообщения
+// Форматирование сообщения с поддержкой Markdown
 function formatMessage(text) {
-    // Экранируем HTML
-    let formatted = text
-        .replace(/&/g, '&')
-        .replace(/</g, '<')
-        .replace(/>/g, '>');
-    
-    // Преобразуем переносы строк в параграфы
-    const paragraphs = formatted.split('\n\n');
-    return paragraphs.map(p => `<p>${p.replace(/\n/g, '<br>')}</p>`).join('');
+    // Настройка marked.js
+    if (typeof marked !== 'undefined') {
+        marked.setOptions({
+            breaks: true,      // Переносы строк в <br>
+            gfm: true,         // GitHub Flavored Markdown
+            highlight: function(code, lang) {
+                // Подсветка кода через highlight.js
+                if (typeof hljs !== 'undefined' && lang && hljs.getLanguage(lang)) {
+                    try {
+                        return hljs.highlight(code, { language: lang }).value;
+                    } catch (e) {
+                        console.error('Ошибка подсветки кода:', e);
+                    }
+                }
+                // Если язык не указан или не поддерживается, пытаемся автоопределение
+                if (typeof hljs !== 'undefined') {
+                    try {
+                        return hljs.highlightAuto(code).value;
+                    } catch (e) {
+                        console.error('Ошибка автоопределения кода:', e);
+                    }
+                }
+                return code;
+            }
+        });
+        
+        // Рендерим Markdown
+        const html = marked.parse(text);
+        return `<div class="markdown-content">${html}</div>`;
+    } else {
+        // Fallback если marked.js не загружен
+        console.warn('marked.js не загружен, используется простое форматирование');
+        let formatted = text
+            .replace(/&/g, '&')
+            .replace(/</g, '<')
+            .replace(/>/g, '>');
+        
+        const paragraphs = formatted.split('\n\n');
+        return paragraphs.map(p => `<p>${p.replace(/\n/g, '<br>')}</p>`).join('');
+    }
 }
 
 // Показать индикатор печати
@@ -237,8 +268,8 @@ function scrollToBottom() {
 }
 
 // Начать новый чат
-function startNewChat() {
-    // Очищаем все сообщения кроме приветственного
+async function startNewChat() {
+    // Очищаем сообщения
     messagesContainer.innerHTML = '';
     
     // Добавляем приветственное сообщение
@@ -251,13 +282,6 @@ function startNewChat() {
         </div>
     `;
     messagesContainer.appendChild(welcomeDiv);
-    
-    // Очищаем источники
-    currentSources = [];
-    closeSourcesPanel();
-    
-    // Фокус на поле ввода
-    messageInput.focus();
 }
 
 // Обработка Enter (отправка сообщения)
@@ -267,3 +291,10 @@ messageInput.addEventListener('keydown', (e) => {
         messageForm.dispatchEvent(new Event('submit'));
     }
 });
+
+// Экранирование HTML
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}

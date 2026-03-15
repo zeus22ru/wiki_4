@@ -18,6 +18,15 @@ import json
 from typing import List, Dict, Optional
 import hashlib
 
+# Импорт конфигурации и логирования
+from config import settings, get_logger
+
+# Импорт кэширования
+from utils import get_cached_embedding, cache_embedding, invalidate_embedding_cache
+
+# Получаем логгер для этого модуля
+logger = get_logger(__name__)
+
 # Библиотеки для обработки разных форматов
 try:
     from docx import Document
@@ -61,24 +70,25 @@ if sys.platform == 'win32':
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
-# Конфигурация
-OLLAMA_URL = "http://localhost:11434"
-OLLAMA_MODEL = "bge-m3"  # Модель для эмбеддингов (BAAI/bge-m3 - многоязычная)
-OLLAMA_CHAT_MODEL = "qwen2.5:7b"  # Модель для генерации ответов
-CHROMA_PERSIST_DIR = "./chroma_db"
-DATA_DIR = "./data"  # Обработка всех HTML файлов рекурсивно в папке data/
-CHUNK_SIZE = 500  # Размер чанка в символах
-CHUNK_OVERLAP = 50  # Перекрытие чанков
-BATCH_SIZE = 10  # Размер пакета для пакетной обработки эмбеддингов
+# Конфигурация загружается из config/settings.py
+# OLLAMA_URL, OLLAMA_MODEL, OLLAMA_CHAT_MODEL, CHROMA_PERSIST_DIR,
+# DATA_DIR, CHUNK_SIZE, CHUNK_OVERLAP, BATCH_SIZE
 
 
 def get_embedding(text: str) -> List[float]:
-    """Получить эмбеддинг текста через ollama (API v2)"""
+    """Получить эмбеддинг текста через ollama (API v2) с кэшированием"""
+    # Проверяем кэш
+    cached = get_cached_embedding(text, settings.OLLAMA_EMBEDDING_MODEL)
+    if cached is not None:
+        logger.debug(f"Эмбеддинг получен из кэша для текста: {text[:50]}...")
+        return cached
+    
+    # Получаем эмбеддинг из Ollama
     try:
         response = requests.post(
-            f"{OLLAMA_URL}/api/embed",
+            f"{settings.OLLAMA_URL}/api/embed",
             json={
-                "model": OLLAMA_MODEL,
+                "model": settings.OLLAMA_EMBEDDING_MODEL,
                 "input": text
             },
             timeout=60
@@ -87,35 +97,71 @@ def get_embedding(text: str) -> List[float]:
         result = response.json()
         # API v2 возвращает embeddings (массив) или embedding (один)
         if "embeddings" in result:
-            return result["embeddings"][0]
+            embedding = result["embeddings"][0]
         elif "embedding" in result:
-            return result["embedding"]
-        return []
+            embedding = result["embedding"]
+        else:
+            return []
+        
+        # Кэшируем эмбеддинг
+        cache_embedding(text, settings.OLLAMA_EMBEDDING_MODEL, embedding)
+        logger.debug(f"Эмбеддинг закэширован для текста: {text[:50]}...")
+        
+        return embedding
     except Exception as e:
-        print(f"Ошибка при получении эмбеддинга: {e}")
+        logger.error(f"Ошибка при получении эмбеддинга: {e}")
         return []
 
 
 def get_embeddings_batch(texts: List[str]) -> List[List[float]]:
-    """Получить эмбеддинги для нескольких текстов за один запрос (GPU-оптимизировано)"""
+    """Получить эмбеддинги для нескольких текстов за один запрос (GPU-оптимизировано) с кэшированием"""
     if not texts:
         return []
     
-    try:
-        response = requests.post(
-            f"{OLLAMA_URL}/api/embed",
-            json={
-                "model": OLLAMA_MODEL,
-                "input": texts  # Массив текстов для пакетной обработки
-            },
-            timeout=120
-        )
-        response.raise_for_status()
-        result = response.json()
-        return result.get("embeddings", [])
-    except Exception as e:
-        print(f"Ошибка при пакетном получении эмбеддингов: {e}")
-        return []
+    # Проверяем кэш для каждого текста
+    embeddings = []
+    texts_to_fetch = []
+    indices_to_fetch = []
+    
+    for i, text in enumerate(texts):
+        cached = get_cached_embedding(text, settings.OLLAMA_EMBEDDING_MODEL)
+        if cached is not None:
+            embeddings.append(cached)
+            logger.debug(f"Эмбеддинг {i} получен из кэша")
+        else:
+            embeddings.append(None)
+            texts_to_fetch.append(text)
+            indices_to_fetch.append(i)
+    
+    # Получаем эмбеддинги для текстов, которых нет в кэше
+    if texts_to_fetch:
+        try:
+            response = requests.post(
+                f"{settings.OLLAMA_URL}/api/embed",
+                json={
+                    "model": settings.OLLAMA_EMBEDDING_MODEL,
+                    "input": texts_to_fetch  # Массив текстов для пакетной обработки
+                },
+                timeout=120
+            )
+            response.raise_for_status()
+            result = response.json()
+            fetched_embeddings = result.get("embeddings", [])
+            
+            # Кэшируем и вставляем полученные эмбеддинги
+            for i, embedding in enumerate(fetched_embeddings):
+                text = texts_to_fetch[i]
+                index = indices_to_fetch[i]
+                embeddings[index] = embedding
+                cache_embedding(text, settings.OLLAMA_EMBEDDING_MODEL, embedding)
+                logger.debug(f"Эмбеддинг {index} закэширован")
+                
+        except Exception as e:
+            logger.error(f"Ошибка при пакетном получении эмбеддингов: {e}")
+            # Возвращаем только кэшированные эмбеддинги
+            return [emb for emb in embeddings if emb is not None]
+    
+    return embeddings
 
 
 def extract_text_from_html(html_path: Path) -> Optional[Dict[str, str]]:
@@ -152,7 +198,7 @@ def extract_text_from_html(html_path: Path) -> Optional[Dict[str, str]]:
         return {
             "title": title or h1 or Path(html_path).stem,
             "content": text,
-            "path": str(html_path.relative_to(DATA_DIR))
+            "path": str(html_path.relative_to(settings.DATA_DIR))
         }
     except Exception as e:
         print(f"Ошибка при чтении {html_path}: {e}")
@@ -162,7 +208,7 @@ def extract_text_from_html(html_path: Path) -> Optional[Dict[str, str]]:
 def extract_text_from_docx(docx_path: Path) -> Optional[Dict[str, str]]:
     """Извлечь текст и метаданные из DOCX файла"""
     if not DOCX_AVAILABLE:
-        print(f"Библиотека python-docx не установлена. Пропуск: {docx_path.name}")
+        logger.warning(f"Библиотека python-docx не установлена. Пропуск: {docx_path.name}")
         return None
     
     try:
@@ -198,17 +244,17 @@ def extract_text_from_docx(docx_path: Path) -> Optional[Dict[str, str]]:
         return {
             "title": title or Path(docx_path).stem,
             "content": text,
-            "path": str(docx_path.relative_to(DATA_DIR))
+            "path": str(docx_path.relative_to(settings.DATA_DIR))
         }
     except Exception as e:
-        print(f"Ошибка при чтении DOCX {docx_path}: {e}")
+        logger.error(f"Ошибка при чтении DOCX {docx_path}: {e}")
         return None
 
 
 def extract_text_from_pdf(pdf_path: Path) -> Optional[Dict[str, str]]:
     """Извлечь текст и метаданные из PDF файла"""
     if not PDF_AVAILABLE:
-        print(f"Библиотека pdfplumber не установлена. Пропуск: {pdf_path.name}")
+        logger.warning(f"Библиотека pdfplumber не установлена. Пропуск: {pdf_path.name}")
         return None
     
     try:
@@ -241,17 +287,17 @@ def extract_text_from_pdf(pdf_path: Path) -> Optional[Dict[str, str]]:
         return {
             "title": title or Path(pdf_path).stem,
             "content": text,
-            "path": str(pdf_path.relative_to(DATA_DIR))
+            "path": str(pdf_path.relative_to(settings.DATA_DIR))
         }
     except Exception as e:
-        print(f"Ошибка при чтении PDF {pdf_path}: {e}")
+        logger.error(f"Ошибка при чтении PDF {pdf_path}: {e}")
         return None
 
 
 def extract_text_from_xlsx(xlsx_path: Path) -> Optional[Dict[str, str]]:
     """Извлечь текст и метаданные из XLSX файла"""
     if not XLSX_AVAILABLE:
-        print(f"Библиотека openpyxl не установлена. Пропуск: {xlsx_path.name}")
+        logger.warning(f"Библиотека openpyxl не установлена. Пропуск: {xlsx_path.name}")
         return None
     
     try:
@@ -282,17 +328,17 @@ def extract_text_from_xlsx(xlsx_path: Path) -> Optional[Dict[str, str]]:
         return {
             "title": Path(xlsx_path).stem,
             "content": text,
-            "path": str(xlsx_path.relative_to(DATA_DIR))
+            "path": str(xlsx_path.relative_to(settings.DATA_DIR))
         }
     except Exception as e:
-        print(f"Ошибка при чтении XLSX {xlsx_path}: {e}")
+        logger.error(f"Ошибка при чтении XLSX {xlsx_path}: {e}")
         return None
 
 
 def extract_text_from_xls(xls_path: Path) -> Optional[Dict[str, str]]:
     """Извлечь текст и метаданные из XLS файла (старый формат Excel)"""
     if not XLS_AVAILABLE:
-        print(f"Библиотека xlrd не установлена. Пропуск: {xls_path.name}")
+        logger.warning(f"Библиотека xlrd не установлена. Пропуск: {xls_path.name}")
         return None
     
     try:
@@ -325,17 +371,17 @@ def extract_text_from_xls(xls_path: Path) -> Optional[Dict[str, str]]:
         return {
             "title": Path(xls_path).stem,
             "content": text,
-            "path": str(xls_path.relative_to(DATA_DIR))
+            "path": str(xls_path.relative_to(settings.DATA_DIR))
         }
     except Exception as e:
-        print(f"Ошибка при чтении XLS {xls_path}: {e}")
+        logger.error(f"Ошибка при чтении XLS {xls_path}: {e}")
         return None
 
 
 def extract_text_from_pptx(pptx_path: Path) -> Optional[Dict[str, str]]:
     """Извлечь текст и метаданные из PPTX файла"""
     if not PPTX_AVAILABLE:
-        print(f"Библиотека python-pptx не установлена. Пропуск: {pptx_path.name}")
+        logger.warning(f"Библиотека python-pptx не установлена. Пропуск: {pptx_path.name}")
         return None
     
     try:
@@ -370,14 +416,14 @@ def extract_text_from_pptx(pptx_path: Path) -> Optional[Dict[str, str]]:
             "path": str(pptx_path.relative_to(DATA_DIR))
         }
     except Exception as e:
-        print(f"Ошибка при чтении PPTX {pptx_path}: {e}")
+        logger.error(f"Ошибка при чтении PPTX {pptx_path}: {e}")
         return None
 
 
 def extract_text_from_doc(doc_path: Path) -> Optional[Dict[str, str]]:
     """Извлечь текст и метаданные из DOC файла (старый формат Word)"""
     if not DOC_AVAILABLE:
-        print(f"Библиотека docx2txt не установлена. Пропуск: {doc_path.name}")
+        logger.warning(f"Библиотека docx2txt не установлена. Пропуск: {doc_path.name}")
         return None
     
     try:
@@ -394,15 +440,19 @@ def extract_text_from_doc(doc_path: Path) -> Optional[Dict[str, str]]:
         return {
             "title": title,
             "content": text,
-            "path": str(doc_path.relative_to(DATA_DIR))
+            "path": str(doc_path.relative_to(settings.DATA_DIR))
         }
     except Exception as e:
-        print(f"Ошибка при чтении DOC {doc_path}: {e}")
+        logger.error(f"Ошибка при чтении DOC {doc_path}: {e}")
         return None
 
 
-def chunk_text(text: str, chunk_size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP) -> List[str]:
+def chunk_text(text: str, chunk_size: int = None, overlap: int = None) -> List[str]:
     """Разбить текст на чанки"""
+    if chunk_size is None:
+        chunk_size = settings.CHUNK_SIZE
+    if overlap is None:
+        overlap = settings.CHUNK_OVERLAP
     chunks = []
     start = 0
     text_len = len(text)
@@ -433,7 +483,7 @@ def process_all_files(data_dir: str) -> List[Dict]:
     data_path = Path(data_dir)
     documents = []
     
-    print(f"Сканирование директории: {data_path}")
+    logger.info(f"Сканирование директории: {data_path}")
     
     # Поддерживаемые форматы файлов и соответствующие функции извлечения
     file_handlers = {
@@ -457,7 +507,7 @@ def process_all_files(data_dir: str) -> List[Dict]:
     excluded_extensions = {'.crdownload', '.tmp', '.temp', '.bak'}
     all_files = [f for f in all_files if f.suffix.lower() not in excluded_extensions]
     
-    print(f"Найдено файлов: {len(all_files)}")
+    logger.info(f"Найдено файлов: {len(all_files)}")
     
     # Группируем файлы по типу для статистики
     file_counts = {}
@@ -465,9 +515,9 @@ def process_all_files(data_dir: str) -> List[Dict]:
         ext = file_path.suffix.lower()
         file_counts[ext] = file_counts.get(ext, 0) + 1
     
-    print("Статистика по типам файлов:")
+    logger.info("Статистика по типам файлов:")
     for ext, count in sorted(file_counts.items()):
-        print(f"  {ext}: {count}")
+        logger.info(f"  {ext}: {count}")
     
     # Обрабатываем каждый файл
     for i, file_path in enumerate(all_files, 1):
@@ -477,7 +527,7 @@ def process_all_files(data_dir: str) -> List[Dict]:
         if ext not in file_handlers:
             continue
         
-        print(f"Обработка {i}/{len(all_files)}: {file_path.name} ({ext})")
+        logger.info(f"Обработка {i}/{len(all_files)}: {file_path.name} ({ext})")
         
         # Вызываем соответствующую функцию извлечения
         extract_func = file_handlers[ext]
@@ -500,28 +550,28 @@ def process_all_files(data_dir: str) -> List[Dict]:
                     }
                 })
         else:
-            print(f"  Пропуск: не удалось извлечь текст из {file_path.name}")
+            logger.warning(f"  Пропуск: не удалось извлечь текст из {file_path.name}")
     
-    print(f"Всего создано чанков: {len(documents)}")
+    logger.info(f"Всего создано чанков: {len(documents)}")
     return documents
 
 
 def create_vector_db(documents: List[Dict]):
     """Создать векторную базу данных в ChromaDB с пакетной обработкой для GPU"""
-    print("Создание векторной базы данных...")
+    logger.info("Создание векторной базы данных...")
     
     # Создаем клиент ChromaDB
-    client = chromadb.PersistentClient(path=CHROMA_PERSIST_DIR)
+    client = chromadb.PersistentClient(path=settings.CHROMA_PERSIST_DIR)
     
     # Удаляем коллекцию если существует
     try:
-        client.delete_collection("wiki_knowledge")
+        client.delete_collection(settings.CHROMA_COLLECTION_NAME)
     except:
         pass
     
     # Создаем коллекцию
     collection = client.create_collection(
-        name="wiki_knowledge",
+        name=settings.CHROMA_COLLECTION_NAME,
         metadata={"description": "База знаний из XWiki"}
     )
     
@@ -536,11 +586,11 @@ def create_vector_db(documents: List[Dict]):
     
     # Пакетная обработка для ускорения на GPU
     while processed < total_docs:
-        batch_end = min(processed + BATCH_SIZE, total_docs)
+        batch_end = min(processed + settings.BATCH_SIZE, total_docs)
         batch_docs = documents[processed:batch_end]
         batch_texts = [doc["text"] for doc in batch_docs]
         
-        print(f"Генерация эмбеддингов {processed+1}-{batch_end}/{total_docs} (пакет {len(batch_texts)} документов)")
+        logger.info(f"Генерация эмбеддингов {processed+1}-{batch_end}/{total_docs} (пакет {len(batch_texts)} документов)")
         
         # Получаем эмбеддинги для всего пакета за один запрос
         batch_embeddings = get_embeddings_batch(batch_texts)
@@ -553,7 +603,7 @@ def create_vector_db(documents: List[Dict]):
                 embeddings.append(embedding)
         else:
             # Если пакетная обработка не удалась, пробуем по одному
-            print(f"Пакетная обработка не удалась, пробуем по одному...")
+            logger.warning(f"Пакетная обработка не удалась, пробуем по одному...")
             for doc in batch_docs:
                 embedding = get_embedding(doc["text"])
                 if embedding:
@@ -562,12 +612,12 @@ def create_vector_db(documents: List[Dict]):
                     metadatas.append(doc["metadata"])
                     embeddings.append(embedding)
                 else:
-                    print(f"Не удалось получить эмбеддинг для документа {doc['id']}")
+                    logger.error(f"Не удалось получить эмбеддинг для документа {doc['id']}")
         
         processed = batch_end
     
     # Вставляем данные в ChromaDB пакетами (максимальный размер пакета 5461)
-    print("Сохранение в ChromaDB...")
+    logger.info("Сохранение в ChromaDB...")
     MAX_BATCH_SIZE = 5000  # Оставляем запас от лимита 5461
     
     total_docs = len(ids)
@@ -576,7 +626,7 @@ def create_vector_db(documents: List[Dict]):
     while saved < total_docs:
         batch_end = min(saved + MAX_BATCH_SIZE, total_docs)
         
-        print(f"Сохранение {saved+1}-{batch_end}/{total_docs} документов...")
+        logger.info(f"Сохранение {saved+1}-{batch_end}/{total_docs} документов...")
         
         collection.add(
             ids=ids[saved:batch_end],
@@ -587,21 +637,26 @@ def create_vector_db(documents: List[Dict]):
         
         saved = batch_end
     
-    print(f"Векторная база данных создана! Всего документов: {len(ids)}")
-    print(f"База сохранена в: {CHROMA_PERSIST_DIR}")
+    logger.info(f"Векторная база данных создана! Всего документов: {len(ids)}")
+    logger.info(f"База сохранена в: {settings.CHROMA_PERSIST_DIR}")
+    
+    # Инвалидируем кэш эмбеддингов после обновления базы
+    logger.info("Инвалидация кэша эмбеддингов...")
+    invalidate_embedding_cache()
+    logger.info("Кэш эмбеддингов очищен")
 
 
 def main():
     """Главная функция"""
-    print("=" * 60, flush=True)
-    print("Создание векторной базы знаний", flush=True)
-    print("=" * 60, flush=True)
+    logger.info("=" * 60)
+    logger.info("Создание векторной базы знаний")
+    logger.info("=" * 60)
     
     # Проверяем доступность ollama
     try:
-        response = requests.get(f"{OLLAMA_URL}/api/tags", timeout=5)
+        response = requests.get(f"{settings.OLLAMA_URL}/api/tags", timeout=5)
         response.raise_for_status()
-        print(f"Ollama доступен по адресу: {OLLAMA_URL}", flush=True)
+        logger.info(f"Ollama доступен по адресу: {settings.OLLAMA_URL}")
         
         # Проверяем наличие модели для эмбеддингов
         models = response.json().get("models", [])
@@ -610,36 +665,36 @@ def main():
         # Проверяем наличие модели (с учетом суффикса :latest)
         model_found = False
         for name in model_names:
-            if name == OLLAMA_MODEL or name.startswith(OLLAMA_MODEL + ":"):
+            if name == settings.OLLAMA_EMBEDDING_MODEL or name.startswith(settings.OLLAMA_EMBEDDING_MODEL + ":"):
                 model_found = True
-                print(f"Модель для эмбеддингов: {name} ✓")
+                logger.info(f"Модель для эмбеддингов: {name} ✓")
                 break
         
         if not model_found:
-            print(f"ВНИМАНИЕ: Модель {OLLAMA_MODEL} не найдена!", flush=True)
-            print(f"Доступные модели: {', '.join(model_names)}", flush=True)
-            print(f"Установите модель: docker exec ollama-ai ollama pull {OLLAMA_MODEL}", flush=True)
+            logger.error(f"ВНИМАНИЕ: Модель {settings.OLLAMA_EMBEDDING_MODEL} не найдена!")
+            logger.error(f"Доступные модели: {', '.join(model_names)}")
+            logger.error(f"Установите модель: docker exec ollama-ai ollama pull {settings.OLLAMA_EMBEDDING_MODEL}")
             return
         
     except Exception as e:
-        print(f"Ошибка: Ollama недоступен по адресу {OLLAMA_URL}", flush=True)
-        print(f"Убедитесь, что ollama запущен в Docker с поддержкой GPU:", flush=True)
-        print(f"  docker run -d --gpus all -p 11434:11434 --name ollama-ai ollama/ollama", flush=True)
+        logger.error(f"Ошибка: Ollama недоступен по адресу {settings.OLLAMA_URL}")
+        logger.error(f"Убедитесь, что ollama запущен в Docker с поддержкой GPU:")
+        logger.error(f"  docker run -d --gpus all -p 11434:11434 --name ollama-ai ollama/ollama")
         return
     
     # Обрабатываем все поддерживаемые файлы
-    documents = process_all_files(DATA_DIR)
+    documents = process_all_files(settings.DATA_DIR)
     
     if not documents:
-        print("Не найдено документов для обработки", flush=True)
+        logger.warning("Не найдено документов для обработки")
         return
     
     # Создаем векторную базу данных
     create_vector_db(documents)
     
-    print("=" * 60, flush=True)
-    print("Готово!", flush=True)
-    print("=" * 60, flush=True)
+    logger.info("=" * 60)
+    logger.info("Готово!")
+    logger.info("=" * 60)
 
 
 if __name__ == "__main__":
