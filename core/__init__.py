@@ -13,7 +13,7 @@ from .rag import (
 )
 
 from .chat_history import (
-    ChatHistory,
+    ChatHistoryManager,
     Message
 )
 
@@ -25,6 +25,6 @@ __all__ = [
     'create_rag_system',
     'highlight_citations_in_text',
     # Chat History
-    'ChatHistory',
+    'ChatHistoryManager',
     'Message'
 ]

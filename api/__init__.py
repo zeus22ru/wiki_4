@@ -4,6 +4,6 @@
 API модуль
 """
 
-from .routes import chat, auth, documents
+from .routes import chat
 
-__all__ = ['chat', 'auth', 'documents']
+__all__ = ['chat']

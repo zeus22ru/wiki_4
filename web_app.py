@@ -1,21 +1,25 @@
 #!/usr/bin/env python3
 """
-Flask веб-приложение для вопрос-ответной системы
+Flask веб-приложение для вопрос-ответной системы с RAG и цитированием
 """
 
 from flask import Flask, render_template, request, jsonify
 from flask_cors import CORS
 import chromadb
 from chromadb.config import Settings
-import requests
-from typing import List, Dict
 import threading
-import queue
 import time
 from functools import wraps
+import requests
 
 # Импорт конфигурации и логирования
 from config import settings, get_logger
+
+# Импорт RAG системы
+from core.rag import RAGSystem
+
+# Импорт общих функций для работы с эмбеддингами
+from utils.embeddings import get_embedding, search_documents
 
 # Получаем логгер для этого модуля
 logger = get_logger(__name__)
@@ -74,130 +78,35 @@ def log_api_request(f):
 
 # Глобальные переменные для подключения к базе данных
 collection = None
+rag_system = None
 db_initialized = False
 init_lock = threading.Lock()
 
 
 def initialize_database():
-    """Инициализация подключения к ChromaDB"""
-    global collection, db_initialized
+    """Инициализация подключения к ChromaDB и RAG системы"""
+    global collection, rag_system, db_initialized
     
     with init_lock:
         if db_initialized:
-            return collection
+            return collection, rag_system
         
         try:
             client = chromadb.PersistentClient(path=settings.CHROMA_PERSIST_DIR)
-            collection = client.get_collection(settings.CHROMA_COLLECTION_NAME)
+            
+            collection = client.get_collection(name=settings.CHROMA_COLLECTION_NAME)
             count = collection.count()
+            
+            # Инициализируем RAG систему
+            rag_system = RAGSystem(settings.CHROMA_COLLECTION_NAME)
+            
             db_initialized = True
             logger.info(f"Загружена векторная база данных: {count} документов")
-            return collection
+            logger.info("RAG система инициализирована")
+            return collection, rag_system
         except Exception as e:
             logger.error(f"Ошибка при загрузке векторной базы данных: {e}")
-            return None
-
-
-def get_embedding(text: str) -> List[float]:
-    """Получить эмбеддинг текста через ollama"""
-    try:
-        response = requests.post(
-            f"{settings.OLLAMA_URL}/api/embed",
-            json={
-                "model": settings.OLLAMA_EMBEDDING_MODEL,
-                "input": text
-            },
-            timeout=60
-        )
-        response.raise_for_status()
-        result = response.json()
-        if "embeddings" in result:
-            return result["embeddings"][0]
-        elif "embedding" in result:
-            return result["embedding"]
-        return []
-    except Exception as e:
-        logger.error(f"Ошибка при получении эмбеддинга: {e}")
-        return []
-
-
-def search_documents(query: str, collection, top_k: int = None) -> List[Dict]:
-    """Поиск релевантных документов в векторной базе"""
-    if top_k is None:
-        top_k = settings.TOP_K_RESULTS
-    """Поиск релевантных документов в векторной базе"""
-    query_embedding = get_embedding(query)
-    
-    if not query_embedding:
-        return []
-    
-    results = collection.query(
-        query_embeddings=[query_embedding],
-        n_results=top_k
-    )
-    
-    documents = []
-    if results['documents'] and results['documents'][0]:
-        for i, doc in enumerate(results['documents'][0]):
-            documents.append({
-                "text": doc,
-                "metadata": results['metadatas'][0][i] if results['metadatas'] else {},
-                "distance": results['distances'][0][i] if results['distances'] else 0
-            })
-    
-    return documents
-
-
-def generate_answer(query: str, context_docs: List[Dict]) -> str:
-    """Генерация ответа с использованием ollama"""
-    context = "\n\n".join([
-        f"--- Документ {i+1} (источник: {doc['metadata'].get('title', 'Без названия')}) ---\n{doc['text']}"
-        for i, doc in enumerate(context_docs)
-    ])
-    
-    prompt = f"""Ты - полезный ассистент по базе знаний компании. Отвечай на вопросы пользователя, используя только предоставленный контекст.
-
-Контекст из базы знаний:
-{context}
-
-Вопрос пользователя: {query}
-
-Инструкции:
-1. Отвечай на русском языке
-2. Используй только информацию из предоставленного контекста
-3. Если в контексте нет информации для ответа, честно скажи об этом
-4. Приводи ссылки на источники (названия документов)
-5. Будь кратким и по существу
-
-Ответ:"""
-
-    try:
-        response = requests.post(
-            f"{settings.OLLAMA_URL}/api/generate",
-            json={
-                "model": settings.OLLAMA_CHAT_MODEL,
-                "prompt": prompt,
-                "stream": False,
-                "options": {
-                    "temperature": 0.3,
-                    "top_p": 0.9,
-                    "num_predict": 500
-                }
-            },
-            timeout=120
-        )
-        
-        response.raise_for_status()
-        result = response.json()
-        return result.get("response", "").strip()
-    except requests.exceptions.HTTPError as e:
-        return f"Произошла ошибка при генерации ответа: HTTP {e.response.status_code if hasattr(e, 'response') and e.response else 'Unknown'}"
-    except requests.exceptions.Timeout:
-        return "Произошла ошибка при генерации ответа: Превышено время ожидания"
-    except requests.exceptions.ConnectionError:
-        return "Произошла ошибка при генерации ответа: Не удалось подключиться к Ollama"
-    except Exception as e:
-        return f"Произошла ошибка при генерации ответа: {str(e)}"
+            return None, None
 
 
 @app.route('/')
@@ -219,13 +128,15 @@ def health_check():
     except Exception as e:
         logger.warning(f"Ollama недоступен: {e}")
     
-    coll = initialize_database()
+    coll, rag = initialize_database()
     db_status = coll is not None
-    logger.debug(f"База данных статус: {db_status}")
+    rag_status = rag is not None
+    logger.debug(f"База данных статус: {db_status}, RAG статус: {rag_status}")
     
     return jsonify({
         "ollama": ollama_status,
         "database": db_status,
+        "rag": rag_status,
         "status": "ok" if ollama_status and db_status else "error"
     })
 
@@ -233,7 +144,7 @@ def health_check():
 @app.route('/api/chat', methods=['POST'])
 @log_api_request
 def chat():
-    """Обработка запроса чата"""
+    """Обработка запроса чата с использованием RAG системы"""
     data = request.get_json()
     
     if not data or 'message' not in data:
@@ -241,16 +152,16 @@ def chat():
         return jsonify({"error": "Не указано сообщение"}), 400
     
     query = data['message'].strip()
-    logger.info(f"Запрос чата: '{query[:100]}...'")  # Логируем первые 100 символов
+    logger.info(f"Запрос чата: '{query[:100]}...'")
     
     if not query:
         logger.warning("Получено пустое сообщение")
         return jsonify({"error": "Пустое сообщение"}), 400
     
-    # Инициализируем базу данных
-    coll = initialize_database()
-    if not coll:
-        logger.error("База данных недоступна")
+    # Инициализируем базу данных и RAG систему
+    coll, rag = initialize_database()
+    if not coll or not rag:
+        logger.error("База данных или RAG система недоступна")
         return jsonify({"error": "База данных недоступна"}), 500
     
     # Проверяем доступность Ollama
@@ -261,20 +172,50 @@ def chat():
         logger.error(f"Ollama недоступен: {e}")
         return jsonify({"error": "Ollama недоступен"}), 500
     
-    # Ищем релевантные документы
-    docs = search_documents(query, coll)
+    # Используем RAG систему для поиска и генерации ответа с цитированием
+    logger.info(f"Выполнение RAG запроса: '{query}'")
+    
+    # Поиск релевантных документов через RAG
+    docs = rag.retrieve_documents(query, top_k=settings.TOP_K_RESULTS)
     logger.info(f"Найдено {len(docs)} релевантных документов")
     
     if not docs:
         logger.info("Не найдено релевантных документов")
         return jsonify({
             "answer": "Не найдено релевантных документов в базе знаний.",
-            "sources": []
+            "sources": [],
+            "citations": []
         })
     
-    # Генерируем ответ
-    answer = generate_answer(query, docs)
-    logger.info(f"Сгенерирован ответ длиной {len(answer)} символов")
+    # Генерация промпта с контекстом
+    prompt = rag.generate_rag_prompt(query, docs)
+    
+    # Генерация ответа через Ollama
+    try:
+        response = requests.post(
+            f"{settings.OLLAMA_URL}/api/generate",
+            json={
+                "model": settings.OLLAMA_CHAT_MODEL,
+                "prompt": prompt,
+                "stream": False,
+                "options": {
+                    "temperature": 0.3,
+                    "top_p": 0.9,
+                    "num_predict": 500
+                }
+            },
+            timeout=120
+        )
+        response.raise_for_status()
+        answer = response.json().get("response", "").strip()
+    except Exception as e:
+        logger.error(f"Ошибка при генерации ответа: {e}")
+        return jsonify({"error": f"Ошибка при генерации ответа: {str(e)}"}), 500
+    
+    # Обогащение ответа цитатами
+    rag_result = rag.enrich_answer_with_citations(answer, docs)
+    logger.info(f"Сгенерирован ответ длиной {len(rag_result.answer)} символов")
+    logger.info(f"Извлечено {len(rag_result.citations)} цитат")
     
     # Формируем список источников
     sources = []
@@ -282,14 +223,25 @@ def chat():
         sources.append({
             "title": doc['metadata'].get('title', 'Без названия'),
             "path": doc['metadata'].get('path', 'N/A'),
-            "relevance": round(1 - doc['distance'], 2)
+            "relevance": round(doc['score'], 2)
+        })
+    
+    # Формируем список цитат
+    citations = []
+    for citation in rag_result.citations:
+        citations.append({
+            "text": citation.text,
+            "source": citation.source,
+            "chunk_id": citation.chunk_id,
+            "score": round(citation.score, 2)
         })
     
     logger.debug(f"Источники: {[s['title'] for s in sources]}")
     
     return jsonify({
-        "answer": answer,
-        "sources": sources
+        "answer": rag_result.answer,
+        "sources": sources,
+        "citations": citations
     })
 
 

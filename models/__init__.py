@@ -5,6 +5,5 @@
 """
 
 from .chat import ChatSession, Message
-from .user import User
 
-__all__ = ['ChatSession', 'Message', 'User']
+__all__ = ['ChatSession', 'Message']

@@ -9,11 +9,11 @@
 import os
 import re
 import sys
+import requests
 from pathlib import Path
 from bs4 import BeautifulSoup
 import chromadb
 from chromadb.config import Settings
-import requests
 import json
 from typing import List, Dict, Optional
 import hashlib
@@ -21,8 +21,8 @@ import hashlib
 # Импорт конфигурации и логирования
 from config import settings, get_logger
 
-# Импорт кэширования
-from utils import get_cached_embedding, cache_embedding, invalidate_embedding_cache
+# Импорт общих функций для работы с эмбеддингами
+from utils.embeddings import get_embedding, get_embeddings_batch, invalidate_embedding_cache
 
 # Получаем логгер для этого модуля
 logger = get_logger(__name__)
@@ -73,95 +73,6 @@ if sys.platform == 'win32':
 # Конфигурация загружается из config/settings.py
 # OLLAMA_URL, OLLAMA_MODEL, OLLAMA_CHAT_MODEL, CHROMA_PERSIST_DIR,
 # DATA_DIR, CHUNK_SIZE, CHUNK_OVERLAP, BATCH_SIZE
-
-
-def get_embedding(text: str) -> List[float]:
-    """Получить эмбеддинг текста через ollama (API v2) с кэшированием"""
-    # Проверяем кэш
-    cached = get_cached_embedding(text, settings.OLLAMA_EMBEDDING_MODEL)
-    if cached is not None:
-        logger.debug(f"Эмбеддинг получен из кэша для текста: {text[:50]}...")
-        return cached
-    
-    # Получаем эмбеддинг из Ollama
-    try:
-        response = requests.post(
-            f"{settings.OLLAMA_URL}/api/embed",
-            json={
-                "model": settings.OLLAMA_EMBEDDING_MODEL,
-                "input": text
-            },
-            timeout=60
-        )
-        response.raise_for_status()
-        result = response.json()
-        # API v2 возвращает embeddings (массив) или embedding (один)
-        if "embeddings" in result:
-            embedding = result["embeddings"][0]
-        elif "embedding" in result:
-            embedding = result["embedding"]
-        else:
-            return []
-        
-        # Кэшируем эмбеддинг
-        cache_embedding(text, settings.OLLAMA_EMBEDDING_MODEL, embedding)
-        logger.debug(f"Эмбеддинг закэширован для текста: {text[:50]}...")
-        
-        return embedding
-    except Exception as e:
-        logger.error(f"Ошибка при получении эмбеддинга: {e}")
-        return []
-
-
-def get_embeddings_batch(texts: List[str]) -> List[List[float]]:
-    """Получить эмбеддинги для нескольких текстов за один запрос (GPU-оптимизировано) с кэшированием"""
-    if not texts:
-        return []
-    
-    # Проверяем кэш для каждого текста
-    embeddings = []
-    texts_to_fetch = []
-    indices_to_fetch = []
-    
-    for i, text in enumerate(texts):
-        cached = get_cached_embedding(text, settings.OLLAMA_EMBEDDING_MODEL)
-        if cached is not None:
-            embeddings.append(cached)
-            logger.debug(f"Эмбеддинг {i} получен из кэша")
-        else:
-            embeddings.append(None)
-            texts_to_fetch.append(text)
-            indices_to_fetch.append(i)
-    
-    # Получаем эмбеддинги для текстов, которых нет в кэше
-    if texts_to_fetch:
-        try:
-            response = requests.post(
-                f"{settings.OLLAMA_URL}/api/embed",
-                json={
-                    "model": settings.OLLAMA_EMBEDDING_MODEL,
-                    "input": texts_to_fetch  # Массив текстов для пакетной обработки
-                },
-                timeout=120
-            )
-            response.raise_for_status()
-            result = response.json()
-            fetched_embeddings = result.get("embeddings", [])
-            
-            # Кэшируем и вставляем полученные эмбеддинги
-            for i, embedding in enumerate(fetched_embeddings):
-                text = texts_to_fetch[i]
-                index = indices_to_fetch[i]
-                embeddings[index] = embedding
-                cache_embedding(text, settings.OLLAMA_EMBEDDING_MODEL, embedding)
-                logger.debug(f"Эмбеддинг {index} закэширован")
-                
-        except Exception as e:
-            logger.error(f"Ошибка при пакетном получении эмбеддингов: {e}")
-            # Возвращаем только кэшированные эмбеддинги
-            return [emb for emb in embeddings if emb is not None]
-    
-    return embeddings
 
 
 def extract_text_from_html(html_path: Path) -> Optional[Dict[str, str]]:
@@ -678,6 +589,8 @@ def main():
         
     except Exception as e:
         logger.error(f"Ошибка: Ollama недоступен по адресу {settings.OLLAMA_URL}")
+        logger.error(f"Тип исключения: {type(e).__name__}")
+        logger.error(f"Сообщение: {str(e)}")
         logger.error(f"Убедитесь, что ollama запущен в Docker с поддержкой GPU:")
         logger.error(f"  docker run -d --gpus all -p 11434:11434 --name ollama-ai ollama/ollama")
         return

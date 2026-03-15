@@ -11,6 +11,7 @@ import re
 from dataclasses import dataclass
 
 from config import settings, get_logger
+from utils.embeddings import get_embedding
 
 logger = get_logger(__name__)
 
@@ -63,7 +64,10 @@ class RAGSystem:
         """
         self.collection_name = collection_name or settings.CHROMA_COLLECTION_NAME
         self.client = chromadb.PersistentClient(path=settings.CHROMA_PERSIST_DIR)
-        self.collection = self.client.get_collection(self.collection_name)
+        
+        # Получаем коллекцию без кастомной функции эмбеддингов
+        # Эмбеддинги генерируем вручную через Ollama API
+        self.collection = self.client.get_collection(name=self.collection_name)
         logger.info(f"RAG система инициализирована с коллекцией: {self.collection_name}")
     
     def retrieve_documents(
@@ -84,8 +88,16 @@ class RAGSystem:
             Список релевантных документов с метаданными
         """
         try:
+            # Генерируем эмбеддинг запроса через Ollama API с dimensions=1024
+            query_embedding = get_embedding(query)
+            
+            if not query_embedding:
+                logger.error("Не удалось получить эмбеддинг запроса")
+                return []
+            
+            # Используем query_embeddings вместо query_texts
             results = self.collection.query(
-                query_texts=[query],
+                query_embeddings=[query_embedding],
                 n_results=top_k
             )
             
