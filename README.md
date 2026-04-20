@@ -1,6 +1,6 @@
 # Векторная база знаний для вопрос-ответной системы
 
-Система для создания векторной базы данных из различных форматов файлов и вопрос-ответной системы на базе знаний с использованием Ollama (модели bge-m3 и qwen2.5:7b) и ChromaDB.
+Система для создания векторной базы данных из различных форматов файлов и вопрос-ответной системы на базе знаний с использованием **Ollama** или **LM Studio** (OpenAI-совместимый локальный API) и ChromaDB. Переключение задаётся в `.env` через `INFERENCE_BACKEND`.
 
 ## Структура проекта
 
@@ -44,7 +44,8 @@ wiki_4/
 ## Требования
 
 - Python 3.8+
-- Docker с запущенным Ollama (модели bge-m3 и qwen2.5:7b)
+- Сервер инференса: **Ollama** (Docker или нативно) или **LM Studio** с включённым локальным сервером
+- Модели эмбеддингов и чата, согласованные с размерностью уже собранной Chroma (для `bge-m3` обычно 1024 измерений)
 
 ## Установка
 
@@ -54,9 +55,11 @@ wiki_4/
 pip install -r requirements.txt
 ```
 
-### 2. Настройка Ollama
+### 2. Настройка Ollama (или LM Studio)
 
-Установите и запустите Ollama в Docker:
+Для **LM Studio** установите приложение, включите локальный сервер, загрузите модели эмбеддингов и чата, в `.env` укажите `INFERENCE_BACKEND=lmstudio` и `OLLAMA_URL` на этот сервер. Раздел «Переключатель Ollama и LM Studio» ниже описывает API.
+
+Для **Ollama** установите и запустите контейнер (или нативный Ollama):
 
 ```bash
 # Запуск контейнера с поддержкой GPU (рекомендуется)
@@ -73,7 +76,7 @@ docker run -d -p 11434:11434 --name ollama ollama/ollama
 docker exec -it ollama ollama pull bge-m3
 
 # Модель для генерации ответов
-docker exec -it ollama ollama pull qwen2.5:7b
+docker exec -it ollama ollama pull qwen3.5:4b
 
 # Проверка доступных моделей
 docker exec -it ollama ollama list
@@ -88,9 +91,26 @@ cp .env.example .env
 ```
 
 Отредактируйте `.env` файл с вашими настройками:
-- Ollama URL и модели
-- Путь к векторной БД (ChromaDB)
-- Размеры чанков, пороги релевантности и другие параметры
+- **`INFERENCE_BACKEND`** (`ollama` или `lmstudio`) и **`OLLAMA_URL`**
+- Идентификаторы моделей (`OLLAMA_EMBEDDING_MODEL`, `OLLAMA_CHAT_MODEL`): у LM Studio — как в `GET /v1/models` (поле `id`)
+- Путь к векторной БД (ChromaDB), размеры чанков, пороги RAG и прочее
+
+### Переключатель Ollama и LM Studio (`INFERENCE_BACKEND`)
+
+Одна переменная задаёт пресет HTTP API и проверок доступности сервера (см. [`config/settings.py`](config/settings.py)):
+
+| `INFERENCE_BACKEND` | Эмбеддинги | Ответы чата | Проверка «сервер жив» |
+|---------------------|------------|-------------|------------------------|
+| **`ollama`** | `POST /api/embed` | `POST /api/generate` | `GET /api/tags` |
+| **`lmstudio`** | `POST /v1/embeddings` | `POST /v1/chat/completions` | `GET /v1/models` (список не пустой) |
+
+Если **`INFERENCE_BACKEND` не задан**, используются явные **`EMBEDDING_API_MODE`** / **`CHAT_API_MODE`** (`ollama` или `openai`), иначе по умолчанию режим Ollama.
+
+Явные **`EMBEDDING_API_MODE`** и **`CHAT_API_MODE`** в `.env` **перекрывают** пресет (для нестандартных схем).
+
+**LM Studio:** укажите `OLLAMA_URL` на локальный API (часто порт `1234`), в моделях — точные `id` из списка сервера, например `text-embedding-bge-m3` и `qwen/qwen3.5-9b`. Перед запросами загрузите модели в LM Studio. Сырой `GET /api/tags` у LM Studio не является признаком работоспособности; приложение для режима `lmstudio` опирается на `/v1/models`.
+
+**Важно:** векторы в Chroma уже привязаны к модели и размерности, использованным при `create_vector_db.py`. Для каждого **нового** вопроса всё равно нужен **рабочий** сервис эмбеддингов той же размерности.
 
 ## Использование
 
@@ -169,22 +189,25 @@ curl -X POST http://localhost:5000/api/chat \
   -d '{"message": "Как настроить принтер на ТСД?"}'
 ```
 
-**Получение списка моделей Ollama:**
+**Список моделей на сервере инференса** (Ollama или LM Studio — в зависимости от `.env`):
 ```bash
 curl http://localhost:5000/api/models
 ```
 
 ## Конфигурация
 
-Конфигурация централизована в [`config/settings.py`](config/settings.py) и загружается из `.env` файла.
+Конфигурация централизована в [`config/settings.py`](config/settings.py) и загружается из `.env` файла. Вспомогательные функции: `inference_server_reachable()`, `fetch_remote_model_ids()`, `uses_openai_compatible_api()` (экспорт из пакета `config`).
 
 ### Основные параметры
 
 ```python
-# Ollama настройки
+# Сервер LLM: ollama | lmstudio (пресет API; см. раздел выше)
+INFERENCE_BACKEND = "ollama"           # или "lmstudio"
+
+# Базовый URL (Ollama :11434, LM Studio — см. порт локального сервера)
 OLLAMA_URL = "http://localhost:11434"
-OLLAMA_EMBEDDING_MODEL = "bge-m3"      # Модель для эмбеддингов
-OLLAMA_CHAT_MODEL = "qwen2.5:7b"       # Модель для генерации ответов
+OLLAMA_EMBEDDING_MODEL = "bge-m3"      # У LM Studio — id из /v1/models
+OLLAMA_CHAT_MODEL = "qwen3.5:4b"       # У LM Studio — id из /v1/models
 
 # ChromaDB настройки
 CHROMA_PERSIST_DIR = "./chroma_db"
@@ -205,7 +228,7 @@ TOP_K_RESULTS = 3
 # RAG настройка
 RAG_TOP_K = 5
 RAG_MAX_CITATIONS = 5
-RAG_MIN_SCORE = 0.5
+RAG_MIN_SCORE = 0.0                   # порог 0.5 часто отсекает реальные попадания
 RAG_MAX_CONTEXT_LENGTH = 3000
 
 # Cache настройка
@@ -223,9 +246,9 @@ CACHE_TTL = 3600
 
 1. **Извлечение текста**: BeautifulSoup парсит HTML файлы и извлекает чистый текст
 2. **Чанкование**: Текст разбивается на фрагменты для лучшего поиска
-3. **Эмбеддинги**: Ollama (модель bge-m3) генерирует векторные представления текста
+3. **Эмбеддинги**: сервер инференса (Ollama или LM Studio) генерирует вектор запроса и сопоставляет с индексом
 4. **Векторный поиск**: ChromaDB выполняет семантический поиск по запросу
-5. **Генерация ответа**: Ollama (модель qwen2.5:7b) формирует ответ на основе найденных документов
+5. **Генерация ответа**: чат-модель на том же сервере формирует ответ по найденному контексту
 6. **Цитирование**: Извлекаются и форматируются цитаты из найденных документов
 7. **Кэширование**: Эмбеддинги кэшируются для ускорения повторных запросов
 8. **Логирование**: Детальное логирование в файлы для отладки
@@ -373,7 +396,7 @@ docker exec -it ollama ollama list
 docker exec -it ollama ollama pull bge-m3
 
 # Модель для генерации ответов
-docker exec -it ollama ollama pull qwen2.5:7b
+docker exec -it ollama ollama pull qwen3.5:4b
 ```
 
 ### База данных не найдена

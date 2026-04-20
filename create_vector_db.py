@@ -19,7 +19,7 @@ from typing import List, Dict, Optional
 import hashlib
 
 # Импорт конфигурации и логирования
-from config import settings, get_logger
+from config import settings, get_logger, inference_server_reachable, fetch_remote_model_ids
 
 # Импорт общих функций для работы с эмбеддингами
 from utils.embeddings import get_embedding, get_embeddings_batch, invalidate_embedding_cache
@@ -563,36 +563,36 @@ def main():
     logger.info("Создание векторной базы знаний")
     logger.info("=" * 60)
     
-    # Проверяем доступность ollama
+    if not inference_server_reachable():
+        logger.error(f"Сервер инференса недоступен: {settings.OLLAMA_URL}")
+        logger.error(
+            "Проверьте INFERENCE_BACKEND (ollama | lmstudio), запуск Ollama или LM Studio и загрузку моделей."
+        )
+        return
+    logger.info(f"Сервер инференса отвечает: {settings.OLLAMA_URL}")
+
     try:
-        response = requests.get(f"{settings.OLLAMA_URL}/api/tags", timeout=5)
-        response.raise_for_status()
-        logger.info(f"Ollama доступен по адресу: {settings.OLLAMA_URL}")
-        
-        # Проверяем наличие модели для эмбеддингов
-        models = response.json().get("models", [])
-        model_names = [m.get("name", "") for m in models]
-        
-        # Проверяем наличие модели (с учетом суффикса :latest)
-        model_found = False
-        for name in model_names:
-            if name == settings.OLLAMA_EMBEDDING_MODEL or name.startswith(settings.OLLAMA_EMBEDDING_MODEL + ":"):
-                model_found = True
-                logger.info(f"Модель для эмбеддингов: {name} ✓")
-                break
-        
-        if not model_found:
-            logger.error(f"ВНИМАНИЕ: Модель {settings.OLLAMA_EMBEDDING_MODEL} не найдена!")
-            logger.error(f"Доступные модели: {', '.join(model_names)}")
-            logger.error(f"Установите модель: docker exec ollama-ai ollama pull {settings.OLLAMA_EMBEDDING_MODEL}")
-            return
-        
+        model_names = fetch_remote_model_ids()
     except Exception as e:
-        logger.error(f"Ошибка: Ollama недоступен по адресу {settings.OLLAMA_URL}")
-        logger.error(f"Тип исключения: {type(e).__name__}")
-        logger.error(f"Сообщение: {str(e)}")
-        logger.error(f"Убедитесь, что ollama запущен в Docker с поддержкой GPU:")
-        logger.error(f"  docker run -d --gpus all -p 11434:11434 --name ollama-ai ollama/ollama")
+        logger.error(f"Не удалось получить список моделей: {e}")
+        return
+
+    model_found = False
+    for name in model_names:
+        if name == settings.OLLAMA_EMBEDDING_MODEL or name.startswith(
+            settings.OLLAMA_EMBEDDING_MODEL + ":"
+        ):
+            model_found = True
+            logger.info(f"Модель для эмбеддингов: {name} ✓")
+            break
+
+    if not model_found:
+        logger.error(f"ВНИМАНИЕ: Модель {settings.OLLAMA_EMBEDDING_MODEL} не найдена в списке сервера!")
+        logger.error(f"Доступные модели: {', '.join(model_names)}")
+        if settings.INFERENCE_BACKEND == "ollama" or settings.EMBEDDING_API_MODE == "ollama":
+            logger.error(f"Установите модель: ollama pull {settings.OLLAMA_EMBEDDING_MODEL}")
+        else:
+            logger.error("В LM Studio загрузите модель эмбеддингов с тем же id, что в OLLAMA_EMBEDDING_MODEL.")
         return
     
     # Обрабатываем все поддерживаемые файлы

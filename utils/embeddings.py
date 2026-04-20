@@ -29,6 +29,189 @@ except ImportError:
 logger = get_logger(__name__)
 
 
+def _embedding_headers() -> dict:
+    h = {"Content-Type": "application/json"}
+    if getattr(settings, "OPENAI_API_KEY", ""):
+        h["Authorization"] = f"Bearer {settings.OPENAI_API_KEY}"
+    return h
+
+
+def _parse_ollama_embedding_response(result: dict) -> List[List[float]]:
+    if "embeddings" in result:
+        return result["embeddings"]
+    if "embedding" in result:
+        return [result["embedding"]]
+    return []
+
+
+def _parse_openai_embedding_response(result: dict) -> List[List[float]]:
+    data = result.get("data") or []
+    ordered = sorted(data, key=lambda x: x.get("index", 0))
+    out = []
+    for item in ordered:
+        emb = item.get("embedding")
+        if emb:
+            out.append(emb)
+    return out
+
+
+def _fetch_embeddings_from_api(texts: List[str]) -> List[List[float]]:
+    """
+    Запрос эмбеддингов к Ollama (/api/embed) или OpenAI-совместимому (/v1/embeddings).
+    """
+    if not texts:
+        return []
+
+    base = settings.OLLAMA_URL.rstrip("/")
+    mode = getattr(settings, "EMBEDDING_API_MODE", "ollama") or "ollama"
+
+    if mode == "openai":
+        url = f"{base}/v1/embeddings"
+        payload = {
+            "model": settings.OLLAMA_EMBEDDING_MODEL,
+            "input": texts if len(texts) > 1 else texts[0],
+        }
+        try:
+            response = requests.post(
+                url, json=payload, timeout=120, headers=_embedding_headers()
+            )
+            response.raise_for_status()
+            return _parse_openai_embedding_response(response.json())
+        except requests.exceptions.HTTPError as e:
+            body = e.response.text[:800] if e.response is not None else ""
+            logger.error(
+                "Ошибка HTTP при эмбеддинге (openai %s): %s %s",
+                url,
+                e.response.status_code if e.response else "?",
+                body,
+            )
+            return []
+        except requests.exceptions.RequestException as e:
+            logger.error("Ошибка запроса эмбеддинга (openai %s): %s", url, e)
+            return []
+
+    # Ollama
+    url = f"{base}/api/embed"
+    for use_dimensions in (True, False):
+        payload = {"model": settings.OLLAMA_EMBEDDING_MODEL, "input": texts}
+        if use_dimensions:
+            payload["dimensions"] = 1024
+        try:
+            response = requests.post(
+                url, json=payload, timeout=120, headers=_embedding_headers()
+            )
+            response.raise_for_status()
+            parsed = _parse_ollama_embedding_response(response.json())
+            if parsed:
+                return parsed
+        except requests.exceptions.HTTPError as e:
+            if (
+                use_dimensions
+                and e.response is not None
+                and e.response.status_code == 400
+            ):
+                logger.warning(
+                    "Ollama /api/embed с dimensions=1024 отклонён (400), повтор без dimensions"
+                )
+                continue
+            body = e.response.text[:800] if e.response is not None else ""
+            logger.error(
+                "Ошибка HTTP при эмбеддинге (ollama %s): %s %s",
+                url,
+                e.response.status_code if e.response else "?",
+                body,
+            )
+            return []
+        except requests.exceptions.RequestException as e:
+            logger.error("Ошибка запроса эмбеддинга (ollama %s): %s", url, e)
+            return []
+
+    return []
+
+
+def chat_completion(prompt: str, timeout: int = 120) -> str:
+    """
+    Генерация ответа по одному текстовому промпту.
+
+    - CHAT_API_MODE=ollama: POST /api/generate
+    - CHAT_API_MODE=openai: POST /v1/chat/completions (LM Studio и др.)
+    """
+    base = settings.OLLAMA_URL.rstrip("/")
+    mode = getattr(settings, "CHAT_API_MODE", "ollama") or "ollama"
+
+    if mode == "openai":
+        try:
+            response = requests.post(
+                f"{base}/v1/chat/completions",
+                json={
+                    "model": settings.OLLAMA_CHAT_MODEL,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0.3,
+                    "top_p": 0.9,
+                    "max_tokens": 500,
+                    "stream": False,
+                },
+                timeout=timeout,
+                headers=_embedding_headers(),
+            )
+            response.raise_for_status()
+            result = response.json()
+            choices = result.get("choices") or []
+            if not choices:
+                logger.warning("chat/completions: пустой choices в ответе")
+                return ""
+            msg = choices[0].get("message") or {}
+            return (msg.get("content") or "").strip()
+        except requests.exceptions.HTTPError as e:
+            body = e.response.text[:800] if e.response is not None else ""
+            code = e.response.status_code if e.response else "?"
+            logger.error("HTTP ошибка chat/completions: %s %s", code, body)
+            return f"Произошла ошибка при генерации ответа: HTTP {code}"
+        except requests.exceptions.Timeout:
+            logger.error("Таймаут при генерации ответа (chat/completions)")
+            return "Произошла ошибка при генерации ответа: Превышено время ожидания"
+        except requests.exceptions.ConnectionError:
+            logger.error("Ошибка подключения к серверу LLM (chat/completions)")
+            return "Произошла ошибка при генерации ответа: Не удалось подключиться к серверу LLM"
+        except Exception as e:
+            logger.error("Ошибка при генерации ответа: %s", e)
+            return f"Произошла ошибка при генерации ответа: {str(e)}"
+
+    try:
+        response = requests.post(
+            f"{base}/api/generate",
+            json={
+                "model": settings.OLLAMA_CHAT_MODEL,
+                "prompt": prompt,
+                "stream": False,
+                "options": {
+                    "temperature": 0.3,
+                    "top_p": 0.9,
+                    "num_predict": 500,
+                },
+            },
+            timeout=timeout,
+        )
+        response.raise_for_status()
+        result = response.json()
+        return (result.get("response") or "").strip()
+    except requests.exceptions.HTTPError as e:
+        logger.error(
+            "HTTP ошибка при генерации ответа: %s",
+            e.response.status_code if hasattr(e, "response") and e.response else "Unknown",
+        )
+        return f"Произошла ошибка при генерации ответа: HTTP {e.response.status_code if hasattr(e, 'response') and e.response else 'Unknown'}"
+    except requests.exceptions.Timeout:
+        logger.error("Таймаут при генерации ответа")
+        return "Произошла ошибка при генерации ответа: Превышено время ожидания"
+    except requests.exceptions.ConnectionError:
+        logger.error("Ошибка подключения к Ollama")
+        return "Произошла ошибка при генерации ответа: Не удалось подключиться к Ollama"
+    except Exception as e:
+        logger.error("Ошибка при генерации ответа: %s", e)
+        return f"Произошла ошибка при генерации ответа: {str(e)}"
+
+
 def get_embedding(text: str) -> List[float]:
     """
     Получить эмбеддинг текста через ollama (API v2)
@@ -46,32 +229,16 @@ def get_embedding(text: str) -> List[float]:
             logger.debug(f"Эмбеддинг получен из кэша для текста: {text[:50]}...")
             return cached
     
-    # Получаем эмбеддинг из Ollama
     try:
-        response = requests.post(
-            f"{settings.OLLAMA_URL}/api/embed",
-            json={
-                "model": settings.OLLAMA_EMBEDDING_MODEL,
-                "input": text,
-                "dimensions": 1024
-            },
-            timeout=60
-        )
-        response.raise_for_status()
-        result = response.json()
-        # API v2 возвращает embeddings (массив) или embedding (один)
-        if "embeddings" in result:
-            embedding = result["embeddings"][0]
-        elif "embedding" in result:
-            embedding = result["embedding"]
-        else:
+        vectors = _fetch_embeddings_from_api([text])
+        if not vectors or not vectors[0]:
             return []
-        
-        # Кэшируем эмбеддинг
+        embedding = vectors[0]
+
         if USE_CACHE:
             cache_embedding(text, settings.OLLAMA_EMBEDDING_MODEL, embedding)
             logger.debug(f"Эмбеддинг закэширован для текста: {text[:50]}...")
-        
+
         return embedding
     except Exception as e:
         logger.error(f"Ошибка при получении эмбеддинга: {e}")
@@ -113,33 +280,22 @@ def get_embeddings_batch(texts: List[str]) -> List[List[float]]:
     
     # Получаем эмбеддинги для текстов, которых нет в кэше
     if texts_to_fetch:
-        try:
-            response = requests.post(
-                f"{settings.OLLAMA_URL}/api/embed",
-                json={
-                    "model": settings.OLLAMA_EMBEDDING_MODEL,
-                    "input": texts_to_fetch,  # Массив текстов для пакетной обработки
-                    "dimensions": 1024
-                },
-                timeout=120
+        fetched_embeddings = _fetch_embeddings_from_api(texts_to_fetch)
+        if not fetched_embeddings or len(fetched_embeddings) != len(texts_to_fetch):
+            logger.error(
+                "Пакет эмбеддингов: ожидалось %s векторов, получено %s",
+                len(texts_to_fetch),
+                len(fetched_embeddings) if fetched_embeddings else 0,
             )
-            response.raise_for_status()
-            result = response.json()
-            fetched_embeddings = result.get("embeddings", [])
-            
-            # Кэшируем и вставляем полученные эмбеддинги
-            for i, embedding in enumerate(fetched_embeddings):
-                text = texts_to_fetch[i]
-                index = indices_to_fetch[i]
-                embeddings[index] = embedding
-                if USE_CACHE:
-                    cache_embedding(text, settings.OLLAMA_EMBEDDING_MODEL, embedding)
-                    logger.debug(f"Эмбеддинг {index} закэширован")
-                    
-        except Exception as e:
-            logger.error(f"Ошибка при пакетном получении эмбеддингов: {e}")
-            # Возвращаем только кэшированные эмбеддинги
             return [emb for emb in embeddings if emb is not None]
+
+        for i, embedding in enumerate(fetched_embeddings):
+            text = texts_to_fetch[i]
+            index = indices_to_fetch[i]
+            embeddings[index] = embedding
+            if USE_CACHE:
+                cache_embedding(text, settings.OLLAMA_EMBEDDING_MODEL, embedding)
+                logger.debug(f"Эмбеддинг {index} закэширован")
     
     return embeddings
 
@@ -228,37 +384,7 @@ def generate_answer(query: str, context_docs: List[Dict]) -> str:
 
 Твой структурированный ответ на основе документов:"""
 
-    try:
-        response = requests.post(
-            f"{settings.OLLAMA_URL}/api/generate",
-            json={
-                "model": settings.OLLAMA_CHAT_MODEL,
-                "prompt": prompt,
-                "stream": False,
-                "options": {
-                    "temperature": 0.3,
-                    "top_p": 0.9,
-                    "num_predict": 500
-                }
-            },
-            timeout=120
-        )
-        
-        response.raise_for_status()
-        result = response.json()
-        return result.get("response", "").strip()
-    except requests.exceptions.HTTPError as e:
-        logger.error(f"HTTP ошибка при генерации ответа: {e.response.status_code if hasattr(e, 'response') and e.response else 'Unknown'}")
-        return f"Произошла ошибка при генерации ответа: HTTP {e.response.status_code if hasattr(e, 'response') and e.response else 'Unknown'}"
-    except requests.exceptions.Timeout:
-        logger.error("Таймаут при генерации ответа")
-        return "Произошла ошибка при генерации ответа: Превышено время ожидания"
-    except requests.exceptions.ConnectionError:
-        logger.error("Ошибка подключения к Ollama")
-        return "Произошла ошибка при генерации ответа: Не удалось подключиться к Ollama"
-    except Exception as e:
-        logger.error(f"Ошибка при генерации ответа: {str(e)}")
-        return f"Произошла ошибка при генерации ответа: {str(e)}"
+    return chat_completion(prompt, timeout=120)
 
 
 class OllamaEmbeddingFunction:
@@ -286,23 +412,7 @@ class OllamaEmbeddingFunction:
         if not input:
             return []
         
-        try:
-            response = requests.post(
-                f"{settings.OLLAMA_URL}/api/embed",
-                json={
-                    "model": settings.OLLAMA_EMBEDDING_MODEL,
-                    "input": input,
-                    "dimensions": 1024
-                },
-                timeout=120
-            )
-            response.raise_for_status()
-            result = response.json()
-            embeddings = result.get("embeddings", [])
-            return embeddings
-        except Exception as e:
-            logger.error(f"Ошибка при генерации эмбеддингов через Ollama: {e}")
-            return []
+        return _fetch_embeddings_from_api(list(input))
 
 
 # Переэкспорт функции инвалидации кэша для удобства импорта

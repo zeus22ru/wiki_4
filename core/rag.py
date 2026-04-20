@@ -16,7 +16,7 @@ import logging.handlers
 import requests
 
 from config import settings, get_logger
-from utils.embeddings import get_embedding
+from utils.embeddings import get_embedding, chat_completion
 
 logger = get_logger(__name__)
 
@@ -116,7 +116,7 @@ class RAGSystem:
         query: str,
         top_k: Optional[int] = None,
         min_score: Optional[float] = None
-    ) -> List[Dict]:
+    ) -> Tuple[List[Dict], Optional[str]]:
         """
         Поиск релевантных документов
         
@@ -126,7 +126,8 @@ class RAGSystem:
             min_score: Минимальный порог релевантности (по умолчанию из settings.RAG_MIN_SCORE)
             
         Returns:
-            Список релевантных документов с метаданными
+            (документы, код_ошибки). Код: None при успехе, \"embedding_unavailable\" если не получен
+            эмбеддинг запроса, \"search_error\" при сбое Chroma/сети.
         """
         rag_logger.info(f"--- Поиск документов ---")
         rag_logger.debug(f"Запрос: '{query}'")
@@ -140,12 +141,12 @@ class RAGSystem:
         start_time = time.time()
         try:
             # Генерируем эмбеддинг запроса через Ollama API с dimensions=1024
-            rag_logger.debug("Генерация эмбеддинга запроса через Ollama API...")
+            rag_logger.debug("Генерация эмбеддинга запроса (сервис из .env: OLLAMA_URL / EMBEDDING_API_MODE)...")
             query_embedding = get_embedding(query)
             
             if not query_embedding:
                 rag_logger.error("Не удалось получить эмбеддинг запроса")
-                return []
+                return [], "embedding_unavailable"
             
             rag_logger.debug(f"Эмбеддинг получен. Размер: {len(query_embedding)}")
             
@@ -191,12 +192,12 @@ class RAGSystem:
             rag_logger.info(f"Поиск завершен за {elapsed:.3f} сек. Найдено документов: {len(documents)}")
             rag_logger.debug(f"Топ документы: {[d['metadata'].get('source', 'N/A') for d in documents]}")
             
-            return documents
+            return documents, None
             
         except Exception as e:
             elapsed = time.time() - start_time
             rag_logger.error(f"Ошибка при поиске документов за {elapsed:.3f} сек: {e}", exc_info=True)
-            return []
+            return [], "search_error"
     
     def extract_citations(
         self,
@@ -435,47 +436,13 @@ class RAGSystem:
     
     def _generate_answer(self, prompt: str) -> str:
         """
-        Генерация ответа через Ollama API
-        
-        Args:
-            prompt: Промпт для генерации
-            
-        Returns:
-            Сгенерированный ответ
+        Генерация ответа через Ollama (/api/generate) или OpenAI-совместимый API (/v1/chat/completions).
         """
-        rag_logger.debug("Генерация ответа через Ollama API...")
-        try:
-            response = requests.post(
-                f"{settings.OLLAMA_URL}/api/generate",
-                json={
-                    "model": settings.OLLAMA_CHAT_MODEL,
-                    "prompt": prompt,
-                    "stream": False,
-                    "options": {
-                        "temperature": 0.3,
-                        "top_p": 0.9,
-                        "num_predict": 500
-                    }
-                },
-                timeout=120
-            )
-            response.raise_for_status()
-            result = response.json()
-            answer = result.get("response", "").strip()
-            rag_logger.debug(f"Ответ сгенерирован, длина: {len(answer)} символов")
-            return answer
-        except requests.exceptions.HTTPError as e:
-            rag_logger.error(f"HTTP ошибка при генерации ответа: {e.response.status_code if hasattr(e, 'response') and e.response else 'Unknown'}")
-            return f"Произошла ошибка при генерации ответа: HTTP {e.response.status_code if hasattr(e, 'response') and e.response else 'Unknown'}"
-        except requests.exceptions.Timeout:
-            rag_logger.error("Таймаут при генерации ответа")
-            return "Произошла ошибка при генерации ответа: Превышено время ожидания"
-        except requests.exceptions.ConnectionError:
-            rag_logger.error("Ошибка подключения к Ollama")
-            return "Произошла ошибка при генерации ответа: Не удалось подключиться к Ollama"
-        except Exception as e:
-            rag_logger.error(f"Ошибка при генерации ответа: {str(e)}")
-            return f"Произошла ошибка при генерации ответа: {str(e)}"
+        mode = getattr(settings, "CHAT_API_MODE", "ollama") or "ollama"
+        rag_logger.debug("Генерация ответа (CHAT_API_MODE=%s)...", mode)
+        answer = chat_completion(prompt, timeout=120)
+        rag_logger.debug(f"Ответ сгенерирован, длина: {len(answer)} символов")
+        return answer
     
     def query(
         self,
@@ -512,7 +479,29 @@ class RAGSystem:
         
         # 1. Поиск релевантных документов
         rag_logger.debug("Шаг 1: Поиск релевантных документов")
-        documents = self.retrieve_documents(query, top_k, min_score)
+        documents, retrieve_error = self.retrieve_documents(query, top_k, min_score)
+        
+        if retrieve_error == "embedding_unavailable":
+            elapsed = time.time() - start_time
+            rag_logger.warning(f"RAG запрос за {elapsed:.3f} сек: эмбеддинг запроса недоступен")
+            return RAGResult(
+                answer=(
+                    "Поиск по базе не выполнен: не удалось получить эмбеддинг для вашего вопроса. "
+                    "Индекс в Chroma уже заполнен, но для каждого запроса нужна работающая модель эмбеддингов "
+                    "(например, загрузите модель в LM Studio и проверьте OLLAMA_EMBEDDING_MODEL и INFERENCE_BACKEND=lmstudio)."
+                ),
+                citations=[],
+                sources=[]
+            )
+        
+        if retrieve_error == "search_error":
+            elapsed = time.time() - start_time
+            rag_logger.warning(f"RAG запрос за {elapsed:.3f} сек: ошибка поиска в Chroma")
+            return RAGResult(
+                answer="Ошибка при поиске по векторной базе. Проверьте логи и целостность Chroma.",
+                citations=[],
+                sources=[]
+            )
         
         if not documents:
             elapsed = time.time() - start_time

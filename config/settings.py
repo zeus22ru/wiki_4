@@ -7,11 +7,49 @@
 
 import os
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
+
+import requests
 from dotenv import load_dotenv
 
 # Загружаем переменные окружения из .env файла
 load_dotenv()
+
+
+def _resolve_inference_modes() -> tuple[str, str, str]:
+    """
+    Единый переключатель бэкенда и режимов HTTP API.
+
+    Returns:
+        (INFERENCE_BACKEND, EMBEDDING_API_MODE, CHAT_API_MODE)
+        INFERENCE_BACKEND: \"\", \"ollama\", \"lmstudio\"
+    """
+    raw = (os.getenv("INFERENCE_BACKEND") or "").strip()
+    key = raw.lower().replace("-", "").replace("_", "")
+    if key == "lmstudio":
+        preset_embed, preset_chat = "openai", "openai"
+        backend = "lmstudio"
+    elif key == "ollama":
+        preset_embed, preset_chat = "ollama", "ollama"
+        backend = "ollama"
+    else:
+        preset_embed, preset_chat = None, None
+        backend = ""
+
+    embed_ex = (os.getenv("EMBEDDING_API_MODE") or "").strip().lower()
+    chat_ex = (os.getenv("CHAT_API_MODE") or "").strip().lower()
+
+    if preset_embed is not None:
+        embedding_mode = embed_ex or preset_embed
+        chat_mode = chat_ex or preset_chat
+    else:
+        embedding_mode = embed_ex or "ollama"
+        chat_mode = chat_ex or embedding_mode
+
+    return backend, embedding_mode, chat_mode
+
+
+_INFERENCE_BACKEND, _EMBEDDING_API_MODE, _CHAT_API_MODE = _resolve_inference_modes()
 
 
 class Settings:
@@ -21,6 +59,12 @@ class Settings:
     OLLAMA_URL: str = os.getenv("OLLAMA_URL", "http://localhost:11434")
     OLLAMA_EMBEDDING_MODEL: str = os.getenv("OLLAMA_EMBEDDING_MODEL", "bge-m3")
     OLLAMA_CHAT_MODEL: str = os.getenv("OLLAMA_CHAT_MODEL", "qwen2.5:7b")
+    # ollama | lmstudio — задаёт пресет API; пусто = только EMBEDDING_API_MODE / CHAT_API_MODE
+    INFERENCE_BACKEND: str = _INFERENCE_BACKEND
+    # ollama: /api/embed и /api/generate. openai: /v1/embeddings и /v1/chat/completions (LM Studio)
+    EMBEDDING_API_MODE: str = _EMBEDDING_API_MODE
+    CHAT_API_MODE: str = _CHAT_API_MODE
+    OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
 
     # ChromaDB настройки
     CHROMA_PERSIST_DIR: str = os.getenv("CHROMA_PERSIST_DIR", "./chroma_db")
@@ -41,7 +85,8 @@ class Settings:
     # RAG настройка
     RAG_TOP_K: int = int(os.getenv("RAG_TOP_K", "5"))
     RAG_MAX_CITATIONS: int = int(os.getenv("RAG_MAX_CITATIONS", "5"))
-    RAG_MIN_SCORE: float = float(os.getenv("RAG_MIN_SCORE", "0.5"))
+    # Порог по формуле 1 - distance; 0.5 отсекает типичные попадания (~0.35–0.45)
+    RAG_MIN_SCORE: float = float(os.getenv("RAG_MIN_SCORE", "0.0"))
     RAG_MAX_CONTEXT_LENGTH: int = int(os.getenv("RAG_MAX_CONTEXT_LENGTH", "3000"))
 
     # Logging настройки
@@ -112,3 +157,52 @@ class Settings:
 
 # Глобальный экземпляр настроек
 settings = Settings()
+
+
+def uses_openai_compatible_api() -> bool:
+    """Нужны ли эндпоинты OpenAI-совместимого сервера (/v1/*)."""
+    return (
+        settings.EMBEDDING_API_MODE == "openai"
+        or settings.CHAT_API_MODE == "openai"
+    )
+
+
+def inference_server_reachable(timeout: float = 5.0) -> bool:
+    """
+    Доступность сервера инференса.
+    Для OpenAI-совместимого режима — GET /v1/models и непустой список (LM Studio не поддерживает /api/tags).
+    Для Ollama — GET /api/tags.
+    """
+    base = settings.OLLAMA_URL.rstrip("/")
+    if uses_openai_compatible_api():
+        try:
+            r = requests.get(f"{base}/v1/models", timeout=timeout)
+            if r.status_code != 200:
+                return False
+            payload = r.json()
+            models = payload.get("data")
+            if models is None:
+                models = payload.get("models")
+            return bool(models)
+        except Exception:
+            return False
+    try:
+        r = requests.get(f"{base}/api/tags", timeout=timeout)
+        return r.status_code == 200
+    except Exception:
+        return False
+
+
+def fetch_remote_model_ids(timeout: float = 5.0) -> List[str]:
+    """
+    Список имён моделей на сервере: у Ollama поле name, у LM Studio — id.
+    """
+    base = settings.OLLAMA_URL.rstrip("/")
+    if uses_openai_compatible_api():
+        r = requests.get(f"{base}/v1/models", timeout=timeout)
+        r.raise_for_status()
+        data = r.json().get("data") or []
+        return [str(m.get("id", "")) for m in data if m.get("id")]
+    r = requests.get(f"{base}/api/tags", timeout=timeout)
+    r.raise_for_status()
+    return [str(m.get("name", "")) for m in r.json().get("models", []) if m.get("name")]

@@ -9,7 +9,7 @@ from chromadb.config import Settings
 import sys
 
 # Импорт конфигурации и логирования
-from config import settings, get_logger
+from config import settings, get_logger, inference_server_reachable
 
 # Импорт общих функций для работы с эмбеддингами
 from utils.embeddings import get_embedding, search_documents, generate_answer
@@ -98,15 +98,11 @@ def main():
     logger.info("Вопрос-ответная система на базе знаний")
     logger.info("=" * 60)
     
-    # Проверяем доступность ollama
-    try:
-        response = requests.get(f"{settings.OLLAMA_URL}/api/tags", timeout=5)
-        response.raise_for_status()
-        logger.info(f"Ollama доступен по адресу: {settings.OLLAMA_URL}")
-    except Exception as e:
-        logger.error(f"Ошибка: Ollama недоступен по адресу {settings.OLLAMA_URL}")
-        logger.error(f"Убедитесь, что ollama запущен в Docker")
+    if not inference_server_reachable():
+        logger.error(f"Сервер инференса недоступен: {settings.OLLAMA_URL}")
+        logger.error("Проверьте INFERENCE_BACKEND (ollama | lmstudio) и запуск Ollama или LM Studio.")
         return
+    logger.info(f"Сервер инференса отвечает: {settings.OLLAMA_URL}")
     
     # Подключаемся к ChromaDB
     try:

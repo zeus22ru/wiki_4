@@ -13,7 +13,7 @@ from functools import wraps
 import requests
 
 # Импорт конфигурации и логирования
-from config import settings, get_logger
+from config import settings, get_logger, inference_server_reachable, fetch_remote_model_ids
 
 # Импорт RAG системы
 from core.rag import RAGSystem
@@ -23,6 +23,7 @@ from utils.embeddings import get_embedding, search_documents
 
 # Получаем логгер для этого модуля
 logger = get_logger(__name__)
+
 
 app = Flask(__name__)
 CORS(app)
@@ -120,13 +121,8 @@ def index():
 @log_api_request
 def health_check():
     """Проверка здоровья системы"""
-    ollama_status = False
-    try:
-        response = requests.get(f"{settings.OLLAMA_URL}/api/tags", timeout=5)
-        ollama_status = response.status_code == 200
-        logger.debug(f"Ollama статус: {ollama_status}")
-    except Exception as e:
-        logger.warning(f"Ollama недоступен: {e}")
+    ollama_status = inference_server_reachable()
+    logger.debug(f"Сервер инференса (Ollama/LM Studio) доступен: {ollama_status}")
     
     coll, rag = initialize_database()
     db_status = coll is not None
@@ -173,24 +169,38 @@ def chat():
         logger.error("База данных или RAG система недоступна")
         return jsonify({"error": "База данных недоступна"}), 500
     
-    # Проверяем доступность Ollama
-    try:
-        response = requests.get(f"{settings.OLLAMA_URL}/api/tags", timeout=5)
-        response.raise_for_status()
-    except Exception as e:
-        logger.error(f"Ollama недоступен: {e}")
-        return jsonify({"error": "Ollama недоступен"}), 500
+    if not inference_server_reachable():
+        logger.error("Сервер LLM недоступен по OLLAMA_URL (ожидается /api/tags или /v1/models)")
+        return jsonify({"error": "Сервер LLM недоступен. Проверьте OLLAMA_URL и запуск Ollama или LM Studio."}), 500
     
     # Используем RAG систему для поиска и генерации ответа с цитированием
     logger.info(f"Выполнение RAG запроса: '{query}'")
     
     # Поиск релевантных документов через RAG с использованием min_score
     try:
-        docs = rag.retrieve_documents(query, top_k=settings.TOP_K_RESULTS, min_score=0.0)
-        logger.info(f"Найдено {len(docs)} релевантных документов")
+        docs, retrieve_err = rag.retrieve_documents(
+            query, top_k=settings.TOP_K_RESULTS, min_score=0.0
+        )
+        logger.info(f"Найдено {len(docs)} релевантных документов (ошибка поиска: {retrieve_err!r})")
     except Exception as e:
         logger.error(f"Ошибка при поиске документов: {e}")
         return jsonify({"error": "Ошибка при поиске в базе знаний"}), 500
+    
+    if retrieve_err == "embedding_unavailable":
+        logger.error("Эмбеддинг запроса не получен — в Chroma есть векторы, но поиск без эмбеддинга вопроса невозможен")
+        return jsonify({
+            "answer": (
+                "Поиск по базе не выполнен: не удалось получить эмбеддинг для вашего вопроса. "
+                "Индекс в Chroma уже заполнен, но для каждого запроса нужна работающая модель эмбеддингов "
+                "(загрузите модель в LM Studio / Ollama, проверьте OLLAMA_EMBEDDING_MODEL и INFERENCE_BACKEND / EMBEDDING_API_MODE)."
+            ),
+            "sources": [],
+            "citations": [],
+        })
+    
+    if retrieve_err == "search_error":
+        logger.error("Ошибка Chroma при поиске")
+        return jsonify({"error": "Ошибка поиска в векторной базе"}), 500
     
     if not docs:
         logger.info("Не найдено релевантных документов")
@@ -239,13 +249,10 @@ def chat():
 
 @app.route('/api/models', methods=['GET'])
 def get_models():
-    """Получить список доступных моделей Ollama"""
-    logger.info("Запрос списка моделей Ollama")
+    """Список моделей с Ollama (/api/tags) или LM Studio (/v1/models) в зависимости от настроек."""
+    logger.info("Запрос списка моделей с сервера инференса")
     try:
-        response = requests.get(f"{settings.OLLAMA_URL}/api/tags", timeout=5)
-        response.raise_for_status()
-        result = response.json()
-        models = [model['name'] for model in result.get('models', [])]
+        models = fetch_remote_model_ids()
         logger.info(f"Найдено {len(models)} моделей")
         return jsonify({"models": models})
     except Exception as e:
@@ -293,7 +300,13 @@ def log_response_info(response):
 if __name__ == '__main__':
     # Инициализируем базу данных при запуске
     logger.info("Запуск Flask приложения")
-    logger.info(f"Ollama URL: {settings.OLLAMA_URL}")
+    logger.info(f"OLLAMA_URL: {settings.OLLAMA_URL}")
+    backend = settings.INFERENCE_BACKEND or "(по EMBEDDING_API_MODE/CHAT_API_MODE)"
+    logger.info(f"INFERENCE_BACKEND: {backend}")
+    logger.info(
+        f"API: эмбеддинги={settings.EMBEDDING_API_MODE}, чат={settings.CHAT_API_MODE} "
+        f"(openai → /v1/embeddings + /v1/chat/completions; ollama → /api/embed + /api/generate)"
+    )
     logger.info(f"Модель эмбеддингов: {settings.OLLAMA_EMBEDDING_MODEL}")
     logger.info(f"Модель чата: {settings.OLLAMA_CHAT_MODEL}")
     logger.info(f"Хост: {settings.API_HOST}, Порт: {settings.API_PORT}")
