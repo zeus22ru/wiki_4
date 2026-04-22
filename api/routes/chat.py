@@ -9,7 +9,6 @@ from typing import Optional
 
 from config import get_logger
 from core.chat_history import get_chat_history
-from models import ChatSession, Message
 
 logger = get_logger(__name__)
 

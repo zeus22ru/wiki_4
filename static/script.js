@@ -47,6 +47,29 @@ async function checkHealth() {
     }
 }
 
+/** Классический POST /api/chat (если /api/chat/stream недоступен — 404, старый бэкенд или прокси). */
+async function sendChatClassic(message) {
+    const response = await fetch('/api/chat', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ message: message }),
+    });
+    const data = await response.json();
+    hideTypingIndicator();
+    if (response.ok) {
+        addMessage(data.answer, 'bot');
+        if (data.sources && data.sources.length > 0) {
+            currentSources = data.sources;
+            addSourcesButton();
+        }
+    } else {
+        const errText = data.error ? data.error : `Ошибка ${response.status}`;
+        addMessage(errText, 'bot');
+    }
+}
+
 // Обработка отправки сообщения
 async function handleSubmit(e) {
     e.preventDefault();
@@ -67,31 +90,130 @@ async function handleSubmit(e) {
     sendButton.disabled = true;
     
     try {
-        const response = await fetch('/api/chat', {
+        const response = await fetch('/api/chat/stream', {
             method: 'POST',
             headers: {
-                'Content-Type': 'application/json'
+                'Content-Type': 'application/json',
+                'Accept': 'text/event-stream',
             },
-            body: JSON.stringify({ message: message })
+            body: JSON.stringify({ message: message }),
         });
-        
-        const data = await response.json();
-        
-        // Убираем индикатор печати
+
+        // Нет маршрута стрима (старая версия приложения, Apache без rewrite для вложенного пути и т.п.)
+        if (response.status === 404) {
+            console.warn(
+                '[БочкарИИ] POST /api/chat/stream недоступен (404) — используется /api/chat без потока. ' +
+                    'Перезапустите Flask с актуальным web_app.py или настройте прокси на /api/chat/stream.'
+            );
+            await sendChatClassic(message);
+            return;
+        }
+
         hideTypingIndicator();
-        
-        if (response.ok) {
-            // Добавляем ответ бота
-            addMessage(data.answer, 'bot');
-            
-            // Сохраняем источники
-            if (data.sources && data.sources.length > 0) {
-                currentSources = data.sources;
-                // Добавляем кнопку для показа источников
-                addSourcesButton();
+
+        if (!response.ok) {
+            let errText = `Ошибка ${response.status}`;
+            try {
+                const errData = await response.json();
+                if (errData.error) {
+                    errText = errData.error;
+                }
+            } catch (_) {
+                /* не JSON */
             }
-        } else {
-            addMessage(`Ошибка: ${data.error}`, 'bot');
+            addMessage(errText, 'bot');
+            return;
+        }
+
+        if (!response.body || !response.body.getReader) {
+            addMessage('Поток ответа недоступен в этом браузере', 'bot');
+            return;
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let streamShell = null;
+        let streamContent = null;
+        let accumulated = '';
+
+        const ensureStreamShell = () => {
+            if (streamShell) {
+                return;
+            }
+            streamShell = document.createElement('div');
+            streamShell.className = 'message bot-message';
+            const avatar = document.createElement('div');
+            avatar.className = 'message-avatar';
+            avatar.textContent = '🤖';
+            streamContent = document.createElement('div');
+            streamContent.className = 'message-content markdown-content streaming-in-progress';
+            streamShell.appendChild(avatar);
+            streamShell.appendChild(streamContent);
+            messagesContainer.appendChild(streamShell);
+            scrollToBottom();
+        };
+
+        const processSseBlock = (block) => {
+            const lines = block.split('\n').map((l) => l.replace(/\r$/, ''));
+            for (const line of lines) {
+                if (!line.startsWith('data:')) {
+                    continue;
+                }
+                const jsonStr = line.startsWith('data: ') ? line.slice(6) : line.slice(5).trimStart();
+                let payload;
+                try {
+                    payload = JSON.parse(jsonStr);
+                } catch (_) {
+                    continue;
+                }
+                if (payload.type === 'delta') {
+                    accumulated += payload.text || '';
+                    ensureStreamShell();
+                    streamContent.textContent = accumulated;
+                    scrollToBottom();
+                } else if (payload.type === 'done') {
+                    const finalText = payload.answer != null ? payload.answer : accumulated;
+                    ensureStreamShell();
+                    const html = formatMessage(finalText);
+                    streamContent.innerHTML = html;
+                    streamContent.classList.remove('streaming-in-progress');
+                    if (payload.sources && payload.sources.length > 0) {
+                        currentSources = payload.sources;
+                        addSourcesButton();
+                    }
+                } else if (payload.type === 'error') {
+                    const msg = payload.message || 'Ошибка потока';
+                    ensureStreamShell();
+                    streamContent.textContent = msg;
+                    streamContent.classList.remove('streaming-in-progress');
+                }
+            }
+        };
+
+        /** Уступка циклу событий: иначе несколько delta за один read сливаются в один кадр отрисовки. */
+        const yieldForPaint = () =>
+            new Promise((resolve) => {
+                requestAnimationFrame(() => resolve());
+            });
+
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) {
+                break;
+            }
+            buffer += decoder.decode(value, { stream: true });
+            const chunks = buffer.split('\n\n');
+            buffer = chunks.pop() || '';
+            for (const part of chunks) {
+                if (part.trim()) {
+                    processSseBlock(part);
+                    await yieldForPaint();
+                }
+            }
+        }
+        if (buffer.trim()) {
+            processSseBlock(buffer);
         }
     } catch (error) {
         hideTypingIndicator();

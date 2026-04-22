@@ -7,8 +7,9 @@
 и генерации ответов, которые используются в разных частях проекта.
 """
 
+import json
 import requests
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Iterator
 from config import settings, get_logger
 
 # Импорт кэширования (опционально)
@@ -27,6 +28,22 @@ except ImportError:
     CHROMADB_AVAILABLE = False
 
 logger = get_logger(__name__)
+
+
+def _iter_utf8_lines(response: requests.Response):
+    """
+    Итерировать строки HTTP-потока с принудительной UTF-8 декодировкой.
+
+    Некоторые LLM-серверы отдают stream без charset в Content-Type, и requests
+    тогда может выбрать latin-1, что приводит к "Ð..." в кириллице.
+    """
+    for raw_line in response.iter_lines(decode_unicode=False):
+        if raw_line is None:
+            continue
+        if isinstance(raw_line, bytes):
+            yield raw_line.decode("utf-8", errors="replace")
+        else:
+            yield str(raw_line)
 
 
 def _embedding_headers() -> dict:
@@ -131,85 +148,114 @@ def _fetch_embeddings_from_api(texts: List[str]) -> List[List[float]]:
 
 def chat_completion(prompt: str, timeout: int = 120) -> str:
     """
-    Генерация ответа по одному текстовому промпту.
+    Полный ответ одним текстом. Внутри вызывается потоковый API (stream: true к Ollama
+    и к OpenAI-совместимым серверам вроде LM Studio), фрагменты склеиваются здесь.
+    """
+    return "".join(chat_completion_stream(prompt, timeout=timeout)).strip()
 
-    - CHAT_API_MODE=ollama: POST /api/generate
-    - CHAT_API_MODE=openai: POST /v1/chat/completions (LM Studio и др.)
+
+def chat_completion_stream(prompt: str, timeout: int = 120) -> Iterator[str]:
+    """
+    Потоковая генерация ответа (фрагменты текста).
+
+    - CHAT_API_MODE=ollama: POST /api/generate с stream=true (NDJSON)
+    - CHAT_API_MODE=openai: POST /v1/chat/completions с stream=true (SSE)
     """
     base = settings.OLLAMA_URL.rstrip("/")
     mode = getattr(settings, "CHAT_API_MODE", "ollama") or "ollama"
 
     if mode == "openai":
         try:
-            response = requests.post(
+            with requests.post(
                 f"{base}/v1/chat/completions",
                 json={
                     "model": settings.OLLAMA_CHAT_MODEL,
                     "messages": [{"role": "user", "content": prompt}],
                     "temperature": 0.3,
                     "top_p": 0.9,
-                    "max_tokens": 500,
-                    "stream": False,
+                    "max_tokens": settings.CHAT_MAX_TOKENS,
+                    "stream": True,
                 },
                 timeout=timeout,
                 headers=_embedding_headers(),
-            )
-            response.raise_for_status()
-            result = response.json()
-            choices = result.get("choices") or []
-            if not choices:
-                logger.warning("chat/completions: пустой choices в ответе")
-                return ""
-            msg = choices[0].get("message") or {}
-            return (msg.get("content") or "").strip()
+                stream=True,
+            ) as response:
+                response.raise_for_status()
+                for line in _iter_utf8_lines(response):
+                    if not line or line.startswith(":"):
+                        continue
+                    if not line.startswith("data:"):
+                        continue
+                    data = line[5:].lstrip()
+                    if data.strip() == "[DONE]":
+                        break
+                    try:
+                        obj = json.loads(data)
+                    except json.JSONDecodeError:
+                        continue
+                    choices = obj.get("choices") or []
+                    if not choices:
+                        continue
+                    delta = choices[0].get("delta") or {}
+                    content = delta.get("content")
+                    if content:
+                        yield content
         except requests.exceptions.HTTPError as e:
             body = e.response.text[:800] if e.response is not None else ""
             code = e.response.status_code if e.response else "?"
-            logger.error("HTTP ошибка chat/completions: %s %s", code, body)
-            return f"Произошла ошибка при генерации ответа: HTTP {code}"
+            logger.error("HTTP ошибка chat/completions (stream): %s %s", code, body)
+            yield f"Произошла ошибка при генерации ответа: HTTP {code}"
         except requests.exceptions.Timeout:
-            logger.error("Таймаут при генерации ответа (chat/completions)")
-            return "Произошла ошибка при генерации ответа: Превышено время ожидания"
+            logger.error("Таймаут при генерации ответа (stream, chat/completions)")
+            yield "Произошла ошибка при генерации ответа: Превышено время ожидания"
         except requests.exceptions.ConnectionError:
-            logger.error("Ошибка подключения к серверу LLM (chat/completions)")
-            return "Произошла ошибка при генерации ответа: Не удалось подключиться к серверу LLM"
+            logger.error("Ошибка подключения к серверу LLM (stream, chat/completions)")
+            yield "Произошла ошибка при генерации ответа: Не удалось подключиться к серверу LLM"
         except Exception as e:
-            logger.error("Ошибка при генерации ответа: %s", e)
-            return f"Произошла ошибка при генерации ответа: {str(e)}"
+            logger.error("Ошибка при потоковой генерации: %s", e)
+            yield f"Произошла ошибка при генерации ответа: {str(e)}"
+        return
 
     try:
-        response = requests.post(
+        with requests.post(
             f"{base}/api/generate",
             json={
                 "model": settings.OLLAMA_CHAT_MODEL,
                 "prompt": prompt,
-                "stream": False,
+                "stream": True,
                 "options": {
                     "temperature": 0.3,
                     "top_p": 0.9,
-                    "num_predict": 500,
+                    "num_predict": settings.CHAT_MAX_TOKENS,
                 },
             },
             timeout=timeout,
-        )
-        response.raise_for_status()
-        result = response.json()
-        return (result.get("response") or "").strip()
+            stream=True,
+        ) as response:
+            response.raise_for_status()
+            for line in _iter_utf8_lines(response):
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                piece = obj.get("response")
+                if piece:
+                    yield piece
     except requests.exceptions.HTTPError as e:
-        logger.error(
-            "HTTP ошибка при генерации ответа: %s",
-            e.response.status_code if hasattr(e, "response") and e.response else "Unknown",
-        )
-        return f"Произошла ошибка при генерации ответа: HTTP {e.response.status_code if hasattr(e, 'response') and e.response else 'Unknown'}"
+        code = e.response.status_code if e.response else "?"
+        logger.error("HTTP ошибка при потоковой генерации (/api/generate): %s", code)
+        yield f"Произошла ошибка при генерации ответа: HTTP {code}"
     except requests.exceptions.Timeout:
-        logger.error("Таймаут при генерации ответа")
-        return "Произошла ошибка при генерации ответа: Превышено время ожидания"
+        logger.error("Таймаут при потоковой генерации (/api/generate)")
+        yield "Произошла ошибка при генерации ответа: Превышено время ожидания"
     except requests.exceptions.ConnectionError:
-        logger.error("Ошибка подключения к Ollama")
-        return "Произошла ошибка при генерации ответа: Не удалось подключиться к Ollama"
+        logger.error("Ошибка подключения к Ollama (stream)")
+        yield "Произошла ошибка при генерации ответа: Не удалось подключиться к Ollama"
     except Exception as e:
-        logger.error("Ошибка при генерации ответа: %s", e)
-        return f"Произошла ошибка при генерации ответа: {str(e)}"
+        logger.error("Ошибка при потоковой генерации: %s", e)
+        yield f"Произошла ошибка при генерации ответа: {str(e)}"
 
 
 def get_embedding(text: str) -> List[float]:

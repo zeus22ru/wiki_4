@@ -51,6 +51,8 @@ def _resolve_inference_modes() -> tuple[str, str, str]:
 
 _INFERENCE_BACKEND, _EMBEDDING_API_MODE, _CHAT_API_MODE = _resolve_inference_modes()
 
+_FLASK_DEBUG_RAW = (os.getenv("FLASK_DEBUG") or os.getenv("DEBUG") or "false").strip().lower()
+
 
 class Settings:
     """Класс для хранения настроек приложения"""
@@ -65,6 +67,8 @@ class Settings:
     EMBEDDING_API_MODE: str = _EMBEDDING_API_MODE
     CHAT_API_MODE: str = _CHAT_API_MODE
     OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
+    # Лимит токенов ответа: OpenAI-совместимый max_tokens, Ollama /api/generate num_predict
+    CHAT_MAX_TOKENS: int = int(os.getenv("CHAT_MAX_TOKENS", "2048"))
 
     # ChromaDB настройки
     CHROMA_PERSIST_DIR: str = os.getenv("CHROMA_PERSIST_DIR", "./chroma_db")
@@ -80,9 +84,15 @@ class Settings:
     # API настройка
     API_HOST: str = os.getenv("API_HOST", "0.0.0.0")
     API_PORT: int = int(os.getenv("API_PORT", "5000"))
+    # Лимит результатов для utils.embeddings.search_documents и прочих обходов коллекции без RAGSystem
     TOP_K_RESULTS: int = int(os.getenv("TOP_K_RESULTS", "3"))
+    # Режим Flask (Werkzeug debug, подробные страницы ошибок). В продакшене держите false.
+    FLASK_DEBUG: bool = _FLASK_DEBUG_RAW in ("1", "true", "yes", "on")
+    # Разрешённые Origin для CORS. Значение "*" — разрешить любые (удобно для локальной разработки).
+    CORS_ORIGINS: str = os.getenv("CORS_ORIGINS", "*")
 
     # RAG настройка
+    # Число чанков, запрашиваемых из Chroma в RAGSystem.retrieve_documents / query
     RAG_TOP_K: int = int(os.getenv("RAG_TOP_K", "5"))
     RAG_MAX_CITATIONS: int = int(os.getenv("RAG_MAX_CITATIONS", "5"))
     # Порог по формуле 1 - distance; 0.5 отсекает типичные попадания (~0.35–0.45)

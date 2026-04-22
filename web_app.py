@@ -3,30 +3,68 @@
 Flask веб-приложение для вопрос-ответной системы с RAG и цитированием
 """
 
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify, Response, stream_with_context
 from flask_cors import CORS
 import chromadb
-from chromadb.config import Settings
 import threading
 import time
+import json
+import traceback
 from functools import wraps
-import requests
 
 # Импорт конфигурации и логирования
 from config import settings, get_logger, inference_server_reachable, fetch_remote_model_ids
 
 # Импорт RAG системы
-from core.rag import RAGSystem
+from core.rag import RAGSystem, RAGResult
 
 # Импорт общих функций для работы с эмбеддингами
-from utils.embeddings import get_embedding, search_documents
+from api.routes.chat import chat_bp
 
 # Получаем логгер для этого модуля
 logger = get_logger(__name__)
 
 
+def _rag_result_to_api_dict(rag_result: RAGResult) -> dict:
+    """Тот же формат полей, что и у JSON-ответа POST /api/chat."""
+    sources = []
+    for s in rag_result.sources:
+        sources.append({
+            "title": s.get("title", "Без названия"),
+            "path": s.get("path", "N/A"),
+            "relevance": s.get("relevance", round(float(s.get("score", 0)), 2)),
+        })
+    citations = []
+    for citation in rag_result.citations:
+        citations.append({
+            "text": citation.text,
+            "source": citation.source,
+            "chunk_id": citation.chunk_id,
+            "score": round(citation.score, 2),
+        })
+    return {
+        "answer": rag_result.answer,
+        "sources": sources,
+        "citations": citations,
+    }
+
+
+def _sse_event(payload: dict) -> str:
+    return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
 app = Flask(__name__)
-CORS(app)
+_cors = settings.CORS_ORIGINS.strip()
+if _cors in ("*", ""):
+    CORS(app)
+else:
+    _origin_list = [o.strip() for o in _cors.split(",") if o.strip()]
+    CORS(app, origins=_origin_list or ["http://127.0.0.1:5000", "http://localhost:5000"])
+
+app.register_blueprint(chat_bp)
+
+if not settings.FLASK_DEBUG:
+    settings.validate()
 
 
 # ============================================
@@ -52,7 +90,7 @@ def log_api_request(f):
                 safe_data = {k: v for k, v in data.items()
                            if k not in ['password', 'token', 'secret']}
                 logger.debug(f"Тело запроса: {safe_data}")
-            except:
+            except (ValueError, TypeError, json.JSONDecodeError):
                 pass
         
         try:
@@ -173,78 +211,124 @@ def chat():
         logger.error("Сервер LLM недоступен по OLLAMA_URL (ожидается /api/tags или /v1/models)")
         return jsonify({"error": "Сервер LLM недоступен. Проверьте OLLAMA_URL и запуск Ollama или LM Studio."}), 500
     
-    # Используем RAG систему для поиска и генерации ответа с цитированием
+    # Полная RAG-цепочка одним вызовом (порог и top_k — из settings.RAG_MIN_SCORE / RAG_TOP_K)
     logger.info(f"Выполнение RAG запроса: '{query}'")
-    
-    # Поиск релевантных документов через RAG с использованием min_score
     try:
-        docs, retrieve_err = rag.retrieve_documents(
-            query, top_k=settings.TOP_K_RESULTS, min_score=0.0
+        rag_result = rag.query(query, max_citations=settings.RAG_MAX_CITATIONS)
+        logger.info(f"Сгенерирован ответ длиной {len(rag_result.answer)} символов")
+        logger.info(f"Извлечено {len(rag_result.citations)} цитат")
+    except Exception:
+        logger.error("Ошибка при выполнении RAG запроса:\n%s", traceback.format_exc())
+        return jsonify({"error": "Ошибка при обработке запроса. Подробности в журнале сервера."}), 500
+
+    if rag_result.retrieve_error == "embedding_unavailable":
+        logger.error(
+            "Эмбеддинг запроса не получен — в Chroma есть векторы, но поиск без эмбеддинга вопроса невозможен"
         )
-        logger.info(f"Найдено {len(docs)} релевантных документов (ошибка поиска: {retrieve_err!r})")
-    except Exception as e:
-        logger.error(f"Ошибка при поиске документов: {e}")
-        return jsonify({"error": "Ошибка при поиске в базе знаний"}), 500
-    
-    if retrieve_err == "embedding_unavailable":
-        logger.error("Эмбеддинг запроса не получен — в Chroma есть векторы, но поиск без эмбеддинга вопроса невозможен")
         return jsonify({
-            "answer": (
-                "Поиск по базе не выполнен: не удалось получить эмбеддинг для вашего вопроса. "
-                "Индекс в Chroma уже заполнен, но для каждого запроса нужна работающая модель эмбеддингов "
-                "(загрузите модель в LM Studio / Ollama, проверьте OLLAMA_EMBEDDING_MODEL и INFERENCE_BACKEND / EMBEDDING_API_MODE)."
-            ),
+            "answer": rag_result.answer,
             "sources": [],
             "citations": [],
         })
-    
-    if retrieve_err == "search_error":
+
+    if rag_result.retrieve_error == "search_error":
         logger.error("Ошибка Chroma при поиске")
         return jsonify({"error": "Ошибка поиска в векторной базе"}), 500
-    
-    if not docs:
-        logger.info("Не найдено релевантных документов")
+
+    payload = _rag_result_to_api_dict(rag_result)
+    logger.debug(f"Источники: {[s['title'] for s in payload['sources']]}")
+    return jsonify(payload)
+
+
+@app.route('/api/chat/stream', methods=['POST'])
+@log_api_request
+def chat_stream():
+    """RAG-чат с потоковой передачей текста (SSE). Итоговые sources/citations — в событии type=done."""
+    data = request.get_json()
+
+    if not data or 'message' not in data:
+        logger.warning("stream: запрос без сообщения")
+        return jsonify({"error": "Не указано сообщение"}), 400
+
+    query = data['message'].strip()
+    if not query:
+        return jsonify({"error": "Пустое сообщение"}), 400
+    if len(query) < 3:
+        return jsonify({"error": "Слишком короткий запрос. Минимальная длина: 3 символа"}), 400
+    if len(query) > 1000:
+        return jsonify({"error": "Слишком длинный запрос. Максимальная длина: 1000 символов"}), 400
+
+    coll, rag = initialize_database()
+    if not coll or not rag:
+        return jsonify({"error": "База данных недоступна"}), 500
+
+    if not inference_server_reachable():
         return jsonify({
-            "answer": "К сожалению, я не нашёл релевантной информации для ответа на ваш вопрос.",
-            "sources": [],
-            "citations": []
-        })
-    
-    # Используем новый метод query() для полной RAG-цепочки
-    try:
-        rag_result = rag.query(query, top_k=settings.TOP_K_RESULTS, min_score=0.0, max_citations=5)
-        logger.info(f"Сгенерирован ответ длиной {len(rag_result.answer)} символов")
-        logger.info(f"Извлечено {len(rag_result.citations)} цитат")
-    except Exception as e:
-        logger.error(f"Ошибка при выполнении RAG запроса: {e}")
-        return jsonify({"error": f"Ошибка при обработке запроса: {str(e)}"}), 500
-    
-    # Формируем список источников
-    sources = []
-    for doc in docs:
-        sources.append({
-            "title": doc['metadata'].get('title', 'Без названия'),
-            "path": doc['metadata'].get('path', 'N/A'),
-            "relevance": round(doc['score'], 2)
-        })
-    
-    # Формируем список цитат
-    citations = []
-    for citation in rag_result.citations:
-        citations.append({
-            "text": citation.text,
-            "source": citation.source,
-            "chunk_id": citation.chunk_id,
-            "score": round(citation.score, 2)
-        })
-    
-    logger.debug(f"Источники: {[s['title'] for s in sources]}")
-    
-    return jsonify({
-        "answer": rag_result.answer,
-        "sources": sources,
-        "citations": citations
-    })
+            "error": "Сервер LLM недоступен. Проверьте OLLAMA_URL и запуск Ollama или LM Studio.",
+        }), 500
+
+    documents, retrieve_error = rag.retrieve_documents(query)
+
+    stream_headers = {
+        "Cache-Control": "no-cache, no-transform",
+        "X-Accel-Buffering": "no",
+        "Content-Type": "text/event-stream; charset=utf-8",
+    }
+
+    if retrieve_error == "embedding_unavailable":
+        rr = RAGResult(
+            answer=(
+                "Поиск по базе не выполнен: не удалось получить эмбеддинг для вашего вопроса. "
+                "Индекс в Chroma уже заполнен, но для каждого запроса нужна работающая модель эмбеддингов "
+                "(например, загрузите модель в LM Studio и проверьте OLLAMA_EMBEDDING_MODEL и INFERENCE_BACKEND=lmstudio)."
+            ),
+            citations=[],
+            sources=[],
+            retrieve_error="embedding_unavailable",
+        )
+
+        def gen_embed_err():
+            payload = {"type": "done", **_rag_result_to_api_dict(rr)}
+            yield _sse_event(payload)
+
+        return Response(stream_with_context(gen_embed_err()), headers=stream_headers)
+
+    if retrieve_error == "search_error":
+        return jsonify({"error": "Ошибка поиска в векторной базе"}), 500
+
+    if not documents:
+        rr = RAGResult(
+            answer="К сожалению, я не нашёл релевантной информации для ответа на ваш вопрос.",
+            citations=[],
+            sources=[],
+        )
+
+        def gen_no_docs():
+            yield _sse_event({"type": "done", **_rag_result_to_api_dict(rr)})
+
+        return Response(stream_with_context(gen_no_docs()), headers=stream_headers)
+
+    def generate():
+        # Комментарий SSE: первый байты уходят клиенту до первого токена LLM (лучше для прокси/буферов).
+        yield ": stream-open\n\n"
+        try:
+            for evt in rag.stream_rag_answer(query, documents, settings.RAG_MAX_CITATIONS):
+                if evt.get("type") == "delta":
+                    yield _sse_event({"type": "delta", "text": evt.get("text", "")})
+                elif evt.get("type") == "done":
+                    rag_result = evt.get("rag_result")
+                    if rag_result is None:
+                        yield _sse_event({"type": "error", "message": "Пустой результат RAG"})
+                        return
+                    yield _sse_event({"type": "done", **_rag_result_to_api_dict(rag_result)})
+        except Exception:
+            logger.error("Ошибка в потоке /api/chat/stream:\n%s", traceback.format_exc())
+            yield _sse_event({
+                "type": "error",
+                "message": "Ошибка при обработке запроса. Подробности в журнале сервера.",
+            })
+
+    return Response(stream_with_context(generate()), headers=stream_headers)
 
 
 @app.route('/api/models', methods=['GET'])
@@ -255,9 +339,9 @@ def get_models():
         models = fetch_remote_model_ids()
         logger.info(f"Найдено {len(models)} моделей")
         return jsonify({"models": models})
-    except Exception as e:
-        logger.error(f"Ошибка при получении списка моделей: {e}")
-        return jsonify({"error": str(e)}), 500
+    except Exception:
+        logger.error("Ошибка при получении списка моделей:\n%s", traceback.format_exc())
+        return jsonify({"error": "Не удалось получить список моделей."}), 500
 
 
 @app.before_request
@@ -312,4 +396,4 @@ if __name__ == '__main__':
     logger.info(f"Хост: {settings.API_HOST}, Порт: {settings.API_PORT}")
     
     initialize_database()
-    app.run(host=settings.API_HOST, port=settings.API_PORT, debug=True)
+    app.run(host=settings.API_HOST, port=settings.API_PORT, debug=settings.FLASK_DEBUG)
