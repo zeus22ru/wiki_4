@@ -300,6 +300,21 @@ class ChatHistoryManager:
             ''', (session_id,))
             
             return [Message.from_row(row) for row in cursor.fetchall()]
+
+    def get_recent_messages(self, session_id: int, limit: int = 10) -> List[Message]:
+        """Получить последние сообщения сессии в хронологическом порядке."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT id, session_id, role, content, sources_json, created_at, citations_json, metadata_json
+                FROM messages
+                WHERE session_id = ?
+                ORDER BY created_at DESC
+                LIMIT ?
+            ''', (session_id, limit))
+
+            messages = [Message.from_row(row) for row in cursor.fetchall()]
+            return list(reversed(messages))
     
     def delete_messages(self, session_id: int) -> bool:
         """Удалить все сообщения сессии"""

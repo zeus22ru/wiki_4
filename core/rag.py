@@ -88,6 +88,46 @@ class RAGResult:
         return d
 
 
+def _source_from_metadata(metadata: Optional[Dict[str, Any]]) -> str:
+    """Вернуть человекочитаемый источник из доступных метаданных Chroma."""
+    metadata = metadata or {}
+    for key in ("source", "title", "path"):
+        value = metadata.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return "Без названия"
+
+
+def _clip_text(value: str, limit: int) -> str:
+    """Обрезать длинный текст для служебных prompt-блоков."""
+    value = re.sub(r'\s+', ' ', value or '').strip()
+    if len(value) <= limit:
+        return value
+    return value[:limit - 3].rstrip() + "..."
+
+
+def _format_conversation_history(
+    conversation_history: Optional[List[Dict[str, str]]],
+    max_messages: int = 10,
+    max_chars_per_message: int = 700,
+) -> str:
+    """Сжать историю чата до компактного блока для LLM."""
+    if not conversation_history:
+        return ""
+
+    role_labels = {
+        "user": "Пользователь",
+        "assistant": "Ассистент",
+    }
+    lines = []
+    for message in conversation_history[-max_messages:]:
+        role = role_labels.get(str(message.get("role", "")).lower(), "Сообщение")
+        content = _clip_text(str(message.get("content", "")), max_chars_per_message)
+        if content:
+            lines.append(f"{role}: {content}")
+    return "\n".join(lines)
+
+
 class RAGSystem:
     """Система RAG с поддержкой цитирования"""
     
@@ -182,7 +222,7 @@ class RAGSystem:
                     if relevance_score >= min_score:
                         metadata = results['metadatas'][0][i] if results['metadatas'] else {}
                         chunk_id = results['ids'][0][i] if results['ids'] else f"chunk_{i}"
-                        source = metadata.get('source', 'Неизвестный источник')
+                        source = _source_from_metadata(metadata)
                         
                         rag_logger.debug(f"Документ {i+1} принят (source={source}, chunk_id={chunk_id})")
                         documents.append({
@@ -236,7 +276,7 @@ class RAGSystem:
             score = doc['score']
             
             # Получаем источник из метаданных
-            source = metadata.get('source', 'Неизвестный источник')
+            source = _source_from_metadata(metadata)
             
             rag_logger.debug(f"Анализ документа {i+1}: source={source}, chunk_id={chunk_id}, score={score:.4f}")
             rag_logger.debug(f"Текст документа (первые 100 символов): {text[:100]}...")
@@ -339,14 +379,11 @@ class RAGSystem:
         
         for i, citation in enumerate(citations_to_show, 1):
             source = citation.source
-            chunk_id = citation.chunk_id
             score = citation.score
             
             rag_logger.debug(f"Цитата {i}: source={source}, score={score:.4f}")
             
             sources_section += f"\n{i}. {source}"
-            if chunk_id:
-                sources_section += f" (ID: {chunk_id})"
             sources_section += f" [релевантность: {score:.2%}]"
         
         formatted_answer = answer + sources_section
@@ -362,7 +399,9 @@ class RAGSystem:
         query: str,
         documents: List[Dict],
         max_context_length: Optional[int] = None,
-        answer_mode: str = "default"
+        answer_mode: str = "default",
+        conversation_history: Optional[List[Dict[str, str]]] = None,
+        retrieval_query: Optional[str] = None,
     ) -> str:
         """
         Генерация промпта для RAG с контекстом
@@ -371,6 +410,8 @@ class RAGSystem:
             query: Пользовательский запрос
             documents: Список найденных документов
             max_context_length: Максимальная длина контекста (по умолчанию из settings.RAG_MAX_CONTEXT_LENGTH)
+            conversation_history: Последние сообщения текущего чата
+            retrieval_query: Запрос, который использовался для поиска документов
             
         Returns:
             Сформированный промпт
@@ -391,7 +432,7 @@ class RAGSystem:
         
         for i, doc in enumerate(documents):
             text = doc['text']
-            source = doc['metadata'].get('source', 'Неизвестный источник')
+            source = _source_from_metadata(doc.get('metadata'))
             text_length = len(text)
             total_text_length += text_length
             
@@ -428,10 +469,23 @@ class RAGSystem:
         extra_instruction = mode_instructions.get(answer_mode, "Дай полезный структурированный ответ.")
 
         # Формируем промпт
+        history_block = _format_conversation_history(conversation_history)
+        history_section = f"""
+ИСТОРИЯ ДИАЛОГА:
+{history_block}
+""" if history_block else """
+ИСТОРИЯ ДИАЛОГА:
+Нет предыдущих сообщений.
+"""
+        retrieval_section = f"""
+ПОИСКОВЫЙ ЗАПРОС:
+{retrieval_query}
+""" if retrieval_query and retrieval_query != query else ""
         prompt = f"""Ты - полезный ассистент, который отвечает на вопросы на основе предоставленного контекста.
 
 КОНТЕКСТ:
 {context}
+{history_section}{retrieval_section}
 
 ВОПРОС:
 {query}
@@ -443,6 +497,8 @@ class RAGSystem:
 4. Не выдумывай информацию, которой нет в контексте.
 5. Форматируй ответ с использованием Markdown для лучшей читаемости.
 6. Режим ответа: {extra_instruction}
+7. Используй историю диалога только для понимания уточнений и местоимений; факты бери из контекста источников.
+8. Если история диалога противоречит найденному контексту, опирайся на контекст источников.
 
 ОТВЕТ:"""
         
@@ -461,6 +517,26 @@ class RAGSystem:
         answer = chat_completion(prompt, timeout=120)
         rag_logger.debug(f"Ответ сгенерирован, длина: {len(answer)} символов")
         return answer
+
+    def build_retrieval_query(
+        self,
+        query: str,
+        conversation_history: Optional[List[Dict[str, str]]] = None,
+    ) -> str:
+        """Сформировать поисковый запрос с учетом короткой истории текущего чата."""
+        history_block = _format_conversation_history(
+            conversation_history,
+            max_messages=6,
+            max_chars_per_message=350,
+        )
+        if not history_block:
+            return query
+        return (
+            "История диалога:\n"
+            f"{history_block}\n\n"
+            "Текущий вопрос:\n"
+            f"{query}"
+        )
     
     def query(
         self,
@@ -469,7 +545,8 @@ class RAGSystem:
         min_score: Optional[float] = None,
         include_citations: bool = True,
         max_citations: Optional[int] = None,
-        answer_mode: str = "default"
+        answer_mode: str = "default",
+        conversation_history: Optional[List[Dict[str, str]]] = None,
     ) -> RAGResult:
         """
         Выполнение RAG запроса
@@ -480,6 +557,7 @@ class RAGSystem:
             min_score: Минимальный порог релевантности (по умолчанию из settings.RAG_MIN_SCORE)
             include_citations: Включать ли цитаты в ответ
             max_citations: Максимальное количество цитат (по умолчанию из settings.RAG_MAX_CITATIONS)
+            conversation_history: Последние сообщения текущего чата
             
         Returns:
             Результат RAG с ответом и цитатами
@@ -498,7 +576,8 @@ class RAGSystem:
         
         # 1. Поиск релевантных документов
         rag_logger.debug("Шаг 1: Поиск релевантных документов")
-        documents, retrieve_error = self.retrieve_documents(query, top_k, min_score)
+        retrieval_query = self.build_retrieval_query(query, conversation_history)
+        documents, retrieve_error = self.retrieve_documents(retrieval_query, top_k, min_score)
         
         if retrieve_error == "embedding_unavailable":
             elapsed = time.time() - start_time
@@ -540,7 +619,13 @@ class RAGSystem:
         
         # 2. Генерация промпта с контекстом
         rag_logger.debug("Шаг 2: Генерация промпта с контекстом")
-        prompt = self.generate_rag_prompt(query, documents, answer_mode=answer_mode)
+        prompt = self.generate_rag_prompt(
+            query,
+            documents,
+            answer_mode=answer_mode,
+            conversation_history=conversation_history,
+            retrieval_query=retrieval_query,
+        )
         
         # 3. Генерация ответа через Ollama
         rag_logger.debug("Шаг 3: Генерация ответа через Ollama")
@@ -558,6 +643,7 @@ class RAGSystem:
             "top_k": top_k,
             "min_score": min_score,
             "answer_mode": answer_mode,
+            "conversation_messages": len(conversation_history or []),
             "latency_ms": int(elapsed * 1000),
         }
         rag_logger.info(f"RAG запрос завершен за {elapsed:.3f} сек")
@@ -571,6 +657,8 @@ class RAGSystem:
         documents: List[Dict],
         max_citations: Optional[int] = None,
         answer_mode: str = "default",
+        conversation_history: Optional[List[Dict[str, str]]] = None,
+        retrieval_query: Optional[str] = None,
     ) -> Iterator[Dict[str, Any]]:
         """
         Потоковая генерация ответа по уже найденным документам.
@@ -581,7 +669,13 @@ class RAGSystem:
         """
         max_citations = max_citations if max_citations is not None else settings.RAG_MAX_CITATIONS
         rag_logger.info("Потоковая генерация RAG-ответа (%s документов)", len(documents))
-        prompt = self.generate_rag_prompt(query, documents, answer_mode=answer_mode)
+        prompt = self.generate_rag_prompt(
+            query,
+            documents,
+            answer_mode=answer_mode,
+            conversation_history=conversation_history,
+            retrieval_query=retrieval_query,
+        )
         parts: List[str] = []
         for fragment in chat_completion_stream(prompt, timeout=120):
             parts.append(fragment)
@@ -593,6 +687,7 @@ class RAGSystem:
             "document_count": len(documents),
             "score_distribution": [round(float(d.get("score", 0)), 4) for d in documents],
             "answer_mode": answer_mode,
+            "conversation_messages": len(conversation_history or []),
         }
         yield {"type": "done", "rag_result": rag_result}
     
@@ -635,11 +730,11 @@ class RAGSystem:
         sources = []
         for doc in documents:
             meta = doc.get('metadata') or {}
-            title = meta.get('title') or meta.get('source', 'Без названия')
+            title = meta.get('title') or _source_from_metadata(meta)
             path = meta.get('path', 'N/A')
             score = float(doc['score'])
             sources.append({
-                'source': meta.get('source', 'Неизвестный источник'),
+                'source': _source_from_metadata(meta),
                 'chunk_id': doc['chunk_id'],
                 'score': score,
                 'text': doc['text'][:200] + "..." if len(doc['text']) > 200 else doc['text'],

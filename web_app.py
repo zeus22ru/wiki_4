@@ -88,6 +88,15 @@ def _resolve_chat_session(data: dict, query: str):
     return chat_history, session.id
 
 
+def _conversation_history_for_rag(chat_history, chat_id: int, limit: int = 10) -> list[dict]:
+    """Последние сообщения текущего чата для понимания уточняющих вопросов."""
+    return [
+        {"role": msg.role, "content": msg.content}
+        for msg in chat_history.get_recent_messages(chat_id, limit=limit)
+        if msg.role in {"user", "assistant"} and msg.content
+    ]
+
+
 def _maybe_update_chat_title(chat_history, chat_id: int, query: str) -> None:
     """Переименовать новый пустой чат по первому успешному вопросу."""
     session = chat_history.get_session(chat_id)
@@ -269,6 +278,7 @@ def chat():
     logger.info(f"Выполнение RAG запроса: '{query}'")
     try:
         chat_history, chat_id = _resolve_chat_session(data, query)
+        conversation_history = _conversation_history_for_rag(chat_history, chat_id)
         chat_history.add_message(
             session_id=chat_id,
             role="user",
@@ -282,6 +292,7 @@ def chat():
             min_score=options["min_score"],
             max_citations=settings.RAG_MAX_CITATIONS,
             answer_mode=options["answer_mode"],
+            conversation_history=conversation_history,
         )
         latency_ms = int((time.time() - started) * 1000)
         logger.info(f"Сгенерирован ответ длиной {len(rag_result.answer)} символов")
@@ -367,6 +378,7 @@ def chat_stream():
         }), 500
 
     chat_history, chat_id = _resolve_chat_session(data, query)
+    conversation_history = _conversation_history_for_rag(chat_history, chat_id)
     chat_history.add_message(
         session_id=chat_id,
         role="user",
@@ -386,7 +398,8 @@ def chat_stream():
         yield _sse_event({"type": "status", "message": "Ищу релевантные документы..."})
         started = time.time()
         try:
-            documents, retrieve_error = rag.retrieve_documents(query, options["top_k"], options["min_score"])
+            retrieval_query = rag.build_retrieval_query(query, conversation_history)
+            documents, retrieve_error = rag.retrieve_documents(retrieval_query, options["top_k"], options["min_score"])
 
             if retrieve_error == "embedding_unavailable":
                 rr = RAGResult(
@@ -445,6 +458,8 @@ def chat_stream():
                 documents,
                 settings.RAG_MAX_CITATIONS,
                 answer_mode=options["answer_mode"],
+                conversation_history=conversation_history,
+                retrieval_query=retrieval_query,
             ):
                 if evt.get("type") == "delta":
                     yield _sse_event({"type": "delta", "text": evt.get("text", "")})

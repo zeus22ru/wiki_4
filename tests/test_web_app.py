@@ -69,6 +69,7 @@ def test_api_chat_rag_success(mock_reachable, mock_init, client):
     assert data["citations"][0]["text"] == "цит"
     rag.query.assert_called_once()
     assert rag.query.call_args[0][0] == "привет мир"
+    assert "conversation_history" in rag.query.call_args.kwargs
 
 
 @patch("web_app.initialize_database")
@@ -114,6 +115,7 @@ def test_api_chat_stream_success(mock_reachable, mock_init, client):
         [{"text": "x", "score": 1.0, "metadata": {}, "chunk_id": "c1"}],
         None,
     )
+    rag.build_retrieval_query.return_value = "привет мир"
     rag.stream_rag_answer.side_effect = lambda *a, **kw: iter(
         [
             {"type": "delta", "text": "Часть"},
@@ -144,8 +146,11 @@ def test_api_chat_stream_success(mock_reachable, mock_init, client):
     assert "Документы найдены" in text
     assert "Часть" in text
     assert "Полный ответ" in text
+    rag.build_retrieval_query.assert_called_once()
     rag.retrieve_documents.assert_called_once()
+    assert rag.retrieve_documents.call_args[0][0] == "привет мир"
     rag.stream_rag_answer.assert_called_once()
+    assert "conversation_history" in rag.stream_rag_answer.call_args.kwargs
 
 
 @patch("web_app.initialize_database")
@@ -154,8 +159,31 @@ def test_api_chat_stream_search_error(mock_reachable, mock_init, client):
     mock_reachable.return_value = True
     rag = MagicMock()
     mock_init.return_value = (MagicMock(), rag)
+    rag.build_retrieval_query.return_value = "вопрос тут"
     rag.retrieve_documents.return_value = ([], "search_error")
     rv = client.post("/api/chat/stream", json={"message": "вопрос тут"})
     assert rv.status_code == 200
     assert "Ошибка поиска" in rv.get_data(as_text=True)
+    rag.build_retrieval_query.assert_called_once()
     rag.stream_rag_answer.assert_not_called()
+
+
+def test_api_documents_open_serves_file_inside_data_dir(client, tmp_path, monkeypatch):
+    doc = tmp_path / "source.txt"
+    doc.write_text("source content", encoding="utf-8")
+    monkeypatch.setattr("api.routes.documents.settings.DATA_DIR", str(tmp_path))
+
+    rv = client.get("/api/documents/open?path=source.txt")
+
+    assert rv.status_code == 200
+    assert rv.get_data(as_text=True) == "source content"
+
+
+def test_api_documents_open_rejects_path_outside_data_dir(client, tmp_path, monkeypatch):
+    outside = tmp_path.parent / "outside.txt"
+    outside.write_text("secret", encoding="utf-8")
+    monkeypatch.setattr("api.routes.documents.settings.DATA_DIR", str(tmp_path))
+
+    rv = client.get(f"/api/documents/open?path={outside}")
+
+    assert rv.status_code == 404
