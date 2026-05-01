@@ -26,8 +26,10 @@ const uploadForm = document.getElementById('uploadForm');
 const documentFileInput = document.getElementById('documentFileInput');
 const documentsList = document.getElementById('documentsList');
 const refreshDocumentsBtn = document.getElementById('refreshDocumentsBtn');
+const previewDocumentBtn = document.getElementById('previewDocumentBtn');
 const reindexBtn = document.getElementById('reindexBtn');
 const jobStatus = document.getElementById('jobStatus');
+const indexPreview = document.getElementById('indexPreview');
 const refreshAdminBtn = document.getElementById('refreshAdminBtn');
 const adminOverview = document.getElementById('adminOverview');
 
@@ -44,6 +46,7 @@ document.addEventListener('DOMContentLoaded', () => {
     chatSearchInput.addEventListener('input', debounce(() => loadChats(chatSearchInput.value.trim()), 250));
     exportChatBtn.addEventListener('click', exportCurrentChat);
     refreshDocumentsBtn.addEventListener('click', loadDocuments);
+    previewDocumentBtn.addEventListener('click', previewDocument);
     reindexBtn.addEventListener('click', startReindex);
     uploadForm.addEventListener('submit', uploadDocument);
     refreshAdminBtn.addEventListener('click', loadAdminOverview);
@@ -178,6 +181,16 @@ async function openChat(chatId) {
             });
             if (type === 'bot' && ((msg.sources || []).length || (msg.citations || []).length)) {
                 addSourcesButton(messageEl, msg.sources || [], msg.citations || []);
+                addVerifyButton(messageEl, {
+                    answer: msg.content,
+                    sources: msg.sources || [],
+                    citations: msg.citations || [],
+                });
+                loadFollowupSuggestions(messageEl, {
+                    answer: msg.content,
+                    sources: msg.sources || [],
+                    citations: msg.citations || [],
+                });
                 addFeedbackControls(messageEl, msg.id);
             }
         });
@@ -291,6 +304,16 @@ async function sendChatClassic(message) {
     });
     currentChatId = data.chat_id || currentChatId;
     addSourcesButton(botMessage, data.sources || [], data.citations || []);
+    addVerifyButton(botMessage, {
+        answer: data.answer,
+        sources: data.sources || [],
+        citations: data.citations || [],
+    });
+    loadFollowupSuggestions(botMessage, {
+        answer: data.answer,
+        sources: data.sources || [],
+        citations: data.citations || [],
+    });
     addFeedbackControls(botMessage, data.message_id);
     loadChats();
 }
@@ -417,6 +440,16 @@ async function readStream(response) {
                 streamContent.classList.remove('streaming-in-progress');
                 linkifySourceReferences(streamShell, payload.sources || [], payload.citations || []);
                 addSourcesButton(streamShell, payload.sources || [], payload.citations || []);
+                addVerifyButton(streamShell, {
+                    answer: finalText,
+                    sources: payload.sources || [],
+                    citations: payload.citations || [],
+                });
+                loadFollowupSuggestions(streamShell, {
+                    answer: finalText,
+                    sources: payload.sources || [],
+                    citations: payload.citations || [],
+                });
                 addFeedbackControls(streamShell, payload.message_id);
             } else if (payload.type === 'error') {
                 ensureStreamShell();
@@ -655,6 +688,129 @@ function addSourcesButton(messageEl, sources, citations) {
     content.appendChild(button);
 }
 
+function addVerifyButton(messageEl, details = {}) {
+    if (!messageEl || !(details.citations || []).length) {
+        return;
+    }
+    const content = messageEl.querySelector('.message-content');
+    if (!content || content.querySelector('.verify-answer-btn')) {
+        return;
+    }
+    const button = document.createElement('button');
+    button.className = 'verify-answer-btn';
+    button.type = 'button';
+    button.textContent = 'Проверить ответ';
+    button.addEventListener('click', () => verifyAnswer(messageEl, details, button));
+    content.appendChild(button);
+}
+
+async function verifyAnswer(messageEl, details, button) {
+    const content = messageEl.querySelector('.message-content');
+    if (!content) {
+        return;
+    }
+    button.disabled = true;
+    button.textContent = 'Проверяю...';
+    let resultBox = content.querySelector('.verification-result');
+    if (!resultBox) {
+        resultBox = document.createElement('div');
+        resultBox.className = 'verification-result';
+        content.appendChild(resultBox);
+    }
+    resultBox.textContent = 'Сверяю ответ с цитатами...';
+
+    try {
+        const data = await apiJson('/api/chat/verify', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                answer: details.answer || '',
+                sources: details.sources || [],
+                citations: details.citations || [],
+            }),
+        });
+        renderVerificationResult(resultBox, data.verification || {});
+        button.textContent = 'Проверить еще раз';
+    } catch (error) {
+        resultBox.className = 'verification-result verification-result--error';
+        resultBox.textContent = error.message;
+        button.textContent = 'Повторить проверку';
+    } finally {
+        button.disabled = false;
+    }
+}
+
+function renderVerificationResult(container, verification) {
+    const statusLabels = {
+        confirmed: 'Подтверждено источниками',
+        partial: 'Подтверждено частично',
+        unsupported: 'Есть неподтвержденные утверждения',
+        no_sources: 'Нет цитат для проверки',
+        error: 'Проверка недоступна',
+    };
+    const status = verification.status || 'partial';
+    const details = Array.isArray(verification.details) ? verification.details : [];
+    container.className = `verification-result verification-result--${status}`;
+    const detailsHtml = details.length
+        ? `<ul>${details.map((item) => `
+            <li>
+                <strong>${escapeHtml(item.claim || 'Утверждение')}</strong>
+                <span>${escapeHtml(item.evidence || item.verdict || '')}</span>
+            </li>
+        `).join('')}</ul>`
+        : '';
+    container.innerHTML = `
+        <div class="verification-title">${escapeHtml(statusLabels[status] || statusLabels.partial)}</div>
+        <div>${escapeHtml(verification.summary || 'Проверка завершена.')}</div>
+        ${detailsHtml}
+    `;
+}
+
+async function loadFollowupSuggestions(messageEl, details = {}) {
+    if (!messageEl || !details.answer || messageEl.querySelector('.followup-suggestions')) {
+        return;
+    }
+    try {
+        const data = await apiJson('/api/chat/suggestions', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                answer: details.answer,
+                sources: details.sources || [],
+                citations: details.citations || [],
+            }),
+        });
+        const suggestions = Array.isArray(data.suggestions) ? data.suggestions : [];
+        if (suggestions.length) {
+            renderFollowupSuggestions(messageEl, suggestions);
+        }
+    } catch (_) {
+        /* Рекомендации не критичны для основного ответа. */
+    }
+}
+
+function renderFollowupSuggestions(messageEl, suggestions) {
+    const content = messageEl.querySelector('.message-content');
+    if (!content || content.querySelector('.followup-suggestions')) {
+        return;
+    }
+    const wrapper = document.createElement('div');
+    wrapper.className = 'followup-suggestions';
+    wrapper.innerHTML = '<div class="followup-title">Можно уточнить:</div>';
+    suggestions.slice(0, 5).forEach((question) => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.textContent = question;
+        btn.addEventListener('click', () => {
+            messageInput.value = question;
+            messageInput.focus();
+            messageForm.dispatchEvent(new Event('submit'));
+        });
+        wrapper.appendChild(btn);
+    });
+    content.appendChild(wrapper);
+}
+
 function addFeedbackControls(messageEl, messageId) {
     if (!messageEl || !messageId) {
         return;
@@ -702,29 +858,38 @@ function openSourcesPanel(options = {}) {
     for (let i = 0; i < max; i += 1) {
         const source = sources[i] || {};
         const citation = citations[i] || {};
+        const title = source.title || citation.source || 'Без названия';
+        const path = source.path || source.source || citation.chunk_id || 'N/A';
+        const fileType = source.file_type || fileTypeFromPath(path);
+        const chunkLabel = Number.isInteger(source.chunk_index) && source.total_chunks
+            ? `Чанк ${source.chunk_index + 1} из ${source.total_chunks}`
+            : '';
+        const relevance = source.relevance || citation.score || 'n/a';
+        const snippet = citation.text || source.text || '';
         const sourceItem = document.createElement('div');
         sourceItem.className = 'source-item';
         if (i === focusIndex) {
             sourceItem.classList.add('source-item--active');
         }
-        if (source.path && source.path !== 'N/A') {
-            sourceItem.tabIndex = 0;
-            sourceItem.setAttribute('role', 'button');
-            sourceItem.title = 'Открыть документ';
-            sourceItem.addEventListener('click', () => openDocumentFromSource(source));
-            sourceItem.addEventListener('keydown', (event) => {
-                if (event.key === 'Enter' || event.key === ' ') {
-                    event.preventDefault();
-                    openDocumentFromSource(source);
-                }
-            });
-        }
         sourceItem.innerHTML = `
-            <div class="source-title">${escapeHtml(source.title || citation.source || 'Без названия')}</div>
-            <div class="source-path">${escapeHtml(source.path || source.source || citation.chunk_id || 'N/A')}</div>
-            <div class="source-relevance">Релевантность: ${escapeHtml(String(source.relevance || citation.score || 'n/a'))}</div>
-            <p class="source-snippet">${escapeHtml(citation.text || source.text || '')}</p>
+            <div class="source-card-header">
+                <div>
+                    <div class="source-title">${escapeHtml(title)}</div>
+                    <div class="source-path">${escapeHtml(path)}</div>
+                </div>
+            </div>
+            <div class="source-meta-row">
+                ${source.path && source.path !== 'N/A' ? '<button class="source-open-hint" type="button">Открыть</button>' : ''}
+                <span class="source-relevance">Релевантность: ${escapeHtml(String(relevance))}</span>
+                ${fileType ? `<span class="source-badge">${escapeHtml(fileType)}</span>` : ''}
+                ${chunkLabel ? `<span class="source-badge">${escapeHtml(chunkLabel)}</span>` : ''}
+            </div>
+            <p class="source-snippet">${escapeHtml(snippet)}</p>
         `;
+        const openButton = sourceItem.querySelector('.source-open-hint');
+        if (openButton) {
+            openButton.addEventListener('click', () => openDocumentFromSource(source));
+        }
         sourcesList.appendChild(sourceItem);
     }
     sourcesPanel.classList.add('open');
@@ -736,6 +901,11 @@ function openSourcesPanel(options = {}) {
 
 function closeSourcesPanel() {
     sourcesPanel.classList.remove('open');
+}
+
+function fileTypeFromPath(path) {
+    const match = String(path || '').match(/\.([a-z0-9]+)$/i);
+    return match ? match[1].toLowerCase() : '';
 }
 
 function scrollToBottom() {
@@ -781,6 +951,46 @@ async function uploadDocument(e) {
     }
 }
 
+async function previewDocument() {
+    if (!documentFileInput.files.length) {
+        jobStatus.textContent = 'Выберите файл для предпросмотра';
+        return;
+    }
+    const formData = new FormData();
+    formData.append('file', documentFileInput.files[0]);
+    indexPreview.innerHTML = '<div class="empty-state">Анализирую документ...</div>';
+    try {
+        const data = await apiJson('/api/documents/preview', {method: 'POST', body: formData});
+        renderIndexPreview(data.preview || {});
+    } catch (error) {
+        indexPreview.innerHTML = `<div class="empty-state">${escapeHtml(error.message)}</div>`;
+    }
+}
+
+function renderIndexPreview(preview) {
+    const warnings = preview.warnings || [];
+    const chunks = preview.chunks || [];
+    indexPreview.innerHTML = `
+        <div class="preview-card">
+            <div class="preview-header">
+                <strong>${escapeHtml(preview.filename || 'Документ')}</strong>
+                <span>${escapeHtml(preview.file_type || '')} · ${formatBytes(preview.size_bytes)} · ${preview.chunk_count || 0} чанков</span>
+            </div>
+            <div class="preview-meta">
+                <span>Заголовок: ${escapeHtml(preview.title || 'не найден')}</span>
+                <span>Извлечено символов: ${preview.text_length || 0}</span>
+            </div>
+            ${warnings.length ? `<div class="preview-warnings">${warnings.map((item) => `<span>${escapeHtml(item)}</span>`).join('')}</div>` : ''}
+            ${(preview.headings || []).length ? `<div class="preview-section"><strong>Похожие на заголовки фразы</strong>${renderPreviewList(preview.headings)}</div>` : ''}
+            <div class="preview-section"><strong>Первые чанки</strong>${chunks.length ? chunks.map((chunk) => `<p>${escapeHtml(clipText(chunk, 500))}</p>`).join('') : '<span>Чанки не найдены</span>'}</div>
+        </div>
+    `;
+}
+
+function renderPreviewList(items) {
+    return `<ul>${items.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul>`;
+}
+
 async function startReindex() {
     try {
         const data = await apiJson('/api/documents/reindex', {method: 'POST'});
@@ -813,17 +1023,34 @@ async function loadAdminOverview() {
         const chroma = data.health.chroma || {};
         const models = data.models || {};
         const settings = data.settings || {};
+        const quality = data.quality || {};
+        const feedback = quality.feedback || {};
+        const documents = quality.documents || {};
+        const topSources = quality.top_sources || [];
+        const negativeFeedback = quality.negative_feedback || [];
         adminOverview.innerHTML = `
             <div class="data-card"><strong>LLM</strong><span>${data.health.llm ? 'доступен' : 'недоступен'}</span></div>
             <div class="data-card"><strong>Chroma</strong><span>${chroma.ok ? `${chroma.count} чанков` : escapeHtml(chroma.error || 'ошибка')}</span></div>
             <div class="data-card"><strong>Модели</strong><span>chat: ${escapeHtml(settings.chat_model || '')}<br>embed: ${escapeHtml(settings.embedding_model || '')}</span></div>
-            <div class="data-card"><strong>История</strong><span>${data.usage.chat_count} чатов</span></div>
+            <div class="data-card"><strong>История</strong><span>${data.usage.chat_count} чатов<br>${data.usage.message_count || 0} сообщений</span></div>
+            <div class="data-card"><strong>Оценки</strong><span>Полезно: ${feedback.up || 0}<br>Не полезно: ${feedback.down || 0}</span></div>
+            <div class="data-card"><strong>Документы</strong><span>${documents.total || 0} файлов<br>Устаревших: ${(documents.stale || []).length}</span></div>
             <div class="data-card wide"><strong>Доступные модели</strong><span>${escapeHtml((models.available || []).join(', ') || models.error || 'нет данных')}</span></div>
             <div class="data-card wide"><strong>RAG</strong><span>top_k=${settings.rag_top_k}, min_score=${settings.rag_min_score}, citations=${settings.rag_max_citations}</span></div>
+            <div class="data-card wide"><strong>Топ источников</strong>${renderAdminList(topSources, (item) => `${item.count} × ${item.title || item.path}`)}</div>
+            <div class="data-card wide"><strong>Последние дизлайки</strong>${renderAdminList(negativeFeedback, (item) => `${item.chat_title || 'Чат'}: ${clipText(item.answer || item.comment || '', 140)}`)}</div>
+            <div class="data-card wide"><strong>Давно не обновлялись</strong>${renderAdminList(documents.stale || [], (item) => `${item.path} · ${formatDate(item.modified_at)}`)}</div>
         `;
     } catch (error) {
         adminOverview.innerHTML = `<div class="empty-state">${escapeHtml(error.message)}</div>`;
     }
+}
+
+function renderAdminList(items, formatter) {
+    if (!items.length) {
+        return '<span>Нет данных</span>';
+    }
+    return `<ul class="admin-list">${items.map((item) => `<li>${escapeHtml(formatter(item))}</li>`).join('')}</ul>`;
 }
 
 function exportCurrentChat() {
@@ -860,6 +1087,11 @@ function formatDate(value) {
     } catch (_) {
         return value;
     }
+}
+
+function clipText(value, limit) {
+    const text = String(value || '').replace(/\s+/g, ' ').trim();
+    return text.length > limit ? `${text.slice(0, limit - 3)}...` : text;
 }
 
 function escapeHtml(text) {

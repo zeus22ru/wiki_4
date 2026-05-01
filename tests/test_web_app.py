@@ -1,5 +1,6 @@
 """Тесты HTTP API без реальных Ollama/Chroma."""
 
+import io
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -166,6 +167,94 @@ def test_api_chat_stream_search_error(mock_reachable, mock_init, client):
     assert "Ошибка поиска" in rv.get_data(as_text=True)
     rag.build_retrieval_query.assert_called_once()
     rag.stream_rag_answer.assert_not_called()
+
+
+@patch("web_app.initialize_database")
+@patch("web_app.inference_server_reachable")
+def test_api_chat_verify_answer(mock_reachable, mock_init, client):
+    mock_reachable.return_value = True
+    rag = MagicMock()
+    rag.verify_answer_against_sources.return_value = {
+        "status": "confirmed",
+        "summary": "Ответ подтвержден",
+        "details": [],
+        "source_count": 1,
+        "citation_count": 1,
+    }
+    mock_init.return_value = (MagicMock(), rag)
+
+    rv = client.post("/api/chat/verify", json={
+        "answer": "Ответ",
+        "sources": [{"title": "T"}],
+        "citations": [{"text": "Ответ", "source": "T"}],
+    })
+
+    assert rv.status_code == 200
+    assert rv.get_json()["verification"]["status"] == "confirmed"
+    rag.verify_answer_against_sources.assert_called_once()
+
+
+@patch("web_app.initialize_database")
+@patch("web_app.inference_server_reachable")
+def test_api_chat_suggestions(mock_reachable, mock_init, client):
+    mock_reachable.return_value = True
+    rag = MagicMock()
+    rag.suggest_followup_questions.return_value = ["Что проверить дальше?"]
+    mock_init.return_value = (MagicMock(), rag)
+
+    rv = client.post("/api/chat/suggestions", json={
+        "answer": "Ответ",
+        "sources": [{"title": "T"}],
+        "citations": [{"text": "Ответ", "source": "T"}],
+    })
+
+    assert rv.status_code == 200
+    assert rv.get_json()["suggestions"] == ["Что проверить дальше?"]
+    rag.suggest_followup_questions.assert_called_once()
+
+
+def test_api_documents_preview_txt(client, tmp_path, monkeypatch):
+    monkeypatch.setattr("api.routes.documents.settings.DATA_DIR", str(tmp_path))
+    monkeypatch.setattr("api.routes.documents.settings.UPLOAD_DIR", str(tmp_path / "uploads"))
+
+    rv = client.post(
+        "/api/documents/preview",
+        data={"file": (io.BytesIO(("Заголовок\n" + "Полезный текст. " * 80).encode("utf-8")), "source.txt")},
+        content_type="multipart/form-data",
+    )
+
+    assert rv.status_code == 200
+    preview = rv.get_json()["preview"]
+    assert preview["filename"] == "source.txt"
+    assert preview["supported"] is True
+    assert preview["chunk_count"] >= 1
+    assert preview["chunks"]
+
+
+@patch("api.routes.admin._chroma_status")
+@patch("api.routes.admin.fetch_remote_model_ids")
+@patch("api.routes.admin.inference_server_reachable")
+@patch("api.routes.admin.get_chat_history")
+def test_api_admin_overview_quality(mock_history, mock_reachable, mock_models, mock_chroma, client):
+    history = MagicMock()
+    history.get_session_count.return_value = 2
+    history.get_total_message_count.return_value = 7
+    history.get_feedback_summary.return_value = {"up": 3, "down": 1, "total": 4}
+    history.get_feedback.return_value = []
+    history.get_top_sources.return_value = [{"title": "Doc", "path": "doc.txt", "count": 2}]
+    history.get_negative_feedback_context.return_value = []
+    mock_history.return_value = history
+    mock_reachable.return_value = True
+    mock_models.return_value = []
+    mock_chroma.return_value = {"ok": True, "collection": "test", "count": 5}
+
+    rv = client.get("/api/admin/overview")
+
+    assert rv.status_code == 200
+    body = rv.get_json()
+    assert body["usage"]["message_count"] == 7
+    assert body["quality"]["feedback"]["down"] == 1
+    assert body["quality"]["top_sources"][0]["title"] == "Doc"
 
 
 def test_api_chats_delete_all(client):

@@ -365,6 +365,13 @@ class ChatHistoryManager:
             cursor.execute('SELECT COUNT(*) FROM messages WHERE session_id = ?', (session_id,))
             return cursor.fetchone()[0]
 
+    def get_total_message_count(self) -> int:
+        """Получить общее количество сообщений."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT COUNT(*) FROM messages')
+            return cursor.fetchone()[0]
+
     def search_sessions(self, query: str, limit: int = 20) -> List[ChatSession]:
         """Найти сессии по заголовку или тексту сообщений."""
         like = f"%{query}%"
@@ -413,6 +420,59 @@ class ChatHistoryManager:
                 SELECT id, message_id, session_id, rating, comment, created_at
                 FROM feedback
                 ORDER BY created_at DESC
+                LIMIT ?
+            ''', (limit,))
+            return [dict(row) for row in cursor.fetchall()]
+
+    def get_feedback_summary(self) -> dict:
+        """Сводка оценок ответов."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT rating, COUNT(*) AS count FROM feedback GROUP BY rating')
+            counts = {row['rating']: row['count'] for row in cursor.fetchall()}
+            return {
+                "up": counts.get("up", 0),
+                "down": counts.get("down", 0),
+                "total": sum(counts.values()),
+            }
+
+    def get_top_sources(self, limit: int = 10) -> List[dict]:
+        """Самые часто используемые источники в ответах."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT sources_json
+                FROM messages
+                WHERE role = 'assistant' AND sources_json IS NOT NULL
+            ''')
+            counts: dict[str, dict] = {}
+            for row in cursor.fetchall():
+                try:
+                    sources = json.loads(row['sources_json'] or '[]')
+                except json.JSONDecodeError:
+                    continue
+                for source in sources:
+                    key = source.get('path') or source.get('title') or source.get('source') or 'N/A'
+                    item = counts.setdefault(key, {
+                        "title": source.get('title') or source.get('source') or key,
+                        "path": source.get('path') or key,
+                        "count": 0,
+                    })
+                    item["count"] += 1
+            return sorted(counts.values(), key=lambda item: item["count"], reverse=True)[:limit]
+
+    def get_negative_feedback_context(self, limit: int = 5) -> List[dict]:
+        """Последние дизлайки с текстом сообщения для админского анализа."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT f.id, f.message_id, f.session_id, f.comment, f.created_at,
+                       m.content AS answer, s.title AS chat_title
+                FROM feedback f
+                LEFT JOIN messages m ON m.id = f.message_id
+                LEFT JOIN chat_sessions s ON s.id = f.session_id
+                WHERE f.rating = 'down'
+                ORDER BY f.created_at DESC
                 LIMIT ?
             ''', (limit,))
             return [dict(row) for row in cursor.fetchall()]

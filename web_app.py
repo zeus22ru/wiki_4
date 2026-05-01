@@ -35,7 +35,14 @@ def _rag_result_to_api_dict(rag_result: RAGResult) -> dict:
         sources.append({
             "title": s.get("title", "Без названия"),
             "path": s.get("path", "N/A"),
+            "source": s.get("source", s.get("title", "Без названия")),
+            "chunk_id": s.get("chunk_id"),
+            "score": s.get("score"),
             "relevance": s.get("relevance", round(float(s.get("score", 0)), 2)),
+            "text": s.get("text", ""),
+            "file_type": s.get("file_type", ""),
+            "chunk_index": s.get("chunk_index"),
+            "total_chunks": s.get("total_chunks"),
         })
     citations = []
     for citation in rag_result.citations:
@@ -501,6 +508,68 @@ def chat_stream():
             })
 
     return Response(stream_with_context(generate()), headers=stream_headers)
+
+
+@app.route('/api/chat/verify', methods=['POST'])
+@log_api_request
+def verify_chat_answer():
+    """Проверить ответ ассистента по сохраненным цитатам."""
+    data = _get_json_body()
+    answer = (data.get("answer") or "").strip()
+    citations = data.get("citations") or []
+    sources = data.get("sources") or []
+
+    if not answer:
+        return jsonify({"error": "Не указан текст ответа для проверки"}), 400
+    if not isinstance(citations, list) or not isinstance(sources, list):
+        return jsonify({"error": "sources и citations должны быть списками"}), 400
+
+    coll, rag = initialize_database()
+    if not coll or not rag:
+        return jsonify({"error": "База данных недоступна"}), 500
+
+    if not inference_server_reachable():
+        return jsonify({
+            "error": "Сервер LLM недоступен. Проверьте OLLAMA_URL и запуск Ollama или LM Studio.",
+        }), 500
+
+    try:
+        result = rag.verify_answer_against_sources(answer, citations, sources)
+    except Exception:
+        logger.error("Ошибка при проверке ответа:\n%s", traceback.format_exc())
+        return jsonify({"error": "Ошибка при проверке ответа. Подробности в журнале сервера."}), 500
+
+    return jsonify({"verification": result})
+
+
+@app.route('/api/chat/suggestions', methods=['POST'])
+@log_api_request
+def suggest_chat_questions():
+    """Сгенерировать уточняющие вопросы к готовому ответу."""
+    data = _get_json_body()
+    answer = (data.get("answer") or "").strip()
+    citations = data.get("citations") or []
+    sources = data.get("sources") or []
+
+    if not answer:
+        return jsonify({"suggestions": []})
+    if not isinstance(citations, list) or not isinstance(sources, list):
+        return jsonify({"error": "sources и citations должны быть списками"}), 400
+
+    coll, rag = initialize_database()
+    if not coll or not rag:
+        return jsonify({"error": "База данных недоступна"}), 500
+
+    if not inference_server_reachable():
+        return jsonify({"suggestions": []})
+
+    try:
+        suggestions = rag.suggest_followup_questions(answer, citations, sources)
+    except Exception:
+        logger.warning("Не удалось сгенерировать рекомендации:\n%s", traceback.format_exc())
+        suggestions = []
+
+    return jsonify({"suggestions": suggestions})
 
 
 @app.route('/api/models', methods=['GET'])

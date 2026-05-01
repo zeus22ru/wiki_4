@@ -8,6 +8,7 @@ import chromadb
 from chromadb.config import Settings
 from typing import List, Dict, Optional, Tuple, Any, Iterator
 import re
+import json
 from dataclasses import dataclass
 import time
 from pathlib import Path
@@ -104,6 +105,26 @@ def _clip_text(value: str, limit: int) -> str:
     if len(value) <= limit:
         return value
     return value[:limit - 3].rstrip() + "..."
+
+
+def _parse_json_object(value: str) -> Dict[str, Any]:
+    """Достать JSON-объект из ответа модели, даже если она добавила лишний текст."""
+    value = (value or "").strip()
+    if not value:
+        return {}
+    try:
+        parsed = json.loads(value)
+        return parsed if isinstance(parsed, dict) else {}
+    except json.JSONDecodeError:
+        pass
+    match = re.search(r"\{.*\}", value, flags=re.DOTALL)
+    if not match:
+        return {}
+    try:
+        parsed = json.loads(match.group(0))
+        return parsed if isinstance(parsed, dict) else {}
+    except json.JSONDecodeError:
+        return {}
 
 
 def _format_conversation_history(
@@ -537,6 +558,145 @@ class RAGSystem:
             "Текущий вопрос:\n"
             f"{query}"
         )
+
+    def verify_answer_against_sources(
+        self,
+        answer: str,
+        citations: List[Dict[str, Any]],
+        sources: Optional[List[Dict[str, Any]]] = None,
+    ) -> Dict[str, Any]:
+        """Проверить, насколько ответ подтверждается сохраненными цитатами."""
+        answer = (answer or "").strip()
+        sources = sources or []
+        evidence_parts = []
+        for i, citation in enumerate(citations[:8], start=1):
+            text = _clip_text(str(citation.get("text", "")), 1200)
+            if not text:
+                continue
+            source = citation.get("source") or citation.get("chunk_id") or f"Источник {i}"
+            evidence_parts.append(f"[{i}] {source}\n{text}")
+
+        if not answer:
+            return {
+                "status": "error",
+                "summary": "Нечего проверять: текст ответа пустой.",
+                "details": [],
+                "source_count": len(sources),
+                "citation_count": len(citations),
+            }
+
+        if not evidence_parts:
+            return {
+                "status": "no_sources",
+                "summary": "Проверка невозможна: у ответа нет сохраненных цитат.",
+                "details": [],
+                "source_count": len(sources),
+                "citation_count": len(citations),
+            }
+
+        prompt = f"""Ты проверяешь ответ RAG-ассистента по цитатам из базы знаний.
+
+ОТВЕТ:
+{_clip_text(answer, 5000)}
+
+ЦИТАТЫ:
+{chr(10).join(evidence_parts)}
+
+ЗАДАЧА:
+1. Найди ключевые утверждения ответа.
+2. Определи, подтверждаются ли они цитатами.
+3. Не используй внешние знания.
+4. Верни только JSON без Markdown.
+
+Формат JSON:
+{{
+  "status": "confirmed" | "partial" | "unsupported",
+  "summary": "краткий вывод на русском",
+  "details": [
+    {{"claim": "утверждение", "verdict": "confirmed" | "uncertain" | "unsupported", "evidence": "короткая ссылка на цитату или причина"}}
+  ]
+}}"""
+        raw = self._generate_answer(prompt)
+        parsed = _parse_json_object(raw)
+        status = parsed.get("status") if isinstance(parsed, dict) else None
+        if status not in {"confirmed", "partial", "unsupported"}:
+            status = "partial"
+        summary = parsed.get("summary") if isinstance(parsed, dict) else None
+        details = parsed.get("details") if isinstance(parsed, dict) else None
+        if not isinstance(summary, str) or not summary.strip():
+            summary = "Модель выполнила проверку, но вернула результат в свободной форме."
+        if not isinstance(details, list):
+            details = [{"claim": "Проверка", "verdict": "uncertain", "evidence": raw.strip()}]
+        return {
+            "status": status,
+            "summary": summary.strip(),
+            "details": details[:8],
+            "source_count": len(sources),
+            "citation_count": len(citations),
+        }
+
+    def suggest_followup_questions(
+        self,
+        answer: str,
+        citations: List[Dict[str, Any]],
+        sources: Optional[List[Dict[str, Any]]] = None,
+        limit: int = 5,
+    ) -> List[str]:
+        """Предложить короткие уточняющие вопросы по ответу и его источникам."""
+        answer = _clip_text(answer, 3500)
+        sources = sources or []
+        evidence = []
+        for citation in citations[:6]:
+            text = _clip_text(str(citation.get("text", "")), 600)
+            if text:
+                evidence.append(text)
+        source_titles = [
+            str(source.get("title") or source.get("source") or source.get("path"))
+            for source in sources[:6]
+            if source.get("title") or source.get("source") or source.get("path")
+        ]
+        if not answer:
+            return []
+
+        prompt = f"""Сгенерируй {limit} полезных уточняющих вопросов для пользователя корпоративной базы знаний.
+
+ОТВЕТ АССИСТЕНТА:
+{answer}
+
+ИСТОЧНИКИ:
+{chr(10).join(source_titles) or "Нет названий источников"}
+
+ЦИТАТЫ:
+{chr(10).join(evidence) or "Нет цитат"}
+
+Требования:
+- вопросы должны быть на русском;
+- каждый вопрос до 120 символов;
+- вопросы должны помогать продолжить рабочий сценарий;
+- не добавляй пояснения.
+
+Верни только JSON-массив строк."""
+        raw = self._generate_answer(prompt)
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            match = re.search(r"\[.*\]", raw, flags=re.DOTALL)
+            if not match:
+                return []
+            try:
+                parsed = json.loads(match.group(0))
+            except json.JSONDecodeError:
+                return []
+        if not isinstance(parsed, list):
+            return []
+        questions = []
+        for item in parsed:
+            question = re.sub(r"\s+", " ", str(item)).strip()
+            if question and question not in questions:
+                questions.append(question[:120])
+            if len(questions) >= limit:
+                break
+        return questions
     
     def query(
         self,
@@ -740,6 +900,9 @@ class RAGSystem:
                 'text': doc['text'][:200] + "..." if len(doc['text']) > 200 else doc['text'],
                 'title': title,
                 'path': path,
+                'file_type': meta.get('file_type', ''),
+                'chunk_index': meta.get('chunk_index'),
+                'total_chunks': meta.get('total_chunks'),
                 'relevance': round(score, 2),
             })
         

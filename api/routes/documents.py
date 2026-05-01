@@ -4,6 +4,7 @@
 
 from datetime import datetime
 from pathlib import Path
+import tempfile
 import threading
 import traceback
 from uuid import uuid4
@@ -146,6 +147,34 @@ def upload_document():
     file.save(target)
     logger.info("Загружен документ: %s", target)
     return jsonify({"document": _file_record(target)}), 201
+
+
+@documents_bp.route("/preview", methods=["POST"])
+def preview_document_upload():
+    """Предпросмотр индексации без сохранения файла в базу знаний."""
+    if "file" not in request.files:
+        return jsonify({"error": "Файл не передан"}), 400
+
+    file = request.files["file"]
+    if not file.filename:
+        return jsonify({"error": "Имя файла пустое"}), 400
+    if not _allowed_file(file.filename):
+        return jsonify({"error": "Формат файла не поддерживается"}), 400
+
+    filename = secure_filename(file.filename)
+    duplicate_exists = (Path(settings.UPLOAD_DIR) / filename).exists() or (Path(settings.DATA_DIR) / filename).exists()
+    try:
+        from create_vector_db import preview_document
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            temp_path = Path(tmp_dir) / filename
+            file.save(temp_path)
+            preview = preview_document(temp_path, duplicate_exists=duplicate_exists)
+    except Exception:
+        logger.error("Ошибка предпросмотра документа:\n%s", traceback.format_exc())
+        return jsonify({"error": "Ошибка предпросмотра документа"}), 500
+
+    return jsonify({"preview": preview})
 
 
 @documents_bp.route("/reindex", methods=["POST"])

@@ -215,6 +215,54 @@ body {
     min-height: 1.2rem;
 }
 
+.index-preview:empty {
+    display: none;
+}
+
+.preview-card {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    padding: 1rem;
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    background: var(--bot-message-bg);
+}
+
+.preview-header,
+.preview-meta,
+.preview-warnings {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    justify-content: space-between;
+}
+
+.preview-header span,
+.preview-meta span,
+.preview-section span,
+.preview-section p,
+.preview-section li {
+    color: var(--secondary-text);
+}
+
+.preview-warnings span {
+    padding: 0.25rem 0.55rem;
+    border-radius: 999px;
+    background: rgba(220, 53, 69, 0.12);
+    color: var(--text-color);
+    font-size: 0.82rem;
+}
+
+.preview-section p {
+    margin-top: 0.4rem;
+    line-height: 1.45;
+}
+
+.preview-section ul {
+    margin: 0.4rem 0 0 1rem;
+}
+
 .data-list,
 .admin-grid {
     display: grid;
@@ -236,6 +284,18 @@ body {
 .data-card span,
 .data-card small {
     color: var(--secondary-text);
+    word-break: break-word;
+}
+
+.admin-list {
+    margin: 0.5rem 0 0 1rem;
+    color: var(--secondary-text);
+    font-size: 0.88rem;
+    line-height: 1.45;
+}
+
+.admin-list li {
+    margin-top: 0.25rem;
     word-break: break-word;
 }
 
@@ -607,6 +667,43 @@ body {
     line-height: 1.45;
 }
 
+.source-card-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.75rem;
+}
+
+.source-meta-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    margin-top: 0.5rem;
+}
+
+.source-badge,
+.source-open-hint {
+    display: inline-block;
+    padding: 0.25rem 0.5rem;
+    border-radius: 999px;
+    background: var(--badge-bg);
+    color: var(--secondary-text);
+    font-size: 0.78rem;
+}
+
+.source-open-hint {
+    border: 1px solid var(--primary-color);
+    background: var(--primary-soft);
+    color: var(--primary-color);
+    cursor: pointer;
+    font-weight: 700;
+    white-space: nowrap;
+}
+
+.source-open-hint:hover {
+    background: var(--primary-light);
+}
+
 .feedback-controls {
     display: flex;
     gap: 0.5rem;
@@ -625,6 +722,34 @@ body {
 }
 
 .feedback-controls button:hover {
+    border-color: var(--primary-color);
+    color: var(--primary-color);
+}
+
+.followup-suggestions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.45rem;
+    margin-top: 0.75rem;
+}
+
+.followup-title {
+    width: 100%;
+    color: var(--secondary-text);
+    font-size: 0.82rem;
+}
+
+.followup-suggestions button {
+    border: 1px solid var(--border-color);
+    background: var(--copy-btn-bg);
+    color: var(--text-color);
+    border-radius: 999px;
+    padding: 0.3rem 0.7rem;
+    cursor: pointer;
+    font-size: 0.85rem;
+}
+
+.followup-suggestions button:hover {
     border-color: var(--primary-color);
     color: var(--primary-color);
 }
@@ -790,6 +915,66 @@ body {
 
 .show-sources-btn:hover {
     background: rgba(74, 144, 217, 0.1);
+}
+
+.verify-answer-btn {
+    margin-top: 0.5rem;
+    margin-left: 0.35rem;
+    border: 1px solid var(--border-color);
+    background: var(--copy-btn-bg);
+    color: var(--primary-color);
+    cursor: pointer;
+    font-size: 0.85rem;
+    padding: 0.25rem 0.65rem;
+    border-radius: 999px;
+}
+
+.verify-answer-btn:hover {
+    border-color: var(--primary-color);
+}
+
+.verify-answer-btn:disabled {
+    cursor: wait;
+    opacity: 0.7;
+}
+
+.verification-result {
+    margin-top: 0.75rem;
+    padding: 0.75rem;
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    background: var(--bot-message-bg);
+    color: var(--secondary-text);
+    font-size: 0.88rem;
+    line-height: 1.45;
+}
+
+.verification-title {
+    margin-bottom: 0.35rem;
+    color: var(--text-color);
+    font-weight: 700;
+}
+
+.verification-result ul {
+    margin: 0.5rem 0 0 1.1rem;
+}
+
+.verification-result li {
+    margin-top: 0.35rem;
+}
+
+.verification-result li span {
+    display: block;
+    color: var(--secondary-text);
+}
+
+.verification-result--confirmed {
+    border-color: rgba(31, 142, 90, 0.45);
+}
+
+.verification-result--unsupported,
+.verification-result--error {
+    border-color: rgba(220, 53, 69, 0.45);
 }
 
 /* Code blocks styling */

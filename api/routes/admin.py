@@ -2,6 +2,9 @@
 # -*- coding: utf-8 -*-
 """Админ-диагностика без раскрытия секретов."""
 
+from datetime import datetime, timedelta
+from pathlib import Path
+
 from flask import Blueprint, jsonify
 import chromadb
 
@@ -56,6 +59,37 @@ def _chroma_status() -> dict:
         }
 
 
+def _document_quality() -> dict:
+    data_dir = Path(settings.DATA_DIR)
+    allowed = {f".{x.strip().lower()}" for x in settings.ALLOWED_EXTENSIONS}
+    if not data_dir.exists():
+        return {"total": 0, "stale": [], "by_type": {}}
+
+    stale_before = datetime.now() - timedelta(days=180)
+    stale = []
+    by_type = {}
+    total = 0
+    for path in data_dir.rglob("*"):
+        if not path.is_file() or path.suffix.lower() not in allowed:
+            continue
+        total += 1
+        ext = path.suffix.lower().lstrip(".")
+        by_type[ext] = by_type.get(ext, 0) + 1
+        modified = datetime.fromtimestamp(path.stat().st_mtime)
+        if modified < stale_before:
+            try:
+                rel_path = path.relative_to(data_dir)
+            except ValueError:
+                rel_path = path
+            stale.append({
+                "path": str(rel_path).replace("\\", "/"),
+                "modified_at": modified.isoformat(),
+            })
+
+    stale.sort(key=lambda item: item["modified_at"])
+    return {"total": total, "stale": stale[:10], "by_type": by_type}
+
+
 @admin_bp.route("/overview", methods=["GET"])
 def overview():
     """Сводное состояние приложения, Chroma, LLM и истории."""
@@ -68,6 +102,7 @@ def overview():
         logger.warning("Не удалось получить модели: %s", exc)
 
     history = get_chat_history()
+    feedback_summary = history.get_feedback_summary()
     return jsonify({
         "health": {
             "llm": inference_server_reachable(),
@@ -82,6 +117,14 @@ def overview():
         },
         "usage": {
             "chat_count": history.get_session_count(),
+            "message_count": history.get_total_message_count(),
+        },
+        "quality": {
+            "feedback": feedback_summary,
+            "recent_feedback": history.get_feedback(limit=10),
+            "top_sources": history.get_top_sources(limit=8),
+            "negative_feedback": history.get_negative_feedback_context(limit=5),
+            "documents": _document_quality(),
         },
     })
 

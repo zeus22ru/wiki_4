@@ -15,7 +15,7 @@ from bs4 import BeautifulSoup
 import chromadb
 from chromadb.config import Settings
 import json
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Callable
 import hashlib
 
 # Импорт конфигурации и логирования
@@ -64,8 +64,8 @@ try:
 except ImportError:
     DOC_AVAILABLE = False
 
-# Устанавливаем UTF-8 для вывода в консоль (Windows)
-if sys.platform == 'win32':
+# Устанавливаем UTF-8 для вывода в консоль (Windows) только при прямом запуске скрипта.
+if sys.platform == 'win32' and __name__ == '__main__':
     import io
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
@@ -73,6 +73,14 @@ if sys.platform == 'win32':
 # Конфигурация загружается из config/settings.py
 # OLLAMA_URL, OLLAMA_MODEL, OLLAMA_CHAT_MODEL, CHROMA_PERSIST_DIR,
 # DATA_DIR, CHUNK_SIZE, CHUNK_OVERLAP, BATCH_SIZE
+
+
+def _relative_source_path(file_path: Path) -> str:
+    """Вернуть путь относительно DATA_DIR, а для временных файлов — имя файла."""
+    try:
+        return str(file_path.relative_to(settings.DATA_DIR))
+    except ValueError:
+        return file_path.name
 
 
 def extract_text_from_html(html_path: Path) -> Optional[Dict[str, str]]:
@@ -109,10 +117,25 @@ def extract_text_from_html(html_path: Path) -> Optional[Dict[str, str]]:
         return {
             "title": title or h1 or Path(html_path).stem,
             "content": text,
-            "path": str(html_path.relative_to(settings.DATA_DIR))
+            "path": _relative_source_path(html_path)
         }
     except Exception as e:
         print(f"Ошибка при чтении {html_path}: {e}")
+        return None
+
+
+def extract_text_from_txt(txt_path: Path) -> Optional[Dict[str, str]]:
+    """Извлечь текст из TXT файла."""
+    try:
+        text = txt_path.read_text(encoding='utf-8', errors='replace')
+        text = re.sub(r'\s+', ' ', text).strip()
+        return {
+            "title": Path(txt_path).stem,
+            "content": text,
+            "path": _relative_source_path(txt_path),
+        }
+    except Exception as e:
+        logger.error(f"Ошибка при чтении TXT {txt_path}: {e}")
         return None
 
 
@@ -155,7 +178,7 @@ def extract_text_from_docx(docx_path: Path) -> Optional[Dict[str, str]]:
         return {
             "title": title or Path(docx_path).stem,
             "content": text,
-            "path": str(docx_path.relative_to(settings.DATA_DIR))
+            "path": _relative_source_path(docx_path)
         }
     except Exception as e:
         logger.error(f"Ошибка при чтении DOCX {docx_path}: {e}")
@@ -198,7 +221,7 @@ def extract_text_from_pdf(pdf_path: Path) -> Optional[Dict[str, str]]:
         return {
             "title": title or Path(pdf_path).stem,
             "content": text,
-            "path": str(pdf_path.relative_to(settings.DATA_DIR))
+            "path": _relative_source_path(pdf_path)
         }
     except Exception as e:
         logger.error(f"Ошибка при чтении PDF {pdf_path}: {e}")
@@ -239,7 +262,7 @@ def extract_text_from_xlsx(xlsx_path: Path) -> Optional[Dict[str, str]]:
         return {
             "title": Path(xlsx_path).stem,
             "content": text,
-            "path": str(xlsx_path.relative_to(settings.DATA_DIR))
+            "path": _relative_source_path(xlsx_path)
         }
     except Exception as e:
         logger.error(f"Ошибка при чтении XLSX {xlsx_path}: {e}")
@@ -282,7 +305,7 @@ def extract_text_from_xls(xls_path: Path) -> Optional[Dict[str, str]]:
         return {
             "title": Path(xls_path).stem,
             "content": text,
-            "path": str(xls_path.relative_to(settings.DATA_DIR))
+            "path": _relative_source_path(xls_path)
         }
     except Exception as e:
         logger.error(f"Ошибка при чтении XLS {xls_path}: {e}")
@@ -324,7 +347,7 @@ def extract_text_from_pptx(pptx_path: Path) -> Optional[Dict[str, str]]:
         return {
             "title": title or Path(pptx_path).stem,
             "content": text,
-            "path": str(pptx_path.relative_to(settings.DATA_DIR))
+            "path": _relative_source_path(pptx_path)
         }
     except Exception as e:
         logger.error(f"Ошибка при чтении PPTX {pptx_path}: {e}")
@@ -351,7 +374,7 @@ def extract_text_from_doc(doc_path: Path) -> Optional[Dict[str, str]]:
         return {
             "title": title,
             "content": text,
-            "path": str(doc_path.relative_to(settings.DATA_DIR))
+            "path": _relative_source_path(doc_path)
         }
     except Exception as e:
         logger.error(f"Ошибка при чтении DOC {doc_path}: {e}")
@@ -389,17 +412,12 @@ def chunk_text(text: str, chunk_size: int = None, overlap: int = None) -> List[s
     return [c for c in chunks if len(c) > 50]
 
 
-def process_all_files(data_dir: str) -> List[Dict]:
-    """Обработать все поддерживаемые файлы в директории"""
-    data_path = Path(data_dir)
-    documents = []
-    
-    logger.info(f"Сканирование директории: {data_path}")
-    
-    # Поддерживаемые форматы файлов и соответствующие функции извлечения
-    file_handlers = {
+def get_file_handlers() -> Dict[str, Callable[[Path], Optional[Dict[str, str]]]]:
+    """Поддерживаемые форматы файлов и функции извлечения текста."""
+    return {
         '.html': extract_text_from_html,
         '.htm': extract_text_from_html,
+        '.txt': extract_text_from_txt,
         '.docx': extract_text_from_docx,
         '.pdf': extract_text_from_pdf,
         '.xlsx': extract_text_from_xlsx,
@@ -407,6 +425,79 @@ def process_all_files(data_dir: str) -> List[Dict]:
         '.pptx': extract_text_from_pptx,
         '.doc': extract_text_from_doc,
     }
+
+
+def preview_document(file_path: Path, duplicate_exists: bool = False) -> Dict:
+    """Проанализировать документ без записи в ChromaDB."""
+    path = Path(file_path)
+    ext = path.suffix.lower()
+    handlers = get_file_handlers()
+    warnings = []
+
+    if ext not in handlers:
+        return {
+            "filename": path.name,
+            "file_type": ext.lstrip("."),
+            "size_bytes": path.stat().st_size if path.exists() else 0,
+            "supported": False,
+            "warnings": ["Формат файла не поддерживается"],
+            "chunk_count": 0,
+            "chunks": [],
+            "title": path.stem,
+            "text_length": 0,
+        }
+
+    if duplicate_exists:
+        warnings.append("Файл с таким именем уже есть в базе знаний")
+
+    size_bytes = path.stat().st_size
+    if size_bytes > 50 * 1024 * 1024:
+        warnings.append("Файл больше 50 MB, индексация может занять много времени")
+
+    doc_data = handlers[ext](path)
+    if not doc_data or not doc_data.get("content"):
+        return {
+            "filename": path.name,
+            "file_type": ext.lstrip("."),
+            "size_bytes": size_bytes,
+            "supported": True,
+            "warnings": warnings + ["Не удалось извлечь текст из файла"],
+            "chunk_count": 0,
+            "chunks": [],
+            "title": path.stem,
+            "text_length": 0,
+        }
+
+    content = doc_data["content"]
+    chunks = chunk_text(content)
+    if len(content) < 200:
+        warnings.append("В документе мало извлеченного текста")
+    if not chunks:
+        warnings.append("После разбиения не получилось полезных чанков")
+
+    headings = re.findall(r"(?:(?:^|[.!?])\s*)([А-ЯA-Z][^.!?]{8,80})", content)
+    return {
+        "filename": path.name,
+        "file_type": ext.lstrip("."),
+        "size_bytes": size_bytes,
+        "supported": True,
+        "warnings": warnings,
+        "chunk_count": len(chunks),
+        "chunks": chunks[:3],
+        "title": doc_data.get("title") or path.stem,
+        "text_length": len(content),
+        "headings": headings[:5],
+    }
+
+
+def process_all_files(data_dir: str) -> List[Dict]:
+    """Обработать все поддерживаемые файлы в директории"""
+    data_path = Path(data_dir)
+    documents = []
+    
+    logger.info(f"Сканирование директории: {data_path}")
+    
+    file_handlers = get_file_handlers()
     
     # Собираем все файлы поддерживаемых форматов
     all_files = []
