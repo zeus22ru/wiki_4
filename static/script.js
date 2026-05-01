@@ -32,6 +32,23 @@ const jobStatus = document.getElementById('jobStatus');
 const indexPreview = document.getElementById('indexPreview');
 const refreshAdminBtn = document.getElementById('refreshAdminBtn');
 const adminOverview = document.getElementById('adminOverview');
+const assistantAvatarSrc = '/static/img/assistant-avatar.svg';
+
+function createMessageAvatar(type) {
+    const avatar = document.createElement('div');
+    avatar.className = 'message-avatar';
+
+    if (type === 'bot') {
+        const image = document.createElement('img');
+        image.src = assistantAvatarSrc;
+        image.alt = 'AI-ассистент';
+        avatar.appendChild(image);
+    } else {
+        avatar.textContent = 'Вы';
+    }
+
+    return avatar;
+}
 
 document.addEventListener('DOMContentLoaded', () => {
     checkHealth();
@@ -396,9 +413,7 @@ async function readStream(response) {
         }
         streamShell = document.createElement('div');
         streamShell.className = 'message bot-message';
-        const avatar = document.createElement('div');
-        avatar.className = 'message-avatar';
-        avatar.textContent = '🤖';
+        const avatar = createMessageAvatar('bot');
         streamContent = document.createElement('div');
         streamContent.className = 'message-content markdown-content streaming-in-progress';
         streamShell.append(avatar, streamContent);
@@ -489,9 +504,7 @@ function addMessage(text, type, details = {}) {
         messageDiv.dataset.messageId = details.messageId;
     }
 
-    const avatar = document.createElement('div');
-    avatar.className = 'message-avatar';
-    avatar.textContent = type === 'user' ? '👤' : '🤖';
+    const avatar = createMessageAvatar(type);
 
     const content = document.createElement('div');
     content.className = 'message-content';
@@ -658,7 +671,7 @@ function showTypingIndicator() {
     typingDiv.className = 'message bot-message';
     typingDiv.id = 'typingIndicator';
     typingDiv.innerHTML = `
-        <div class="message-avatar">🤖</div>
+        <div class="message-avatar"><img src="${assistantAvatarSrc}" alt="AI-ассистент"></div>
         <div class="message-content"><div class="typing-indicator"><span></span><span></span><span></span></div></div>
     `;
     messagesContainer.appendChild(typingDiv);
@@ -682,7 +695,7 @@ function addSourcesButton(messageEl, sources, citations) {
     }
     const button = document.createElement('button');
     button.className = 'show-sources-btn';
-    button.textContent = `📚 Источники (${Math.max(sources.length, citations.length)})`;
+    button.textContent = `Источники (${Math.max(sources.length, citations.length)})`;
     button.addEventListener('click', () => {
         currentSources = sources;
         currentCitations = citations;

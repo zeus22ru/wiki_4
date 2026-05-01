@@ -7,8 +7,10 @@
 /* Дизайн-токены находятся в css/theme.css. */
 
 body {
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-    background: var(--bg-color);
+    font-family: Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+    background:
+        radial-gradient(circle at top left, rgba(196, 147, 58, 0.18), transparent 32rem),
+        linear-gradient(135deg, var(--chat-bg) 0%, var(--bg-color) 100%);
     color: var(--text-color);
     height: 100vh;
     display: flex;
@@ -20,7 +22,9 @@ body {
     width: 100%;
     height: 100vh;
     display: flex;
-    background: var(--chat-bg);
+    gap: 1.25rem;
+    padding: 1.25rem;
+    background: transparent;
 }
 
 .workspace-sidebar {
@@ -475,6 +479,7 @@ body {
 .messages {
     flex: 1;
     overflow-y: auto;
+    overflow-x: hidden;
     padding: 1.5rem;
     display: flex;
     flex-direction: column;
@@ -498,6 +503,7 @@ body {
     display: flex;
     gap: 0.75rem;
     max-width: 80%;
+    min-width: 0;
     animation: fadeIn 0.3s ease;
 }
 
@@ -532,6 +538,14 @@ body {
     flex-shrink: 0;
 }
 
+.message-avatar img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    border-radius: inherit;
+}
+
 .user-message .message-avatar {
     background: var(--user-message-bg);
 }
@@ -545,6 +559,9 @@ body {
     border-radius: 12px;
     line-height: 1.5;
     word-wrap: break-word;
+    max-width: 100%;
+    min-width: 0;
+    overflow-wrap: anywhere;
     position: relative;
 }
 
@@ -1078,22 +1095,21 @@ select:focus-visible {
     outline-offset: 2px;
 }
 
-.app-container {
-    background: transparent;
-}
-
 .workspace-sidebar {
     width: 320px;
     min-width: 280px;
+    height: 100%;
     padding: 1.25rem;
     gap: 1rem;
     background: var(--sidebar-bg);
-    border-right: 1px solid var(--sidebar-border);
-    box-shadow: 1px 0 0 rgba(255, 255, 255, 0.45) inset;
+    border: 1px solid var(--sidebar-border);
+    border-radius: var(--radius-xl);
+    box-shadow: var(--shadow-md);
+    backdrop-filter: blur(16px);
 }
 
 [data-theme="dark"] .workspace-sidebar {
-    box-shadow: 1px 0 0 rgba(255, 255, 255, 0.04) inset;
+    box-shadow: var(--shadow-md);
 }
 
 .sidebar-header strong {
@@ -1170,7 +1186,7 @@ select:focus-visible {
 
 .chat-list-item:hover,
 .chat-list-item.active {
-    background: var(--surface-color);
+    background: var(--primary-soft);
     border-color: var(--primary-color);
     box-shadow: var(--shadow-md);
     transform: translateY(-1px);
@@ -1206,7 +1222,12 @@ select:focus-visible {
 }
 
 .chat-container {
+    height: 100%;
     background: var(--chat-bg);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-xl);
+    box-shadow: var(--shadow-md);
+    overflow: hidden;
     position: relative;
 }
 
@@ -1216,7 +1237,8 @@ select:focus-visible {
     gap: 1rem;
     background: var(--header-bg);
     border-bottom: 1px solid var(--header-border);
-    box-shadow: var(--shadow-sm);
+    box-shadow: none;
+    backdrop-filter: blur(16px);
 }
 
 .chat-header h1 {
@@ -1252,7 +1274,7 @@ select:focus-visible {
 .chat-header .status-indicator {
     border: 1px solid var(--border-color);
     border-radius: 999px;
-    background: var(--surface-muted);
+    background: color-mix(in srgb, var(--success-color) 12%, var(--surface-muted));
 }
 
 .status-dot {
@@ -1261,8 +1283,8 @@ select:focus-visible {
 
 .new-chat-btn {
     border-radius: var(--radius-md);
-    background: var(--primary-color);
-    box-shadow: var(--shadow-sm);
+    background: var(--user-message-bg);
+    box-shadow: 0 14px 30px rgba(124, 90, 34, 0.24);
 }
 
 .new-chat-btn:hover {
@@ -1273,7 +1295,7 @@ select:focus-visible {
 .rag-toolbar {
     padding: 0.85rem 1.5rem;
     gap: 0.75rem;
-    background: var(--surface-muted);
+    background: color-mix(in srgb, var(--surface-muted) 82%, transparent);
     border-bottom: 1px solid var(--border-color);
 }
 
@@ -1354,8 +1376,14 @@ select:focus-visible {
     padding: 1.75rem clamp(1rem, 3vw, 2.25rem);
     gap: 1.15rem;
     background:
-        linear-gradient(180deg, var(--bg-color) 0%, transparent 18rem),
-        var(--chat-bg);
+        linear-gradient(rgba(250, 247, 239, 0.86), rgba(250, 247, 239, 0.86)),
+        repeating-linear-gradient(90deg, transparent, transparent 31px, rgba(201, 185, 159, 0.24) 32px);
+}
+
+[data-theme="dark"] .messages {
+    background:
+        linear-gradient(rgba(29, 24, 18, 0.9), rgba(29, 24, 18, 0.9)),
+        repeating-linear-gradient(90deg, transparent, transparent 31px, rgba(95, 79, 55, 0.22) 32px);
 }
 
 .message {
@@ -1367,6 +1395,7 @@ select:focus-visible {
     width: 38px;
     height: 38px;
     border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
     box-shadow: var(--shadow-sm);
 }
 
@@ -1507,7 +1536,8 @@ select:focus-visible {
     padding: 1rem 1.5rem 1.25rem;
     background: color-mix(in srgb, var(--chat-bg) 92%, transparent);
     border-top: 1px solid var(--border-color);
-    box-shadow: 0 -8px 24px rgba(15, 23, 42, 0.04);
+    box-shadow: 0 -8px 24px rgba(72, 55, 35, 0.06);
+    backdrop-filter: blur(16px);
 }
 
 .message-form {
@@ -1519,7 +1549,7 @@ select:focus-visible {
 .message-input {
     min-height: 52px;
     padding: 0.9rem 1.1rem;
-    border-radius: var(--radius-xl);
+    border-radius: var(--radius-lg);
 }
 
 .message-input:focus {
@@ -1529,6 +1559,7 @@ select:focus-visible {
 .send-button {
     width: 52px;
     height: 52px;
+    border-radius: var(--radius-lg);
     background: var(--primary-color);
     box-shadow: var(--shadow-sm);
 }

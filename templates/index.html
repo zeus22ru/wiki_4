@@ -23,7 +23,7 @@
         </aside>
         <main class="chat-container">
             <header class="chat-header">
-                <h1>🤖 БочкарИИ</h1>
+                <h1>БочкарИИ</h1>
                 <div class="header-actions">
                     <nav class="workspace-tabs" aria-label="Разделы">
                         <button class="tab-btn active" data-panel="chatPanel">Чат</button>
@@ -81,7 +81,9 @@
                 </div>
                 <div class="messages" id="messages">
                     <div class="message bot-message">
-                        <div class="message-avatar">🤖</div>
+                        <div class="message-avatar">
+                            <img src="{{ url_for('static', filename='img/assistant-avatar.svg') }}" alt="AI-ассистент">
+                        </div>
                         <div class="message-content">
                             <p>Привет! Я AI-ассистент по базе знаний компании. Задайте мне любой вопрос, и я постараюсь найти ответ в документации.</p>
                         </div>
@@ -90,7 +92,7 @@
 
                 <div class="sources-panel" id="sourcesPanel">
                     <div class="sources-header">
-                        <h3>📚 Источники</h3>
+                        <h3>Источники</h3>
                         <button class="close-sources" id="closeSources">✕</button>
                     </div>
                     <div class="sources-list" id="sourcesList"></div>

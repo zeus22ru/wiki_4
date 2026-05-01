@@ -1,0 +1,692 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Option A — 5 цветовых гамм</title>
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            min-height: 100vh;
+            color: #172033;
+            background: #eef3fb;
+            font-family: Inter, "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+        }
+
+        .page {
+            display: grid;
+            gap: 28px;
+            padding: 28px;
+        }
+
+        .intro {
+            max-width: 980px;
+        }
+
+        .eyebrow {
+            margin: 0 0 6px;
+            color: #64748b;
+            font-size: 12px;
+            font-weight: 800;
+            letter-spacing: 0.09em;
+            text-transform: uppercase;
+        }
+
+        h1,
+        h2,
+        h3,
+        p {
+            margin-top: 0;
+        }
+
+        h1 {
+            margin-bottom: 10px;
+            font-size: clamp(30px, 5vw, 52px);
+            letter-spacing: -0.04em;
+        }
+
+        .lead {
+            max-width: 760px;
+            color: #64748b;
+            font-size: 17px;
+            line-height: 1.55;
+        }
+
+        .palette-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 22px;
+        }
+
+        .palette {
+            --bg: #eef3fb;
+            --panel: #ffffff;
+            --panel-soft: #f7faff;
+            --line: #d9e3f2;
+            --line-strong: #c3d2e6;
+            --text: #172033;
+            --muted: #65758b;
+            --primary: #2557d6;
+            --primary-dark: #1d43aa;
+            --primary-soft: #e8efff;
+            --success: #0f9f6e;
+            --accent: #5b8cff;
+            --shadow: rgba(36, 64, 104, 0.13);
+            overflow: hidden;
+            border: 1px solid color-mix(in srgb, var(--line) 82%, white);
+            border-radius: 28px;
+            background:
+                radial-gradient(circle at top left, color-mix(in srgb, var(--primary) 15%, transparent), transparent 30rem),
+                linear-gradient(135deg, color-mix(in srgb, var(--panel-soft) 88%, white) 0%, var(--bg) 100%);
+            box-shadow: 0 24px 64px var(--shadow);
+        }
+
+        .palette.azure {
+            --bg: #eef3fb;
+            --panel: #ffffff;
+            --panel-soft: #f7faff;
+            --line: #d9e3f2;
+            --line-strong: #c3d2e6;
+            --text: #172033;
+            --muted: #65758b;
+            --primary: #2557d6;
+            --primary-dark: #1d43aa;
+            --primary-soft: #e8efff;
+            --success: #0f9f6e;
+            --accent: #5b8cff;
+            --shadow: rgba(36, 64, 104, 0.13);
+        }
+
+        .palette.emerald {
+            --bg: #edf8f4;
+            --panel: #ffffff;
+            --panel-soft: #f4fbf8;
+            --line: #cfe7dd;
+            --line-strong: #afd4c6;
+            --text: #12312b;
+            --muted: #5d766f;
+            --primary: #0d9488;
+            --primary-dark: #0f766e;
+            --primary-soft: #ddf7f1;
+            --success: #16a34a;
+            --accent: #14b8a6;
+            --shadow: rgba(13, 116, 107, 0.15);
+        }
+
+        .palette.graphite {
+            --bg: #f4f1eb;
+            --panel: #fffdf8;
+            --panel-soft: #faf7ef;
+            --line: #ded5c7;
+            --line-strong: #c9b99f;
+            --text: #25211d;
+            --muted: #71695f;
+            --primary: #7c5a22;
+            --primary-dark: #5d4218;
+            --primary-soft: #f5ead7;
+            --success: #3f8f58;
+            --accent: #c4933a;
+            --shadow: rgba(72, 55, 35, 0.16);
+        }
+
+        .palette.berry {
+            --bg: #fbf0f5;
+            --panel: #ffffff;
+            --panel-soft: #fff7fa;
+            --line: #ead1dc;
+            --line-strong: #d7aec0;
+            --text: #321826;
+            --muted: #7d6170;
+            --primary: #be185d;
+            --primary-dark: #9d174d;
+            --primary-soft: #fce7f1;
+            --success: #0f9f6e;
+            --accent: #f472b6;
+            --shadow: rgba(157, 23, 77, 0.14);
+        }
+
+        .palette.indigo {
+            --bg: #f2f0ff;
+            --panel: #ffffff;
+            --panel-soft: #f8f7ff;
+            --line: #dcd7f6;
+            --line-strong: #c5bdf0;
+            --text: #211b39;
+            --muted: #6b6387;
+            --primary: #6d5dfc;
+            --primary-dark: #4f46e5;
+            --primary-soft: #ede9fe;
+            --success: #059669;
+            --accent: #8b5cf6;
+            --shadow: rgba(79, 70, 229, 0.16);
+        }
+
+        .palette-header {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 16px;
+            padding: 22px 22px 0;
+            color: var(--text);
+        }
+
+        .palette-header h2 {
+            margin-bottom: 6px;
+            font-size: 25px;
+            letter-spacing: -0.03em;
+        }
+
+        .palette-header p {
+            margin-bottom: 0;
+            color: var(--muted);
+            line-height: 1.45;
+        }
+
+        .swatches {
+            display: flex;
+            gap: 7px;
+            flex: 0 0 auto;
+        }
+
+        .swatch {
+            width: 22px;
+            height: 22px;
+            border: 2px solid rgba(255, 255, 255, 0.8);
+            border-radius: 999px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+        }
+
+        .preview {
+            display: grid;
+            grid-template-columns: 178px minmax(0, 1fr) 178px;
+            gap: 12px;
+            padding: 18px;
+            min-height: 360px;
+        }
+
+        .sidebar,
+        .main,
+        .inspector {
+            border: 1px solid var(--line);
+            border-radius: 20px;
+            background: color-mix(in srgb, var(--panel) 92%, transparent);
+            box-shadow: 0 14px 32px color-mix(in srgb, var(--shadow) 75%, transparent);
+        }
+
+        .sidebar,
+        .inspector {
+            display: grid;
+            align-content: start;
+            gap: 10px;
+            padding: 13px;
+        }
+
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 9px;
+        }
+
+        .logo {
+            display: grid;
+            place-items: center;
+            width: 34px;
+            height: 34px;
+            border-radius: 12px;
+            color: #fff;
+            background: linear-gradient(135deg, var(--primary), var(--accent));
+            font-size: 12px;
+            font-weight: 900;
+        }
+
+        .mini-title {
+            margin: 0;
+            color: var(--text);
+            font-size: 14px;
+            font-weight: 850;
+        }
+
+        .mini-meta {
+            margin: 0;
+            color: var(--muted);
+            font-size: 11px;
+        }
+
+        .primary-btn,
+        .send {
+            border: 0;
+            border-radius: 12px;
+            color: #fff;
+            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+            font-weight: 800;
+        }
+
+        .primary-btn {
+            padding: 10px 12px;
+        }
+
+        .search,
+        .composer {
+            border: 1px solid var(--line);
+            border-radius: 12px;
+            background: var(--panel-soft);
+        }
+
+        .search {
+            padding: 9px 10px;
+            color: var(--muted);
+            font-size: 12px;
+        }
+
+        .nav-card,
+        .source,
+        .metric,
+        .toolbar-chip,
+        .bubble {
+            border: 1px solid var(--line);
+            border-radius: 14px;
+            background: var(--panel-soft);
+        }
+
+        .nav-card {
+            display: grid;
+            grid-template-columns: 26px 1fr;
+            gap: 8px;
+            padding: 10px;
+        }
+
+        .nav-card.active {
+            background: var(--primary-soft);
+            border-color: color-mix(in srgb, var(--primary) 34%, var(--line));
+        }
+
+        .nav-icon {
+            display: grid;
+            place-items: center;
+            width: 26px;
+            height: 26px;
+            border-radius: 9px;
+            color: var(--primary);
+            background: var(--panel);
+            font-size: 11px;
+            font-weight: 900;
+        }
+
+        .main {
+            display: grid;
+            grid-template-rows: auto auto minmax(0, 1fr) auto;
+            overflow: hidden;
+        }
+
+        .topbar,
+        .toolbar,
+        .composer {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 12px;
+            border-bottom: 1px solid var(--line);
+        }
+
+        .topbar {
+            justify-content: space-between;
+        }
+
+        .status {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            border-radius: 999px;
+            padding: 6px 8px;
+            color: var(--success);
+            background: color-mix(in srgb, var(--success) 12%, white);
+            font-size: 11px;
+            font-weight: 850;
+        }
+
+        .dot {
+            width: 7px;
+            height: 7px;
+            border-radius: 999px;
+            background: currentColor;
+        }
+
+        .toolbar {
+            flex-wrap: wrap;
+            background: color-mix(in srgb, var(--panel-soft) 72%, white);
+        }
+
+        .toolbar-chip {
+            padding: 7px 9px;
+            color: var(--muted);
+            font-size: 11px;
+        }
+
+        .messages {
+            display: grid;
+            align-content: start;
+            gap: 10px;
+            padding: 13px;
+            background:
+                linear-gradient(color-mix(in srgb, var(--panel-soft) 78%, transparent), color-mix(in srgb, var(--panel-soft) 78%, transparent)),
+                repeating-linear-gradient(90deg, transparent, transparent 24px, color-mix(in srgb, var(--line) 42%, transparent) 25px);
+        }
+
+        .message {
+            display: grid;
+            grid-template-columns: 30px minmax(0, 1fr);
+            gap: 8px;
+        }
+
+        .message.user {
+            grid-template-columns: minmax(0, 1fr) 30px;
+            justify-self: end;
+        }
+
+        .avatar {
+            display: grid;
+            place-items: center;
+            width: 30px;
+            height: 30px;
+            border-radius: 10px;
+            color: var(--primary);
+            background: var(--primary-soft);
+            font-size: 10px;
+            font-weight: 900;
+        }
+
+        .bubble {
+            max-width: 410px;
+            padding: 10px;
+            color: var(--text);
+            font-size: 12px;
+            line-height: 1.45;
+        }
+
+        .user .bubble {
+            color: #fff;
+            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+            border: 0;
+        }
+
+        .composer {
+            border-top: 1px solid var(--line);
+            border-bottom: 0;
+        }
+
+        .composer span {
+            flex: 1;
+            color: var(--muted);
+            font-size: 12px;
+        }
+
+        .send {
+            padding: 9px 11px;
+            font-size: 12px;
+        }
+
+        .source,
+        .metric {
+            padding: 10px;
+        }
+
+        .metric strong {
+            display: block;
+            color: var(--primary-dark);
+            font-size: 22px;
+            line-height: 1;
+        }
+
+        .usage {
+            margin: 0 22px 22px;
+            border: 1px solid color-mix(in srgb, var(--primary) 22%, var(--line));
+            border-radius: 18px;
+            padding: 14px 16px;
+            color: var(--text);
+            background: color-mix(in srgb, var(--primary-soft) 72%, white);
+        }
+
+        .usage strong {
+            display: block;
+            margin-bottom: 5px;
+        }
+
+        .usage p {
+            margin-bottom: 0;
+            color: var(--muted);
+            line-height: 1.45;
+        }
+
+        @media (max-width: 1180px) {
+            .palette-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        @media (max-width: 760px) {
+            .page {
+                padding: 16px;
+            }
+
+            .preview {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <main class="page">
+        <section class="intro">
+            <p class="eyebrow">Corporate Copilot · цветовые направления</p>
+            <h1>5 цветовых гамм для варианта A</h1>
+            <p class="lead">Все карточки используют одну и ту же композицию Option A: светлая рабочая панель, сайдбар, чат, источники и админские метрики. Отличаются только дизайн-токены: фон, primary, soft-поверхности, линии, акценты и тени.</p>
+        </section>
+
+        <section class="palette-grid" aria-label="Варианты цветовых гамм">
+            <article class="palette azure">
+                <header class="palette-header">
+                    <div>
+                        <p class="eyebrow">01 · Azure Enterprise</p>
+                        <h2>Классический синий SaaS</h2>
+                        <p>Самый близкий к текущему Option A: чисто, надежно, корпоративно.</p>
+                    </div>
+                    <div class="swatches">
+                        <span class="swatch" style="background:#2557d6"></span>
+                        <span class="swatch" style="background:#e8efff"></span>
+                        <span class="swatch" style="background:#eef3fb"></span>
+                    </div>
+                </header>
+                <div class="preview">
+                    <aside class="sidebar">
+                        <div class="brand"><div class="logo">БИ</div><div><p class="mini-title">БочкарИИ</p><p class="mini-meta">Corporate Copilot</p></div></div>
+                        <button class="primary-btn">Новый диалог</button>
+                        <div class="search">Поиск по истории</div>
+                        <div class="nav-card active"><span class="nav-icon">01</span><div><p class="mini-title">Чат</p><p class="mini-meta">RAG-ответы</p></div></div>
+                        <div class="nav-card"><span class="nav-icon">02</span><div><p class="mini-title">База знаний</p><p class="mini-meta">42 документа</p></div></div>
+                    </aside>
+                    <section class="main">
+                        <div class="topbar"><div><p class="mini-title">AI-ассистент</p><p class="mini-meta">Главный экран</p></div><span class="status"><span class="dot"></span> Онлайн</span></div>
+                        <div class="toolbar"><span class="toolbar-chip">Стиль: инструкция</span><span class="toolbar-chip">Источников: 5</span></div>
+                        <div class="messages">
+                            <div class="message"><div class="avatar">AI</div><div class="bubble">Найду ответ в базе знаний и покажу источники.</div></div>
+                            <div class="message user"><div class="bubble">Как выдать доступ сотруднику?</div><div class="avatar">Вы</div></div>
+                            <div class="message"><div class="avatar">AI</div><div class="bubble">Создайте заявку, назначьте роль и проверьте доступ тестовым поиском.</div></div>
+                        </div>
+                        <div class="composer"><span>Введите вопрос...</span><button class="send">Отправить</button></div>
+                    </section>
+                    <aside class="inspector">
+                        <div class="source"><p class="mini-title">Источники</p><p class="mini-meta">access_policy.docx · 92%</p></div>
+                        <div class="metric"><strong>42</strong><p class="mini-meta">документа</p></div>
+                        <div class="metric"><strong>200</strong><p class="mini-meta">Flask API</p></div>
+                    </aside>
+                </div>
+                <div class="usage"><strong>Когда выбирать</strong><p>Если нужен безопасный корпоративный стиль, который легко перенести в текущие CSS-токены без смены характера продукта.</p></div>
+            </article>
+
+            <article class="palette emerald">
+                <header class="palette-header">
+                    <div>
+                        <p class="eyebrow">02 · Emerald Knowledge</p>
+                        <h2>Зеленый экспертный стиль</h2>
+                        <p>Ассоциируется с базой знаний, достоверностью и спокойной рабочей средой.</p>
+                    </div>
+                    <div class="swatches">
+                        <span class="swatch" style="background:#0d9488"></span>
+                        <span class="swatch" style="background:#ddf7f1"></span>
+                        <span class="swatch" style="background:#edf8f4"></span>
+                    </div>
+                </header>
+                <div class="preview">
+                    <aside class="sidebar">
+                        <div class="brand"><div class="logo">БИ</div><div><p class="mini-title">БочкарИИ</p><p class="mini-meta">Knowledge Assistant</p></div></div>
+                        <button class="primary-btn">Новый диалог</button>
+                        <div class="search">Поиск по истории</div>
+                        <div class="nav-card active"><span class="nav-icon">01</span><div><p class="mini-title">Чат</p><p class="mini-meta">Проверенные ответы</p></div></div>
+                        <div class="nav-card"><span class="nav-icon">02</span><div><p class="mini-title">База знаний</p><p class="mini-meta">Индекс актуален</p></div></div>
+                    </aside>
+                    <section class="main">
+                        <div class="topbar"><div><p class="mini-title">AI-ассистент</p><p class="mini-meta">Экспертная база</p></div><span class="status"><span class="dot"></span> Онлайн</span></div>
+                        <div class="toolbar"><span class="toolbar-chip">Стиль: подробно</span><span class="toolbar-chip">Релевантность: 0.35</span></div>
+                        <div class="messages">
+                            <div class="message"><div class="avatar">AI</div><div class="bubble">Проверю документы и выделю надежные источники.</div></div>
+                            <div class="message user"><div class="bubble">Что нужно для доступа?</div><div class="avatar">Вы</div></div>
+                            <div class="message"><div class="avatar">AI</div><div class="bubble">Нужны заявка, роль пользователя и подтверждение владельца раздела.</div></div>
+                        </div>
+                        <div class="composer"><span>Введите вопрос...</span><button class="send">Отправить</button></div>
+                    </section>
+                    <aside class="inspector">
+                        <div class="source"><p class="mini-title">Источники</p><p class="mini-meta">manual.html · 88%</p></div>
+                        <div class="metric"><strong>18k</strong><p class="mini-meta">чанков</p></div>
+                        <div class="metric"><strong>OK</strong><p class="mini-meta">Chroma</p></div>
+                    </aside>
+                </div>
+                <div class="usage"><strong>Когда выбирать</strong><p>Если хочется подчеркнуть “знание”, надежность и экологичную спокойную рабочую атмосферу.</p></div>
+            </article>
+
+            <article class="palette graphite">
+                <header class="palette-header">
+                    <div>
+                        <p class="eyebrow">03 · Graphite Gold</p>
+                        <h2>Теплый премиальный нейтрал</h2>
+                        <p>Меньше технологической холодности, больше зрелости и управленческого характера.</p>
+                    </div>
+                    <div class="swatches">
+                        <span class="swatch" style="background:#7c5a22"></span>
+                        <span class="swatch" style="background:#f5ead7"></span>
+                        <span class="swatch" style="background:#f4f1eb"></span>
+                    </div>
+                </header>
+                <div class="preview">
+                    <aside class="sidebar">
+                        <div class="brand"><div class="logo">БИ</div><div><p class="mini-title">БочкарИИ</p><p class="mini-meta">Executive Copilot</p></div></div>
+                        <button class="primary-btn">Новый диалог</button>
+                        <div class="search">Поиск по истории</div>
+                        <div class="nav-card active"><span class="nav-icon">01</span><div><p class="mini-title">Чат</p><p class="mini-meta">Регламенты</p></div></div>
+                        <div class="nav-card"><span class="nav-icon">03</span><div><p class="mini-title">Админка</p><p class="mini-meta">Контроль</p></div></div>
+                    </aside>
+                    <section class="main">
+                        <div class="topbar"><div><p class="mini-title">AI-ассистент</p><p class="mini-meta">Рабочая панель</p></div><span class="status"><span class="dot"></span> Онлайн</span></div>
+                        <div class="toolbar"><span class="toolbar-chip">Стиль: кратко</span><span class="toolbar-chip">Экспорт: PDF</span></div>
+                        <div class="messages">
+                            <div class="message"><div class="avatar">AI</div><div class="bubble">Соберу ответ в деловом формате с кратким выводом.</div></div>
+                            <div class="message user"><div class="bubble">Подготовь порядок действий.</div><div class="avatar">Вы</div></div>
+                            <div class="message"><div class="avatar">AI</div><div class="bubble">Порядок: заявка, согласование, назначение роли, контрольная проверка.</div></div>
+                        </div>
+                        <div class="composer"><span>Введите вопрос...</span><button class="send">Отправить</button></div>
+                    </section>
+                    <aside class="inspector">
+                        <div class="source"><p class="mini-title">Источники</p><p class="mini-meta">policy.docx · 91%</p></div>
+                        <div class="metric"><strong>3 мин</strong><p class="mini-meta">индексация</p></div>
+                        <div class="metric"><strong>1.4s</strong><p class="mini-meta">LLM avg</p></div>
+                    </aside>
+                </div>
+                <div class="usage"><strong>Когда выбирать</strong><p>Если проект должен выглядеть солиднее: для руководителей, регламентов, внутренних стандартов и отчетности.</p></div>
+            </article>
+
+            <article class="palette berry">
+                <header class="palette-header">
+                    <div>
+                        <p class="eyebrow">04 · Berry Accent</p>
+                        <h2>Смелый розово-бордовый акцент</h2>
+                        <p>Более запоминающийся продуктовый образ, но все еще в корпоративной сетке.</p>
+                    </div>
+                    <div class="swatches">
+                        <span class="swatch" style="background:#be185d"></span>
+                        <span class="swatch" style="background:#fce7f1"></span>
+                        <span class="swatch" style="background:#fbf0f5"></span>
+                    </div>
+                </header>
+                <div class="preview">
+                    <aside class="sidebar">
+                        <div class="brand"><div class="logo">БИ</div><div><p class="mini-title">БочкарИИ</p><p class="mini-meta">Productive AI</p></div></div>
+                        <button class="primary-btn">Новый диалог</button>
+                        <div class="search">Поиск по истории</div>
+                        <div class="nav-card active"><span class="nav-icon">01</span><div><p class="mini-title">Чат</p><p class="mini-meta">Помощник</p></div></div>
+                        <div class="nav-card"><span class="nav-icon">02</span><div><p class="mini-title">Файлы</p><p class="mini-meta">Загрузка</p></div></div>
+                    </aside>
+                    <section class="main">
+                        <div class="topbar"><div><p class="mini-title">AI-ассистент</p><p class="mini-meta">Живой интерфейс</p></div><span class="status"><span class="dot"></span> Онлайн</span></div>
+                        <div class="toolbar"><span class="toolbar-chip">Стиль: по шагам</span><span class="toolbar-chip">Источников: 7</span></div>
+                        <div class="messages">
+                            <div class="message"><div class="avatar">AI</div><div class="bubble">Помогу быстро найти нужный ответ и оформить его в понятные шаги.</div></div>
+                            <div class="message user"><div class="bubble">Как загрузить новый документ?</div><div class="avatar">Вы</div></div>
+                            <div class="message"><div class="avatar">AI</div><div class="bubble">Откройте базу знаний, сделайте предпросмотр, затем запустите индексацию.</div></div>
+                        </div>
+                        <div class="composer"><span>Введите вопрос...</span><button class="send">Отправить</button></div>
+                    </section>
+                    <aside class="inspector">
+                        <div class="source"><p class="mini-title">Источники</p><p class="mini-meta">upload_guide.pdf · 87%</p></div>
+                        <div class="metric"><strong>5</strong><p class="mini-meta">новых файлов</p></div>
+                        <div class="metric"><strong>0</strong><p class="mini-meta">ошибок</p></div>
+                    </aside>
+                </div>
+                <div class="usage"><strong>Когда выбирать</strong><p>Если нужно сделать приложение заметнее и менее типовым, но без ухода в развлекательный стиль.</p></div>
+            </article>
+
+            <article class="palette indigo">
+                <header class="palette-header">
+                    <div>
+                        <p class="eyebrow">05 · Indigo AI</p>
+                        <h2>Современный AI-индиго</h2>
+                        <p>Самое “AI-продуктовое” направление: мягкое, технологичное, свежее.</p>
+                    </div>
+                    <div class="swatches">
+                        <span class="swatch" style="background:#6d5dfc"></span>
+                        <span class="swatch" style="background:#ede9fe"></span>
+                        <span class="swatch" style="background:#f2f0ff"></span>
+                    </div>
+                </header>
+                <div class="preview">
+                    <aside class="sidebar">
+                        <div class="brand"><div class="logo">БИ</div><div><p class="mini-title">БочкарИИ</p><p class="mini-meta">AI Workspace</p></div></div>
+                        <button class="primary-btn">Новый диалог</button>
+                        <div class="search">Поиск по истории</div>
+                        <div class="nav-card active"><span class="nav-icon">01</span><div><p class="mini-title">Чат</p><p class="mini-meta">AI-поиск</p></div></div>
+                        <div class="nav-card"><span class="nav-icon">02</span><div><p class="mini-title">База</p><p class="mini-meta">Документы</p></div></div>
+                    </aside>
+                    <section class="main">
+                        <div class="topbar"><div><p class="mini-title">AI-ассистент</p><p class="mini-meta">Copilot mode</p></div><span class="status"><span class="dot"></span> Онлайн</span></div>
+                        <div class="toolbar"><span class="toolbar-chip">Стиль: copilot</span><span class="toolbar-chip">Top K: 5</span></div>
+                        <div class="messages">
+                            <div class="message"><div class="avatar">AI</div><div class="bubble">Сформирую ответ, проверю источники и предложу следующий шаг.</div></div>
+                            <div class="message user"><div class="bubble">Что делать после назначения роли?</div><div class="avatar">Вы</div></div>
+                            <div class="message"><div class="avatar">AI</div><div class="bubble">Проверьте доступ тестовым запросом и сохраните результат проверки.</div></div>
+                        </div>
+                        <div class="composer"><span>Введите вопрос...</span><button class="send">Отправить</button></div>
+                    </section>
+                    <aside class="inspector">
+                        <div class="source"><p class="mini-title">Источники</p><p class="mini-meta">onboarding.pdf · 89%</p></div>
+                        <div class="metric"><strong>94%</strong><p class="mini-meta">качество</p></div>
+                        <div class="metric"><strong>Ready</strong><p class="mini-meta">runtime</p></div>
+                    </aside>
+                </div>
+                <div class="usage"><strong>Когда выбирать</strong><p>Если хочется сохранить корпоративную аккуратность, но сделать интерфейс более современным и AI-ориентированным.</p></div>
+            </article>
+        </section>
+    </main>
+</body>
+</html>

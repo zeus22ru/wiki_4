@@ -1,0 +1,571 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Вариант A — Corporate Copilot · Graphite Gold</title>
+    <style>
+        :root {
+            --bg: #f4f1eb;
+            --panel: #fffdf8;
+            --panel-soft: #faf7ef;
+            --line: #ded5c7;
+            --line-strong: #c9b99f;
+            --text: #25211d;
+            --muted: #71695f;
+            --primary: #7c5a22;
+            --primary-dark: #5d4218;
+            --primary-soft: #f5ead7;
+            --accent: #c4933a;
+            --green: #3f8f58;
+            --green-soft: #e7f2e8;
+            --amber: #b7791f;
+            --red: #b84a3d;
+            --shadow: 0 20px 55px rgba(72, 55, 35, 0.16);
+            --radius: 14px;
+            --radius-sm: 8px;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            min-height: 100vh;
+            color: var(--text);
+            background:
+                radial-gradient(circle at top left, rgba(196, 147, 58, 0.18), transparent 32rem),
+                linear-gradient(135deg, #fffdf8 0%, var(--bg) 100%);
+            font-family: Inter, "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+        }
+
+        .prototype {
+            display: grid;
+            grid-template-columns: 292px minmax(0, 1fr) 326px;
+            gap: 20px;
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .sidebar,
+        .main,
+        .inspector {
+            border: 1px solid rgba(222, 213, 199, 0.92);
+            border-radius: var(--radius);
+            background: rgba(255, 253, 248, 0.9);
+            box-shadow: var(--shadow);
+            backdrop-filter: blur(16px);
+        }
+
+        .sidebar {
+            display: flex;
+            flex-direction: column;
+            gap: 18px;
+            padding: 20px;
+        }
+
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .logo {
+            display: grid;
+            place-items: center;
+            width: 44px;
+            height: 44px;
+            border-radius: 10px;
+            color: #fff;
+            background: linear-gradient(135deg, var(--primary), var(--accent));
+            font-weight: 800;
+        }
+
+        .eyebrow {
+            margin: 0 0 4px;
+            color: var(--muted);
+            font-size: 12px;
+            font-weight: 700;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+        }
+
+        h1,
+        h2,
+        h3,
+        p {
+            margin-top: 0;
+        }
+
+        .brand h1,
+        .screen-title h2,
+        .section h3 {
+            margin-bottom: 0;
+        }
+
+        .new-chat {
+            width: 100%;
+            border: 0;
+            border-radius: 10px;
+            padding: 13px 16px;
+            color: #fff;
+            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+            font-weight: 750;
+            box-shadow: 0 14px 30px rgba(124, 90, 34, 0.24);
+        }
+
+        .search {
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            padding: 12px 14px;
+            background: var(--panel-soft);
+            color: var(--text);
+        }
+
+        .nav-card {
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+            padding: 14px;
+            border: 1px solid transparent;
+            border-radius: 10px;
+            background: transparent;
+        }
+
+        .nav-card.active,
+        .nav-card:hover {
+            border-color: var(--line);
+            background: var(--primary-soft);
+        }
+
+        .nav-icon {
+            display: grid;
+            place-items: center;
+            flex: 0 0 32px;
+            width: 32px;
+            height: 32px;
+            border-radius: 7px;
+            color: var(--primary);
+            background: var(--panel);
+            font-weight: 800;
+        }
+
+        .history {
+            display: grid;
+            gap: 10px;
+            margin-top: auto;
+        }
+
+        .history-item {
+            padding: 12px;
+            border: 1px solid var(--line);
+            border-radius: 10px;
+            background: var(--panel);
+        }
+
+        .history-item strong,
+        .document strong,
+        .metric strong {
+            display: block;
+            margin-bottom: 5px;
+        }
+
+        .meta {
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        .main {
+            display: grid;
+            grid-template-rows: auto auto minmax(420px, 1fr) auto;
+            overflow: hidden;
+        }
+
+        .topbar,
+        .toolbar,
+        .composer {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 18px 22px;
+            border-bottom: 1px solid var(--line);
+            background: rgba(255, 253, 248, 0.76);
+        }
+
+        .topbar {
+            justify-content: space-between;
+        }
+
+        .screen-title h2 {
+            font-size: 24px;
+        }
+
+        .tabs {
+            display: flex;
+            gap: 8px;
+            padding: 5px;
+            border: 1px solid var(--line);
+            border-radius: 10px;
+            background: var(--panel-soft);
+        }
+
+        .tabs button,
+        .ghost-button {
+            border: 0;
+            border-radius: 8px;
+            padding: 10px 13px;
+            color: var(--muted);
+            background: transparent;
+            font-weight: 700;
+        }
+
+        .tabs .active,
+        .ghost-button {
+            color: var(--primary-dark);
+            background: var(--panel);
+            box-shadow: 0 4px 12px rgba(72, 55, 35, 0.1);
+        }
+
+        .status-pill,
+        .chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 7px;
+            border-radius: 999px;
+            padding: 8px 11px;
+            color: #2f6f43;
+            background: var(--green-soft);
+            font-size: 13px;
+            font-weight: 750;
+        }
+
+        .dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: currentColor;
+        }
+
+        .toolbar {
+            flex-wrap: wrap;
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        .control {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            padding: 8px 10px;
+            background: var(--panel);
+        }
+
+        .control strong {
+            color: var(--text);
+        }
+
+        .conversation {
+            display: grid;
+            gap: 18px;
+            align-content: start;
+            padding: 24px;
+            overflow: auto;
+            background:
+                linear-gradient(rgba(250, 247, 239, 0.86), rgba(250, 247, 239, 0.86)),
+                repeating-linear-gradient(90deg, transparent, transparent 31px, rgba(201, 185, 159, 0.24) 32px);
+        }
+
+        .message {
+            display: grid;
+            grid-template-columns: 42px minmax(0, 1fr);
+            gap: 12px;
+            max-width: 800px;
+        }
+
+        .message.user {
+            justify-self: end;
+            grid-template-columns: minmax(0, 1fr) 42px;
+        }
+
+        .avatar {
+            display: grid;
+            place-items: center;
+            width: 42px;
+            height: 42px;
+            border-radius: 8px;
+            background: var(--primary-soft);
+            color: var(--primary);
+            font-weight: 900;
+        }
+
+        .bubble {
+            border: 1px solid var(--line);
+            border-radius: 12px;
+            padding: 16px 18px;
+            background: var(--panel);
+            line-height: 1.55;
+        }
+
+        .user .bubble {
+            border: 0;
+            color: #fff;
+            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+        }
+
+        .answer-grid,
+        .documents,
+        .metrics {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 12px;
+        }
+
+        .mini-card,
+        .document,
+        .metric {
+            border: 1px solid var(--line);
+            border-radius: 10px;
+            padding: 14px;
+            background: var(--panel-soft);
+        }
+
+        .composer {
+            border-top: 1px solid var(--line);
+            border-bottom: 0;
+        }
+
+        .composer input {
+            flex: 1;
+            border: 1px solid var(--line);
+            border-radius: 10px;
+            padding: 15px 16px;
+            background: var(--panel);
+            font: inherit;
+        }
+
+        .send {
+            border: 0;
+            border-radius: 10px;
+            padding: 15px 18px;
+            color: #fff;
+            background: var(--primary);
+            font-weight: 800;
+        }
+
+        .inspector {
+            display: flex;
+            flex-direction: column;
+            gap: 18px;
+            padding: 20px;
+            overflow: auto;
+        }
+
+        .section {
+            border: 1px solid var(--line);
+            border-radius: 12px;
+            padding: 16px;
+            background: var(--panel);
+        }
+
+        .source {
+            display: grid;
+            gap: 6px;
+            padding: 12px 0;
+            border-bottom: 1px solid var(--line);
+        }
+
+        .source:last-child {
+            border-bottom: 0;
+        }
+
+        .knowledge,
+        .admin {
+            display: grid;
+            gap: 14px;
+        }
+
+        .upload {
+            display: grid;
+            grid-template-columns: 1fr auto auto;
+            gap: 10px;
+            padding: 14px;
+            border: 1px dashed var(--line-strong);
+            border-radius: 12px;
+            background: var(--primary-soft);
+        }
+
+        .metric-value {
+            color: var(--primary-dark);
+            font-size: 28px;
+            font-weight: 850;
+        }
+
+        .note {
+            border: 1px solid #dfcfae;
+            border-radius: 12px;
+            padding: 16px;
+            background: #f7ecd7;
+        }
+
+        @media (max-width: 1180px) {
+            .prototype {
+                grid-template-columns: 260px minmax(0, 1fr);
+            }
+
+            .inspector {
+                grid-column: 1 / -1;
+            }
+        }
+
+        @media (max-width: 760px) {
+            .prototype {
+                grid-template-columns: 1fr;
+                padding: 12px;
+            }
+
+            .topbar,
+            .toolbar,
+            .composer {
+                align-items: stretch;
+                flex-direction: column;
+            }
+
+            .answer-grid,
+            .documents,
+            .metrics,
+            .upload {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="prototype">
+        <aside class="sidebar">
+            <div class="brand">
+                <div class="logo">БИ</div>
+                <div>
+                    <p class="eyebrow">Corporate Copilot · Graphite Gold</p>
+                    <h1>БочкарИИ</h1>
+                </div>
+            </div>
+            <button class="new-chat">Новый диалог</button>
+            <input class="search" type="search" placeholder="Поиск по истории">
+            <div class="nav-card active">
+                <span class="nav-icon">01</span>
+                <div><strong>Чат</strong><p class="meta">RAG-ответы по базе знаний</p></div>
+            </div>
+            <div class="nav-card">
+                <span class="nav-icon">02</span>
+                <div><strong>База знаний</strong><p class="meta">Загрузка и индексация</p></div>
+            </div>
+            <div class="nav-card">
+                <span class="nav-icon">03</span>
+                <div><strong>Админка</strong><p class="meta">Здоровье сервисов</p></div>
+            </div>
+            <div class="history">
+                <p class="eyebrow">Недавние диалоги</p>
+                <div class="history-item"><strong>Регламент отпусков</strong><span class="meta">Сегодня, 12:10</span></div>
+                <div class="history-item"><strong>Инструкция по складу</strong><span class="meta">Вчера, 18:42</span></div>
+            </div>
+        </aside>
+
+        <main class="main">
+            <header class="topbar">
+                <div class="screen-title">
+                    <p class="eyebrow">Главный экран</p>
+                    <h2>AI-ассистент базы знаний</h2>
+                </div>
+                <nav class="tabs">
+                    <button class="active">Чат</button>
+                    <button>База знаний</button>
+                    <button>Админка</button>
+                </nav>
+                <span class="status-pill"><span class="dot"></span> Система онлайн</span>
+            </header>
+
+            <div class="toolbar">
+                <div class="control">Стиль ответа: <strong>Инструкция для сотрудника</strong></div>
+                <div class="control">Источников: <strong>5</strong></div>
+                <div class="control">Релевантность: <strong>0.35+</strong></div>
+                <button class="ghost-button">Скачать диалог</button>
+            </div>
+
+            <section class="conversation">
+                <article class="message">
+                    <div class="avatar">AI</div>
+                    <div class="bubble">
+                        <strong>Здравствуйте! Я помогу найти ответ в базе знаний.</strong>
+                        <p>Задайте вопрос по документам, регламентам или инструкциям. Я покажу краткий ответ и ссылки на найденные источники.</p>
+                        <div class="answer-grid">
+                            <div class="mini-card"><strong>1. Ответ</strong><span class="meta">Краткая выжимка</span></div>
+                            <div class="mini-card"><strong>2. Шаги</strong><span class="meta">Что сделать</span></div>
+                            <div class="mini-card"><strong>3. Источники</strong><span class="meta">Документы</span></div>
+                        </div>
+                    </div>
+                </article>
+                <article class="message user">
+                    <div class="bubble">Как оформить доступ сотруднику к внутренней базе знаний?</div>
+                    <div class="avatar">Вы</div>
+                </article>
+                <article class="message">
+                    <div class="avatar">AI</div>
+                    <div class="bubble">
+                        <strong>Коротко: создайте заявку, назначьте роль и проверьте подтверждение.</strong>
+                        <p>1. Откройте раздел администрирования. 2. Выберите роль сотрудника. 3. Отправьте заявку ответственному владельцу документации. 4. После подтверждения проверьте доступ тестовым поиском.</p>
+                    </div>
+                </article>
+            </section>
+
+            <form class="composer">
+                <input type="text" placeholder="Введите вопрос по базе знаний">
+                <button class="send" type="button">Отправить</button>
+            </form>
+        </main>
+
+        <aside class="inspector">
+            <section class="section">
+                <p class="eyebrow">Источники</p>
+                <h3>Найденные документы</h3>
+                <div class="source"><strong>access_policy.docx</strong><span class="meta">Релевантность 92% · раздел 4</span></div>
+                <div class="source"><strong>employee_onboarding.pdf</strong><span class="meta">Релевантность 86% · стр. 12</span></div>
+                <div class="source"><strong>kb_admin_manual.html</strong><span class="meta">Релевантность 78% · блок “Роли”</span></div>
+            </section>
+
+            <section class="section knowledge">
+                <p class="eyebrow">База знаний</p>
+                <h3>Управление документами</h3>
+                <div class="upload">
+                    <div><strong>Перетащите файл</strong><p class="meta">PDF, DOCX, XLSX, HTML, TXT</p></div>
+                    <button class="ghost-button">Предпросмотр</button>
+                    <button class="new-chat">Загрузить</button>
+                </div>
+                <div class="documents">
+                    <div class="document"><strong>42</strong><span class="meta">документа</span></div>
+                    <div class="document"><strong>18 240</strong><span class="meta">чанков</span></div>
+                    <div class="document"><strong>3 мин</strong><span class="meta">последняя индексация</span></div>
+                </div>
+            </section>
+
+            <section class="section admin">
+                <p class="eyebrow">Админ-консоль</p>
+                <h3>Диагностика runtime</h3>
+                <div class="metrics">
+                    <div class="metric"><span class="metric-value">200</span><strong>Flask API</strong><span class="meta">OK</span></div>
+                    <div class="metric"><span class="metric-value">18k</span><strong>Chroma</strong><span class="meta">vectors</span></div>
+                    <div class="metric"><span class="metric-value">1.4s</span><strong>LLM</strong><span class="meta">avg latency</span></div>
+                </div>
+            </section>
+
+            <section class="note">
+                <p class="eyebrow">Когда выбирать</p>
+                <strong>Если нужен солидный корпоративный образ.</strong>
+                <p class="meta">Сильные стороны: теплый премиальный нейтрал, деловая подача регламентов, хорошая читаемость и простая миграция в CSS-токены проекта.</p>
+            </section>
+        </aside>
+    </div>
+</body>
+</html>

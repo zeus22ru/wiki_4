@@ -3,6 +3,8 @@
 .markdown-content {
     color: var(--bot-message-text);
     line-height: 1.68;
+    max-width: 100%;
+    min-width: 0;
     overflow-wrap: anywhere;
 }
 
@@ -99,6 +101,7 @@
     border: 1px solid var(--border-strong);
     border-radius: var(--radius-md);
     padding: 1em;
+    max-width: 100%;
     overflow-x: auto;
     margin: 1em 0;
     box-shadow: var(--shadow-sm);
@@ -138,11 +141,13 @@
 
 /* Таблицы */
 .markdown-content table {
+    display: block;
     border-collapse: collapse;
     width: 100%;
+    max-width: 100%;
+    overflow-x: auto;
     margin: 1em 0;
     border-radius: var(--radius-md);
-    overflow: hidden;
     box-shadow: 0 0 0 1px var(--table-border);
 }
 

@@ -1,0 +1,613 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Вариант B — Dark Command Center</title>
+    <style>
+        :root {
+            --bg: #070b14;
+            --panel: #0e1626;
+            --panel-2: #111d31;
+            --panel-3: #17243a;
+            --line: #26364f;
+            --text: #eef5ff;
+            --muted: #8fa0b9;
+            --cyan: #3be8ff;
+            --blue: #5c7cff;
+            --violet: #a675ff;
+            --green: #39d98a;
+            --amber: #ffd166;
+            --red: #ff6b7a;
+            --shadow: 0 30px 80px rgba(0, 0, 0, 0.42);
+            --radius: 24px;
+            --radius-sm: 16px;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            min-height: 100vh;
+            color: var(--text);
+            background:
+                radial-gradient(circle at 18% 12%, rgba(59, 232, 255, 0.18), transparent 28rem),
+                radial-gradient(circle at 78% 18%, rgba(166, 117, 255, 0.18), transparent 26rem),
+                linear-gradient(135deg, #05070d 0%, var(--bg) 70%);
+            font-family: "Segoe UI", Inter, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+        }
+
+        .shell {
+            display: grid;
+            grid-template-columns: 86px 300px minmax(0, 1fr);
+            gap: 16px;
+            min-height: 100vh;
+            padding: 16px;
+        }
+
+        .rail,
+        .sidebar,
+        .workspace {
+            border: 1px solid rgba(59, 232, 255, 0.14);
+            border-radius: var(--radius);
+            background: rgba(14, 22, 38, 0.86);
+            box-shadow: var(--shadow);
+            backdrop-filter: blur(18px);
+        }
+
+        .rail {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 14px;
+            padding: 16px 10px;
+        }
+
+        .mark,
+        .rail-btn,
+        .avatar {
+            display: grid;
+            place-items: center;
+            width: 48px;
+            height: 48px;
+            border-radius: 18px;
+        }
+
+        .mark {
+            color: #06111a;
+            background: linear-gradient(135deg, var(--cyan), var(--blue));
+            font-weight: 900;
+        }
+
+        .rail-btn {
+            border: 1px solid transparent;
+            color: var(--muted);
+            background: transparent;
+            font-weight: 850;
+        }
+
+        .rail-btn.active,
+        .rail-btn:hover {
+            border-color: rgba(59, 232, 255, 0.36);
+            color: var(--cyan);
+            background: rgba(59, 232, 255, 0.09);
+        }
+
+        .sidebar {
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+            padding: 20px;
+        }
+
+        .eyebrow {
+            margin: 0 0 5px;
+            color: var(--cyan);
+            font-size: 11px;
+            font-weight: 850;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+        }
+
+        h1,
+        h2,
+        h3,
+        p {
+            margin-top: 0;
+        }
+
+        h1,
+        h2,
+        h3 {
+            margin-bottom: 8px;
+        }
+
+        .muted,
+        .meta {
+            color: var(--muted);
+        }
+
+        .meta {
+            font-size: 13px;
+        }
+
+        .primary-btn,
+        .send {
+            border: 0;
+            border-radius: 16px;
+            color: #041018;
+            background: linear-gradient(135deg, var(--cyan), var(--blue));
+            font-weight: 850;
+            box-shadow: 0 18px 38px rgba(59, 232, 255, 0.18);
+        }
+
+        .primary-btn {
+            padding: 13px 16px;
+        }
+
+        .search,
+        .composer input {
+            width: 100%;
+            border: 1px solid var(--line);
+            border-radius: 15px;
+            padding: 13px 14px;
+            color: var(--text);
+            background: rgba(5, 10, 20, 0.52);
+            font: inherit;
+        }
+
+        .mission-card,
+        .chat-card,
+        .panel,
+        .stat,
+        .doc-row,
+        .source-card {
+            border: 1px solid var(--line);
+            border-radius: var(--radius-sm);
+            background: linear-gradient(180deg, rgba(23, 36, 58, 0.92), rgba(12, 20, 34, 0.92));
+        }
+
+        .mission-card {
+            padding: 16px;
+        }
+
+        .meter {
+            height: 8px;
+            overflow: hidden;
+            border-radius: 999px;
+            background: #09111f;
+        }
+
+        .meter span {
+            display: block;
+            height: 100%;
+            border-radius: inherit;
+            background: linear-gradient(90deg, var(--cyan), var(--green));
+        }
+
+        .chat-list {
+            display: grid;
+            gap: 10px;
+            overflow: auto;
+        }
+
+        .chat-card {
+            padding: 14px;
+        }
+
+        .chat-card.active {
+            border-color: rgba(59, 232, 255, 0.55);
+            box-shadow: inset 0 0 0 1px rgba(59, 232, 255, 0.18);
+        }
+
+        .workspace {
+            display: grid;
+            grid-template-rows: auto auto minmax(0, 1fr);
+            overflow: hidden;
+        }
+
+        .topbar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+            padding: 20px 24px;
+            border-bottom: 1px solid var(--line);
+        }
+
+        .tabs {
+            display: flex;
+            gap: 8px;
+            padding: 6px;
+            border: 1px solid var(--line);
+            border-radius: 18px;
+            background: rgba(5, 10, 20, 0.48);
+        }
+
+        .tabs button,
+        .ghost-btn {
+            border: 1px solid transparent;
+            border-radius: 13px;
+            padding: 10px 13px;
+            color: var(--muted);
+            background: transparent;
+            font-weight: 750;
+        }
+
+        .tabs .active,
+        .ghost-btn {
+            border-color: rgba(59, 232, 255, 0.24);
+            color: var(--cyan);
+            background: rgba(59, 232, 255, 0.08);
+        }
+
+        .status {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            border: 1px solid rgba(57, 217, 138, 0.3);
+            border-radius: 999px;
+            padding: 8px 11px;
+            color: var(--green);
+            background: rgba(57, 217, 138, 0.1);
+            font-size: 13px;
+            font-weight: 850;
+        }
+
+        .pulse {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: currentColor;
+            box-shadow: 0 0 0 7px rgba(57, 217, 138, 0.1);
+        }
+
+        .toolbar {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 12px;
+            padding: 16px 24px;
+            border-bottom: 1px solid var(--line);
+            background: rgba(5, 10, 20, 0.35);
+        }
+
+        .control {
+            border: 1px solid var(--line);
+            border-radius: 16px;
+            padding: 12px;
+            background: rgba(23, 36, 58, 0.62);
+        }
+
+        .control strong {
+            display: block;
+            margin-top: 5px;
+        }
+
+        .content {
+            display: grid;
+            grid-template-columns: minmax(0, 1.35fr) minmax(280px, 0.65fr);
+            min-height: 0;
+        }
+
+        .chat {
+            display: grid;
+            grid-template-rows: minmax(0, 1fr) auto;
+            min-height: 0;
+            border-right: 1px solid var(--line);
+        }
+
+        .messages {
+            display: grid;
+            align-content: start;
+            gap: 18px;
+            overflow: auto;
+            padding: 24px;
+            background:
+                linear-gradient(rgba(7, 11, 20, 0.18), rgba(7, 11, 20, 0.18)),
+                radial-gradient(circle at 50% 0, rgba(59, 232, 255, 0.08), transparent 24rem);
+        }
+
+        .message {
+            display: grid;
+            grid-template-columns: 48px minmax(0, 1fr);
+            gap: 13px;
+        }
+
+        .message.user {
+            grid-template-columns: minmax(0, 1fr) 48px;
+            justify-self: end;
+            max-width: 760px;
+        }
+
+        .avatar {
+            color: var(--cyan);
+            background: rgba(59, 232, 255, 0.1);
+            border: 1px solid rgba(59, 232, 255, 0.24);
+            font-weight: 900;
+        }
+
+        .bubble {
+            border: 1px solid var(--line);
+            border-radius: 20px;
+            padding: 17px;
+            background: rgba(17, 29, 49, 0.82);
+            line-height: 1.55;
+        }
+
+        .user .bubble {
+            color: #06111a;
+            background: linear-gradient(135deg, var(--cyan), var(--blue));
+            border: 0;
+        }
+
+        .checklist {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 10px;
+            margin-top: 13px;
+        }
+
+        .check {
+            border: 1px solid rgba(59, 232, 255, 0.16);
+            border-radius: 14px;
+            padding: 12px;
+            background: rgba(5, 10, 20, 0.34);
+        }
+
+        .composer {
+            display: flex;
+            gap: 12px;
+            padding: 18px 24px;
+            border-top: 1px solid var(--line);
+            background: rgba(5, 10, 20, 0.48);
+        }
+
+        .send {
+            padding: 0 20px;
+        }
+
+        .right-stack {
+            display: grid;
+            align-content: start;
+            gap: 14px;
+            overflow: auto;
+            padding: 18px;
+        }
+
+        .panel {
+            padding: 16px;
+        }
+
+        .source-card {
+            display: grid;
+            gap: 7px;
+            margin-top: 10px;
+            padding: 12px;
+        }
+
+        .score {
+            color: var(--green);
+            font-weight: 850;
+        }
+
+        .knowledge-grid,
+        .admin-grid {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 12px;
+        }
+
+        .stat {
+            padding: 14px;
+        }
+
+        .stat-value {
+            color: var(--cyan);
+            font-size: 27px;
+            font-weight: 900;
+        }
+
+        .doc-row {
+            display: grid;
+            grid-template-columns: 1fr auto;
+            gap: 12px;
+            align-items: center;
+            margin-top: 10px;
+            padding: 13px;
+        }
+
+        .badge {
+            border-radius: 999px;
+            padding: 6px 9px;
+            color: var(--green);
+            background: rgba(57, 217, 138, 0.1);
+            font-size: 12px;
+            font-weight: 850;
+        }
+
+        .note {
+            border: 1px solid rgba(166, 117, 255, 0.36);
+            border-radius: 18px;
+            padding: 16px;
+            background: rgba(166, 117, 255, 0.09);
+        }
+
+        @media (max-width: 1180px) {
+            .shell {
+                grid-template-columns: 76px minmax(0, 1fr);
+            }
+
+            .sidebar {
+                grid-column: 1 / -1;
+                order: 2;
+            }
+
+            .workspace {
+                grid-column: 2;
+            }
+        }
+
+        @media (max-width: 820px) {
+            .shell,
+            .content,
+            .toolbar {
+                grid-template-columns: 1fr;
+            }
+
+            .rail {
+                flex-direction: row;
+                min-width: 0;
+            }
+
+            .workspace {
+                grid-column: 1;
+            }
+
+            .topbar,
+            .composer {
+                align-items: stretch;
+                flex-direction: column;
+            }
+
+            .chat {
+                border-right: 0;
+                border-bottom: 1px solid var(--line);
+            }
+
+            .checklist,
+            .knowledge-grid,
+            .admin-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="shell">
+        <nav class="rail" aria-label="Основная навигация">
+            <div class="mark">БИ</div>
+            <button class="rail-btn active">Ч</button>
+            <button class="rail-btn">КБ</button>
+            <button class="rail-btn">АД</button>
+            <button class="rail-btn" style="margin-top:auto">☾</button>
+        </nav>
+
+        <aside class="sidebar">
+            <div>
+                <p class="eyebrow">Dark Command Center</p>
+                <h1>БочкарИИ</h1>
+                <p class="muted">Оперативная панель для поиска, индексации и мониторинга AI-базы знаний.</p>
+            </div>
+            <button class="primary-btn">Новый чат</button>
+            <input class="search" type="search" placeholder="Найти диалог или документ">
+            <section class="mission-card">
+                <p class="eyebrow">Готовность базы</p>
+                <h3>Индекс актуален на 94%</h3>
+                <div class="meter"><span style="width:94%"></span></div>
+                <p class="meta" style="margin:10px 0 0">Следующая проверка через 12 минут</p>
+            </section>
+            <div class="chat-list">
+                <div class="chat-card active"><strong>Доступы сотрудников</strong><p class="meta">5 источников · 2 мин назад</p></div>
+                <div class="chat-card"><strong>Складские инструкции</strong><p class="meta">3 источника · сегодня</p></div>
+                <div class="chat-card"><strong>Регламент отпусков</strong><p class="meta">7 источников · вчера</p></div>
+            </div>
+        </aside>
+
+        <main class="workspace">
+            <header class="topbar">
+                <div>
+                    <p class="eyebrow">Операционный экран</p>
+                    <h2>AI Command Center</h2>
+                    <p class="meta">Чат, база знаний и админка на одном рабочем полотне</p>
+                </div>
+                <nav class="tabs">
+                    <button class="active">Чат</button>
+                    <button>База знаний</button>
+                    <button>Админка</button>
+                </nav>
+                <span class="status"><span class="pulse"></span> Online</span>
+            </header>
+
+            <section class="toolbar">
+                <div class="control"><span class="meta">Стиль ответа</span><strong>По шагам</strong></div>
+                <div class="control"><span class="meta">Top K</span><strong>5 источников</strong></div>
+                <div class="control"><span class="meta">Min score</span><strong>0.40</strong></div>
+                <div class="control"><span class="meta">Экспорт</span><strong>Markdown + JSON</strong></div>
+            </section>
+
+            <section class="content">
+                <div class="chat">
+                    <div class="messages">
+                        <article class="message">
+                            <div class="avatar">AI</div>
+                            <div class="bubble">
+                                <strong>Готов к поиску по базе знаний.</strong>
+                                <p class="muted">Задам уточнение, если документов недостаточно, и покажу источники с уровнем совпадения.</p>
+                            </div>
+                        </article>
+                        <article class="message user">
+                            <div class="bubble">Как выдать новому сотруднику доступ к базе знаний?</div>
+                            <div class="avatar">Вы</div>
+                        </article>
+                        <article class="message">
+                            <div class="avatar">AI</div>
+                            <div class="bubble">
+                                <strong>Процедура состоит из трех контрольных действий.</strong>
+                                <div class="checklist">
+                                    <div class="check"><strong>01</strong><p class="meta">Создать заявку в админке</p></div>
+                                    <div class="check"><strong>02</strong><p class="meta">Назначить роль доступа</p></div>
+                                    <div class="check"><strong>03</strong><p class="meta">Проверить поиск по тестовому запросу</p></div>
+                                </div>
+                            </div>
+                        </article>
+                    </div>
+                    <form class="composer">
+                        <input type="text" placeholder="Введите команду или вопрос">
+                        <button class="send" type="button">Send</button>
+                    </form>
+                </div>
+
+                <aside class="right-stack">
+                    <section class="panel">
+                        <p class="eyebrow">Источники</p>
+                        <h3>Подтверждения ответа</h3>
+                        <div class="source-card"><strong>access_policy.docx</strong><span class="meta">Раздел 4 · <span class="score">92%</span></span></div>
+                        <div class="source-card"><strong>kb_admin_manual.html</strong><span class="meta">Роли и права · <span class="score">84%</span></span></div>
+                        <div class="source-card"><strong>onboarding.pdf</strong><span class="meta">Стр. 12 · <span class="score">79%</span></span></div>
+                    </section>
+
+                    <section class="panel">
+                        <p class="eyebrow">База знаний</p>
+                        <h3>Индексация</h3>
+                        <div class="knowledge-grid">
+                            <div class="stat"><span class="stat-value">42</span><p class="meta">документа</p></div>
+                            <div class="stat"><span class="stat-value">18k</span><p class="meta">чанков</p></div>
+                            <div class="stat"><span class="stat-value">0</span><p class="meta">ошибок</p></div>
+                        </div>
+                        <div class="doc-row"><div><strong>warehouse_rules.pdf</strong><p class="meta">Загружен сегодня</p></div><span class="badge">Indexed</span></div>
+                        <div class="doc-row"><div><strong>hr_policy.docx</strong><p class="meta">Обновлен вчера</p></div><span class="badge">Ready</span></div>
+                    </section>
+
+                    <section class="panel">
+                        <p class="eyebrow">Админка</p>
+                        <h3>Runtime status</h3>
+                        <div class="admin-grid">
+                            <div class="stat"><span class="stat-value">200</span><p class="meta">Flask</p></div>
+                            <div class="stat"><span class="stat-value">24ms</span><p class="meta">DB ping</p></div>
+                            <div class="stat"><span class="stat-value">1.4s</span><p class="meta">LLM avg</p></div>
+                        </div>
+                    </section>
+
+                    <section class="note">
+                        <p class="eyebrow">Когда выбирать</p>
+                        <strong>Если хочется технологичный и уверенный продуктовый образ.</strong>
+                        <p class="meta">Сильные стороны: темная тема как основная, выразительные статусы, удобная панель источников и ощущение “центра управления”.</p>
+                    </section>
+                </aside>
+            </section>
+        </main>
+    </div>
+</body>
+</html>

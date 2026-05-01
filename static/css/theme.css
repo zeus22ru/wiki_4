@@ -1,155 +1,155 @@
 /* Единый набор дизайн-токенов для светлой темы */
 :root {
-    --primary-color: #2563eb;
-    --primary-hover: #1d4ed8;
-    --primary-light: rgba(37, 99, 235, 0.14);
-    --primary-soft: #eff6ff;
-    --accent-color: #0f766e;
+    --primary-color: #7c5a22;
+    --primary-hover: #5d4218;
+    --primary-light: rgba(124, 90, 34, 0.14);
+    --primary-soft: #f5ead7;
+    --accent-color: #c4933a;
 
-    --bg-color: #f4f7fb;
-    --chat-bg: #ffffff;
-    --surface-color: #ffffff;
-    --surface-muted: #f8fafc;
-    --surface-elevated: #ffffff;
+    --bg-color: #f4f1eb;
+    --chat-bg: #fffdf8;
+    --surface-color: #fffdf8;
+    --surface-muted: #faf7ef;
+    --surface-elevated: #fffdf8;
 
-    --sidebar-bg: #ffffff;
-    --sidebar-text: #1e293b;
-    --sidebar-border: #e2e8f0;
-    --sidebar-hover: #f1f5f9;
+    --sidebar-bg: rgba(255, 253, 248, 0.9);
+    --sidebar-text: #25211d;
+    --sidebar-border: #ded5c7;
+    --sidebar-hover: #f5ead7;
 
-    --user-message-bg: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+    --user-message-bg: linear-gradient(135deg, #7c5a22 0%, #5d4218 100%);
     --user-message-text: #ffffff;
-    --bot-message-bg: #ffffff;
-    --bot-message-text: #1e293b;
-    --bot-message-border: #e2e8f0;
+    --bot-message-bg: #fffdf8;
+    --bot-message-text: #25211d;
+    --bot-message-border: #ded5c7;
 
-    --border-color: #dbe4ef;
-    --border-strong: #cbd5e1;
-    --text-color: #172033;
-    --secondary-text: #64748b;
-    --muted-text: #94a3b8;
+    --border-color: #ded5c7;
+    --border-strong: #c9b99f;
+    --text-color: #25211d;
+    --secondary-text: #71695f;
+    --muted-text: #9a8d7c;
 
-    --success-color: #16a34a;
-    --error-color: #dc2626;
-    --warning-color: #d97706;
+    --success-color: #3f8f58;
+    --error-color: #b84a3d;
+    --warning-color: #b7791f;
 
-    --input-bg: #ffffff;
-    --input-border: #cbd5e1;
-    --input-placeholder: #94a3b8;
-    --focus-ring: rgba(37, 99, 235, 0.18);
+    --input-bg: #fffdf8;
+    --input-border: #c9b99f;
+    --input-placeholder: #9a8d7c;
+    --focus-ring: rgba(124, 90, 34, 0.18);
 
-    --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.06);
-    --shadow-md: 0 12px 30px rgba(15, 23, 42, 0.08);
-    --shadow-color: rgba(15, 23, 42, 0.12);
+    --shadow-sm: 0 4px 12px rgba(72, 55, 35, 0.08);
+    --shadow-md: 0 18px 42px rgba(72, 55, 35, 0.14);
+    --shadow-color: rgba(72, 55, 35, 0.16);
 
-    --radius-sm: 8px;
-    --radius-md: 12px;
-    --radius-lg: 18px;
-    --radius-xl: 24px;
+    --radius-sm: 4px;
+    --radius-md: 8px;
+    --radius-lg: 12px;
+    --radius-xl: 14px;
 
     --mono-font: 'Fira Code', 'JetBrains Mono', 'Consolas', 'Monaco', 'Courier New', monospace;
-    --code-bg: #eef2f7;
-    --code-text: #0f172a;
-    --code-block-bg: #111827;
+    --code-bg: #f5ead7;
+    --code-text: #25211d;
+    --code-block-bg: #2a241d;
     --code-block-text: #e5e7eb;
-    --blockquote-bg: #f8fafc;
-    --blockquote-border: #60a5fa;
-    --table-header-bg: #f1f5f9;
-    --table-border: #dbe4ef;
-    --table-hover: #f8fafc;
+    --blockquote-bg: #faf7ef;
+    --blockquote-border: #c4933a;
+    --table-header-bg: #f5ead7;
+    --table-border: #ded5c7;
+    --table-hover: #faf7ef;
 
-    --scrollbar-track: #edf2f7;
-    --scrollbar-thumb: #cbd5e1;
+    --scrollbar-track: #eee6d9;
+    --scrollbar-thumb: #c9b99f;
 
-    --sources-panel-bg: #ffffff;
-    --sources-panel-border: #dbe4ef;
-    --copy-btn-bg: #f8fafc;
-    --copy-btn-hover: #e8eef7;
-    --copy-btn-text: #64748b;
-    --toast-bg: #172033;
+    --sources-panel-bg: #fffdf8;
+    --sources-panel-border: #ded5c7;
+    --copy-btn-bg: #faf7ef;
+    --copy-btn-hover: #f5ead7;
+    --copy-btn-text: #71695f;
+    --toast-bg: #25211d;
     --toast-text: #ffffff;
 
-    --header-bg: #ffffff;
-    --header-border: #dbe4ef;
-    --header-text: #172033;
-    --badge-bg: #eff6ff;
-    --badge-text: #1d4ed8;
-    --link-color: #2563eb;
-    --link-hover: #1d4ed8;
+    --header-bg: rgba(255, 253, 248, 0.76);
+    --header-border: #ded5c7;
+    --header-text: #25211d;
+    --badge-bg: #f5ead7;
+    --badge-text: #5d4218;
+    --link-color: #7c5a22;
+    --link-hover: #5d4218;
 }
 
 /* Переменные для тёмной темы */
 [data-theme="dark"] {
-    --primary-color: #60a5fa;
-    --primary-hover: #93c5fd;
-    --primary-light: rgba(96, 165, 250, 0.18);
-    --primary-soft: rgba(96, 165, 250, 0.12);
-    --accent-color: #2dd4bf;
+    --primary-color: #d3a858;
+    --primary-hover: #f0c979;
+    --primary-light: rgba(211, 168, 88, 0.18);
+    --primary-soft: rgba(211, 168, 88, 0.13);
+    --accent-color: #f0c979;
 
-    --bg-color: #0b1120;
-    --chat-bg: #101827;
-    --surface-color: #111c2f;
-    --surface-muted: #0f172a;
-    --surface-elevated: #172033;
+    --bg-color: #17130f;
+    --chat-bg: #211b15;
+    --surface-color: #282118;
+    --surface-muted: #1d1812;
+    --surface-elevated: #2d251b;
 
-    --sidebar-bg: linear-gradient(180deg, #0f172a 0%, #111827 100%);
-    --sidebar-text: #e5edf7;
-    --sidebar-border: #263244;
-    --sidebar-hover: rgba(148, 163, 184, 0.1);
+    --sidebar-bg: rgba(33, 27, 21, 0.92);
+    --sidebar-text: #f4eadb;
+    --sidebar-border: #443827;
+    --sidebar-hover: rgba(211, 168, 88, 0.12);
 
-    --user-message-bg: linear-gradient(135deg, #2563eb 0%, #1e40af 100%);
+    --user-message-bg: linear-gradient(135deg, #8c6628 0%, #5d4218 100%);
     --user-message-text: #ffffff;
-    --bot-message-bg: #111c2f;
-    --bot-message-text: #e5edf7;
-    --bot-message-border: #263244;
+    --bot-message-bg: #2d251b;
+    --bot-message-text: #f4eadb;
+    --bot-message-border: #443827;
 
-    --border-color: #263244;
-    --border-strong: #334155;
-    --text-color: #e5edf7;
-    --secondary-text: #9aa8bd;
-    --muted-text: #64748b;
+    --border-color: #443827;
+    --border-strong: #5f4f37;
+    --text-color: #f4eadb;
+    --secondary-text: #c4b49b;
+    --muted-text: #8f806a;
 
     --success-color: #22c55e;
     --error-color: #f87171;
     --warning-color: #f59e0b;
 
-    --input-bg: #0f172a;
-    --input-border: #334155;
-    --input-placeholder: #64748b;
-    --focus-ring: rgba(96, 165, 250, 0.24);
+    --input-bg: #1d1812;
+    --input-border: #5f4f37;
+    --input-placeholder: #8f806a;
+    --focus-ring: rgba(211, 168, 88, 0.24);
 
     --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.25);
     --shadow-md: 0 18px 42px rgba(0, 0, 0, 0.32);
     --shadow-color: rgba(0, 0, 0, 0.38);
 
-    --code-bg: #1e293b;
-    --code-text: #dbeafe;
-    --code-block-bg: #020617;
-    --code-block-text: #e2e8f0;
-    --blockquote-bg: rgba(96, 165, 250, 0.08);
-    --blockquote-border: #60a5fa;
-    --table-header-bg: #172033;
-    --table-border: #334155;
-    --table-hover: rgba(148, 163, 184, 0.08);
+    --code-bg: #3a3023;
+    --code-text: #f4eadb;
+    --code-block-bg: #100d0a;
+    --code-block-text: #f4eadb;
+    --blockquote-bg: rgba(211, 168, 88, 0.08);
+    --blockquote-border: #d3a858;
+    --table-header-bg: #2d251b;
+    --table-border: #443827;
+    --table-hover: rgba(211, 168, 88, 0.08);
 
-    --scrollbar-track: #0f172a;
-    --scrollbar-thumb: #475569;
+    --scrollbar-track: #1d1812;
+    --scrollbar-thumb: #5f4f37;
 
-    --sources-panel-bg: #101827;
-    --sources-panel-border: #263244;
+    --sources-panel-bg: #211b15;
+    --sources-panel-border: #443827;
     --copy-btn-bg: rgba(255, 255, 255, 0.06);
     --copy-btn-hover: rgba(255, 255, 255, 0.12);
     --copy-btn-text: #9aa8bd;
     --toast-bg: #e5edf7;
     --toast-text: #0b1120;
 
-    --header-bg: rgba(16, 24, 39, 0.92);
-    --header-border: #263244;
-    --header-text: #e5edf7;
-    --badge-bg: rgba(96, 165, 250, 0.14);
-    --badge-text: #bfdbfe;
-    --link-color: #93c5fd;
-    --link-hover: #bfdbfe;
+    --header-bg: rgba(33, 27, 21, 0.9);
+    --header-border: #443827;
+    --header-text: #f4eadb;
+    --badge-bg: rgba(211, 168, 88, 0.14);
+    --badge-text: #f0c979;
+    --link-color: #f0c979;
+    --link-hover: #ffe2a0;
 }
 
 /* Переключатель тем */

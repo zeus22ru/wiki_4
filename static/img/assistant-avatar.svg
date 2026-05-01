@@ -1,0 +1,17 @@
+<svg width="96" height="96" viewBox="0 0 96 96" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="AI assistant avatar">
+  <rect x="8" y="8" width="80" height="80" rx="22" fill="#FFFDF8"/>
+  <rect x="8.75" y="8.75" width="78.5" height="78.5" rx="21.25" stroke="#DED5C7" stroke-width="1.5"/>
+  <path d="M28 58.5C28 47.73 36.73 39 47.5 39H48.5C59.27 39 68 47.73 68 58.5V64C68 66.21 66.21 68 64 68H32C29.79 68 28 66.21 28 64V58.5Z" fill="#F5EAD7"/>
+  <path d="M32 55.5C32 46.94 38.94 40 47.5 40H48.5C57.06 40 64 46.94 64 55.5V60.5C64 62.43 62.43 64 60.5 64H35.5C33.57 64 32 62.43 32 60.5V55.5Z" fill="#FAF7EF"/>
+  <circle cx="38" cy="55" r="4" fill="#7C5A22"/>
+  <circle cx="58" cy="55" r="4" fill="#7C5A22"/>
+  <path d="M42 63C45.6 65.67 50.4 65.67 54 63" stroke="#7C5A22" stroke-width="3" stroke-linecap="round"/>
+  <path d="M48 28V38" stroke="#7C5A22" stroke-width="4" stroke-linecap="round"/>
+  <circle cx="48" cy="25" r="5" fill="#C4933A"/>
+  <path d="M24 49C24 42.92 28.92 38 35 38" stroke="#C9B99F" stroke-width="4" stroke-linecap="round"/>
+  <path d="M72 49C72 42.92 67.08 38 61 38" stroke="#C9B99F" stroke-width="4" stroke-linecap="round"/>
+  <path d="M22 58H28" stroke="#7C5A22" stroke-width="4" stroke-linecap="round"/>
+  <path d="M68 58H74" stroke="#7C5A22" stroke-width="4" stroke-linecap="round"/>
+  <path d="M24 22L30 18L36 22L30 26L24 22Z" fill="#C4933A" opacity="0.85"/>
+  <path d="M62 76L68 72L74 76L68 80L62 76Z" fill="#C4933A" opacity="0.7"/>
+</svg>

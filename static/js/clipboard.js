@@ -178,7 +178,7 @@ class ClipboardManager {
         
         messages.forEach((message, index) => {
             const isUser = message.closest('.user-message');
-            const prefix = isUser ? '👤 Вы: ' : '🤖 Бот: ';
+            const prefix = isUser ? 'Вы: ' : 'Бот: ';
             fullText += prefix + this.getTextToCopy(message) + '\n\n';
         });
 
