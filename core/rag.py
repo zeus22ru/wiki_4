@@ -72,6 +72,7 @@ class RAGResult:
     sources: List[Dict]
     #: Код ошибки retrieval: embedding_unavailable | search_error | None при успехе или «нет документов»
     retrieve_error: Optional[str] = None
+    diagnostics: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict:
         """Преобразование в словарь"""
@@ -82,6 +83,8 @@ class RAGResult:
         }
         if self.retrieve_error is not None:
             d['retrieve_error'] = self.retrieve_error
+        if self.diagnostics is not None:
+            d['diagnostics'] = self.diagnostics
         return d
 
 
@@ -358,7 +361,8 @@ class RAGSystem:
         self,
         query: str,
         documents: List[Dict],
-        max_context_length: Optional[int] = None
+        max_context_length: Optional[int] = None,
+        answer_mode: str = "default"
     ) -> str:
         """
         Генерация промпта для RAG с контекстом
@@ -415,6 +419,14 @@ class RAGSystem:
         
         context = "\n---\n".join(context_parts)
         
+        mode_instructions = {
+            "brief": "Дай краткий ответ в 2-4 предложениях, но не теряй ключевые условия.",
+            "detailed": "Дай подробный структурированный ответ с шагами и важными оговорками.",
+            "sources_only": "Отвечай только тем, что явно следует из контекста. Если данных мало, прямо скажи об этом.",
+            "steps": "Дай пошаговое объяснение с нумерованными шагами.",
+        }
+        extra_instruction = mode_instructions.get(answer_mode, "Дай полезный структурированный ответ.")
+
         # Формируем промпт
         prompt = f"""Ты - полезный ассистент, который отвечает на вопросы на основе предоставленного контекста.
 
@@ -430,6 +442,7 @@ class RAGSystem:
 3. Ссылайся на источники в ответе, используя формат [Источник: название].
 4. Не выдумывай информацию, которой нет в контексте.
 5. Форматируй ответ с использованием Markdown для лучшей читаемости.
+6. Режим ответа: {extra_instruction}
 
 ОТВЕТ:"""
         
@@ -455,7 +468,8 @@ class RAGSystem:
         top_k: Optional[int] = None,
         min_score: Optional[float] = None,
         include_citations: bool = True,
-        max_citations: Optional[int] = None
+        max_citations: Optional[int] = None,
+        answer_mode: str = "default"
     ) -> RAGResult:
         """
         Выполнение RAG запроса
@@ -498,6 +512,7 @@ class RAGSystem:
                 citations=[],
                 sources=[],
                 retrieve_error="embedding_unavailable",
+                diagnostics={"retrieval_status": "embedding_unavailable", "latency_ms": int(elapsed * 1000)},
             )
         
         if retrieve_error == "search_error":
@@ -508,6 +523,7 @@ class RAGSystem:
                 citations=[],
                 sources=[],
                 retrieve_error="search_error",
+                diagnostics={"retrieval_status": "search_error", "latency_ms": int(elapsed * 1000)},
             )
         
         if not documents:
@@ -516,14 +532,15 @@ class RAGSystem:
             return RAGResult(
                 answer="К сожалению, я не нашёл релевантной информации для ответа на ваш вопрос.",
                 citations=[],
-                sources=[]
+                sources=[],
+                diagnostics={"retrieval_status": "no_documents", "latency_ms": int(elapsed * 1000)},
             )
         
         rag_logger.debug(f"Найдено {len(documents)} релевантных документов")
         
         # 2. Генерация промпта с контекстом
         rag_logger.debug("Шаг 2: Генерация промпта с контекстом")
-        prompt = self.generate_rag_prompt(query, documents)
+        prompt = self.generate_rag_prompt(query, documents, answer_mode=answer_mode)
         
         # 3. Генерация ответа через Ollama
         rag_logger.debug("Шаг 3: Генерация ответа через Ollama")
@@ -534,6 +551,15 @@ class RAGSystem:
         rag_result = self.enrich_answer_with_citations(answer, documents, max_citations)
         
         elapsed = time.time() - start_time
+        rag_result.diagnostics = {
+            "retrieval_status": "ok",
+            "document_count": len(documents),
+            "score_distribution": [round(float(d.get("score", 0)), 4) for d in documents],
+            "top_k": top_k,
+            "min_score": min_score,
+            "answer_mode": answer_mode,
+            "latency_ms": int(elapsed * 1000),
+        }
         rag_logger.info(f"RAG запрос завершен за {elapsed:.3f} сек")
         rag_logger.debug(f"Результат: {len(documents)} документов, {len(rag_result.citations)} цитат")
         
@@ -544,6 +570,7 @@ class RAGSystem:
         query: str,
         documents: List[Dict],
         max_citations: Optional[int] = None,
+        answer_mode: str = "default",
     ) -> Iterator[Dict[str, Any]]:
         """
         Потоковая генерация ответа по уже найденным документам.
@@ -554,13 +581,19 @@ class RAGSystem:
         """
         max_citations = max_citations if max_citations is not None else settings.RAG_MAX_CITATIONS
         rag_logger.info("Потоковая генерация RAG-ответа (%s документов)", len(documents))
-        prompt = self.generate_rag_prompt(query, documents)
+        prompt = self.generate_rag_prompt(query, documents, answer_mode=answer_mode)
         parts: List[str] = []
         for fragment in chat_completion_stream(prompt, timeout=120):
             parts.append(fragment)
             yield {"type": "delta", "text": fragment}
         answer = "".join(parts)
         rag_result = self.enrich_answer_with_citations(answer, documents, max_citations)
+        rag_result.diagnostics = {
+            "retrieval_status": "ok",
+            "document_count": len(documents),
+            "score_distribution": [round(float(d.get("score", 0)), 4) for d in documents],
+            "answer_mode": answer_mode,
+        }
         yield {"type": "done", "rag_result": rag_result}
     
     def enrich_answer_with_citations(

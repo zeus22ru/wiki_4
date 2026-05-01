@@ -23,9 +23,13 @@ def get_chats():
         limit = request.args.get('limit', 50, type=int)
         offset = request.args.get('offset', 0, type=int)
         user_id = request.args.get('user_id', type=int)
+        search = (request.args.get('q') or '').strip()
         
         chat_history = get_chat_history()
-        sessions = chat_history.get_sessions(user_id=user_id, limit=limit, offset=offset)
+        if search:
+            sessions = chat_history.search_sessions(search, limit=limit)
+        else:
+            sessions = chat_history.get_sessions(user_id=user_id, limit=limit, offset=offset)
         
         logger.info(f"Получен список чатов: {len(sessions)} сессий")
         
@@ -66,7 +70,7 @@ def get_chat(chat_id: int):
 def create_chat():
     """Создать новый чат"""
     try:
-        data = request.get_json()
+        data = request.get_json(silent=True) or {}
         
         title = data.get('title', 'Новый чат')
         user_id = data.get('user_id')
@@ -86,7 +90,7 @@ def create_chat():
 def update_chat(chat_id: int):
     """Обновить чат"""
     try:
-        data = request.get_json()
+        data = request.get_json(silent=True) or {}
         title = data.get('title')
         
         if not title:
@@ -130,11 +134,13 @@ def delete_chat(chat_id: int):
 def add_message(chat_id: int):
     """Добавить сообщение в чат"""
     try:
-        data = request.get_json()
+        data = request.get_json(silent=True) or {}
         
         role = data.get('role', 'user')
         content = data.get('content', '')
         sources = data.get('sources', [])
+        citations = data.get('citations', [])
+        metadata = data.get('metadata', {})
         
         if not content:
             return jsonify({'error': 'Не указано содержание сообщения'}), 400
@@ -154,7 +160,9 @@ def add_message(chat_id: int):
             session_id=chat_id,
             role=role,
             content=content,
-            sources=sources
+            sources=sources,
+            citations=citations,
+            metadata=metadata
         )
         
         logger.info(f"Добавлено сообщение в чат {chat_id}")
@@ -187,3 +195,37 @@ def get_messages(chat_id: int):
     except Exception as e:
         logger.error(f"Ошибка при получении сообщений чата {chat_id}: {e}")
         return jsonify({'error': 'Ошибка при получении сообщений'}), 500
+
+
+@chat_bp.route('/feedback', methods=['GET'])
+def get_feedback():
+    """Получить последние оценки ответов"""
+    try:
+        limit = request.args.get('limit', 50, type=int)
+        chat_history = get_chat_history()
+        return jsonify({'feedback': chat_history.get_feedback(limit=limit)})
+    except Exception as e:
+        logger.error(f"Ошибка при получении feedback: {e}")
+        return jsonify({'error': 'Ошибка при получении оценок'}), 500
+
+
+@chat_bp.route('/feedback', methods=['POST'])
+def add_feedback():
+    """Сохранить оценку ответа"""
+    try:
+        data = request.get_json(silent=True) or {}
+        rating = data.get('rating')
+        if rating not in ['up', 'down']:
+            return jsonify({'error': 'rating должен быть up или down'}), 400
+
+        chat_history = get_chat_history()
+        feedback = chat_history.add_feedback(
+            session_id=data.get('session_id'),
+            message_id=data.get('message_id'),
+            rating=rating,
+            comment=data.get('comment'),
+        )
+        return jsonify(feedback), 201
+    except Exception as e:
+        logger.error(f"Ошибка при сохранении feedback: {e}")
+        return jsonify({'error': 'Ошибка при сохранении оценки'}), 500

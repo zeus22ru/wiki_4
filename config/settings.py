@@ -107,6 +107,8 @@ class Settings:
     SECRET_KEY: str = os.getenv("SECRET_KEY", "your-secret-key-here-change-in-production")
     JWT_SECRET_KEY: str = os.getenv("JWT_SECRET_KEY", "your-jwt-secret-key-change-in-production")
     JWT_EXPIRATION_HOURS: int = int(os.getenv("JWT_EXPIRATION_HOURS", "24"))
+    API_KEY: str = os.getenv("API_KEY", "")
+    ADMIN_API_KEY: str = os.getenv("ADMIN_API_KEY", "")
 
     # Database настройки
     DATABASE_PATH: str = os.getenv("DATABASE_PATH", "./data/wiki_qa.db")

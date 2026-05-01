@@ -4,6 +4,6 @@
 API маршруты
 """
 
-from . import chat
+from . import admin, chat, documents
 
-__all__ = ['chat']
+__all__ = ['admin', 'chat', 'documents']

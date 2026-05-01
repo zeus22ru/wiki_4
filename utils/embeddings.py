@@ -197,7 +197,12 @@ def chat_completion_stream(prompt: str, timeout: int = 120) -> Iterator[str]:
                     if not choices:
                         continue
                     delta = choices[0].get("delta") or {}
-                    content = delta.get("content")
+                    content = (
+                        delta.get("content")
+                        or delta.get("reasoning_content")
+                        or delta.get("reasoning")
+                        or delta.get("thinking")
+                    )
                     if content:
                         yield content
         except requests.exceptions.HTTPError as e:

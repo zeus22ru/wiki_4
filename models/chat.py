@@ -69,6 +69,8 @@ class Message:
         role: str = "user",  # "user" или "assistant"
         content: str = "",
         sources: Optional[List[Dict[str, Any]]] = None,
+        citations: Optional[List[Dict[str, Any]]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
         created_at: Optional[datetime] = None
     ):
         self.id = id
@@ -76,6 +78,8 @@ class Message:
         self.role = role
         self.content = content
         self.sources = sources or []
+        self.citations = citations or []
+        self.metadata = metadata or {}
         self.created_at = created_at or datetime.now()
     
     def to_dict(self) -> Dict[str, Any]:
@@ -86,6 +90,8 @@ class Message:
             'role': self.role,
             'content': self.content,
             'sources': self.sources,
+            'citations': self.citations,
+            'metadata': self.metadata,
             'created_at': self.created_at.isoformat() if self.created_at else None
         }
     
@@ -98,6 +104,8 @@ class Message:
             role=data.get('role', 'user'),
             content=data.get('content', ''),
             sources=data.get('sources', []),
+            citations=data.get('citations', []),
+            metadata=data.get('metadata', {}),
             created_at=datetime.fromisoformat(data['created_at']) if data.get('created_at') else None
         )
     
@@ -110,6 +118,18 @@ class Message:
                 sources = json.loads(row[4])
             except json.JSONDecodeError:
                 pass
+        citations = []
+        metadata = {}
+        if len(row) > 6 and row[6]:  # citations_json
+            try:
+                citations = json.loads(row[6])
+            except json.JSONDecodeError:
+                pass
+        if len(row) > 7 and row[7]:  # metadata_json
+            try:
+                metadata = json.loads(row[7])
+            except json.JSONDecodeError:
+                pass
         
         return cls(
             id=row[0],
@@ -117,5 +137,7 @@ class Message:
             role=row[2],
             content=row[3],
             sources=sources,
+            citations=citations,
+            metadata=metadata,
             created_at=datetime.fromisoformat(row[5]) if row[5] else None
         )

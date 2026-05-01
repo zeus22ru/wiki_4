@@ -17,9 +17,12 @@ from config import settings, get_logger, inference_server_reachable, fetch_remot
 
 # Импорт RAG системы
 from core.rag import RAGSystem, RAGResult
+from core.chat_history import get_chat_history
 
 # Импорт общих функций для работы с эмбеддингами
 from api.routes.chat import chat_bp
+from api.routes.documents import documents_bp
+from api.routes.admin import admin_bp
 
 # Получаем логгер для этого модуля
 logger = get_logger(__name__)
@@ -46,7 +49,55 @@ def _rag_result_to_api_dict(rag_result: RAGResult) -> dict:
         "answer": rag_result.answer,
         "sources": sources,
         "citations": citations,
+        "diagnostics": rag_result.diagnostics or {},
     }
+
+
+def _get_json_body() -> dict:
+    """Единая безопасная обработка JSON body."""
+    data = request.get_json(silent=True)
+    return data if isinstance(data, dict) else {}
+
+
+def _int_or_none(value):
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _chat_options(data: dict) -> dict:
+    try:
+        min_score = float(data["min_score"]) if data.get("min_score") is not None else None
+    except (TypeError, ValueError):
+        min_score = None
+    return {
+        "top_k": _int_or_none(data.get("top_k")),
+        "min_score": min_score,
+        "answer_mode": data.get("answer_mode") or "default",
+    }
+
+
+def _resolve_chat_session(data: dict, query: str):
+    chat_history = get_chat_history()
+    chat_id = _int_or_none(data.get("chat_id"))
+    if chat_id and chat_history.get_session(chat_id):
+        return chat_history, chat_id
+    title = (query[:60] + "...") if len(query) > 60 else query
+    session = chat_history.create_session(user_id=data.get("user_id"), title=title or "Новый чат")
+    return chat_history, session.id
+
+
+def _maybe_update_chat_title(chat_history, chat_id: int, query: str) -> None:
+    """Переименовать новый пустой чат по первому успешному вопросу."""
+    session = chat_history.get_session(chat_id)
+    if not session or session.title != "Новый чат":
+        return
+    title = query.strip()
+    if len(title) > 60:
+        title = title[:57].rstrip() + "..."
+    if title:
+        chat_history.update_session(chat_id, title=title)
 
 
 def _sse_event(payload: dict) -> str:
@@ -62,6 +113,8 @@ else:
     CORS(app, origins=_origin_list or ["http://127.0.0.1:5000", "http://localhost:5000"])
 
 app.register_blueprint(chat_bp)
+app.register_blueprint(documents_bp)
+app.register_blueprint(admin_bp)
 
 if not settings.FLASK_DEBUG:
     settings.validate()
@@ -179,13 +232,14 @@ def health_check():
 @log_api_request
 def chat():
     """Обработка запроса чата с использованием RAG системы"""
-    data = request.get_json()
+    data = _get_json_body()
     
     if not data or 'message' not in data:
         logger.warning("Получен запрос без сообщения")
         return jsonify({"error": "Не указано сообщение"}), 400
     
     query = data['message'].strip()
+    options = _chat_options(data)
     logger.info(f"Запрос чата: '{query[:100]}...'")
     
     if not query:
@@ -214,7 +268,22 @@ def chat():
     # Полная RAG-цепочка одним вызовом (порог и top_k — из settings.RAG_MIN_SCORE / RAG_TOP_K)
     logger.info(f"Выполнение RAG запроса: '{query}'")
     try:
-        rag_result = rag.query(query, max_citations=settings.RAG_MAX_CITATIONS)
+        chat_history, chat_id = _resolve_chat_session(data, query)
+        chat_history.add_message(
+            session_id=chat_id,
+            role="user",
+            content=query,
+            metadata={"answer_mode": options["answer_mode"]},
+        )
+        started = time.time()
+        rag_result = rag.query(
+            query,
+            top_k=options["top_k"],
+            min_score=options["min_score"],
+            max_citations=settings.RAG_MAX_CITATIONS,
+            answer_mode=options["answer_mode"],
+        )
+        latency_ms = int((time.time() - started) * 1000)
         logger.info(f"Сгенерирован ответ длиной {len(rag_result.answer)} символов")
         logger.info(f"Извлечено {len(rag_result.citations)} цитат")
     except Exception:
@@ -225,17 +294,46 @@ def chat():
         logger.error(
             "Эмбеддинг запроса не получен — в Chroma есть векторы, но поиск без эмбеддинга вопроса невозможен"
         )
-        return jsonify({
+        payload = {
             "answer": rag_result.answer,
             "sources": [],
             "citations": [],
-        })
+            "chat_id": chat_id,
+            "diagnostics": rag_result.diagnostics or {},
+        }
+        chat_history.add_message(
+            session_id=chat_id,
+            role="assistant",
+            content=rag_result.answer,
+            metadata={"retrieve_error": "embedding_unavailable", "latency_ms": latency_ms},
+        )
+        return jsonify(payload)
 
     if rag_result.retrieve_error == "search_error":
         logger.error("Ошибка Chroma при поиске")
         return jsonify({"error": "Ошибка поиска в векторной базе"}), 500
 
     payload = _rag_result_to_api_dict(rag_result)
+    payload["chat_id"] = chat_id
+    assistant_message = chat_history.add_message(
+        session_id=chat_id,
+        role="assistant",
+        content=payload["answer"],
+        sources=payload["sources"],
+        citations=payload["citations"],
+        metadata={
+            "model_name": settings.OLLAMA_CHAT_MODEL,
+            "rag_settings_snapshot": {
+                "top_k": options["top_k"] or settings.RAG_TOP_K,
+                "min_score": options["min_score"] if options["min_score"] is not None else settings.RAG_MIN_SCORE,
+                "answer_mode": options["answer_mode"],
+            },
+            "latency_ms": latency_ms,
+            "diagnostics": payload.get("diagnostics", {}),
+        },
+    )
+    _maybe_update_chat_title(chat_history, chat_id, query)
+    payload["message_id"] = assistant_message.id
     logger.debug(f"Источники: {[s['title'] for s in payload['sources']]}")
     return jsonify(payload)
 
@@ -244,13 +342,14 @@ def chat():
 @log_api_request
 def chat_stream():
     """RAG-чат с потоковой передачей текста (SSE). Итоговые sources/citations — в событии type=done."""
-    data = request.get_json()
+    data = _get_json_body()
 
     if not data or 'message' not in data:
         logger.warning("stream: запрос без сообщения")
         return jsonify({"error": "Не указано сообщение"}), 400
 
     query = data['message'].strip()
+    options = _chat_options(data)
     if not query:
         return jsonify({"error": "Пустое сообщение"}), 400
     if len(query) < 3:
@@ -267,7 +366,13 @@ def chat_stream():
             "error": "Сервер LLM недоступен. Проверьте OLLAMA_URL и запуск Ollama или LM Studio.",
         }), 500
 
-    documents, retrieve_error = rag.retrieve_documents(query)
+    chat_history, chat_id = _resolve_chat_session(data, query)
+    chat_history.add_message(
+        session_id=chat_id,
+        role="user",
+        content=query,
+        metadata={"answer_mode": options["answer_mode"]},
+    )
 
     stream_headers = {
         "Cache-Control": "no-cache, no-transform",
@@ -275,44 +380,72 @@ def chat_stream():
         "Content-Type": "text/event-stream; charset=utf-8",
     }
 
-    if retrieve_error == "embedding_unavailable":
-        rr = RAGResult(
-            answer=(
-                "Поиск по базе не выполнен: не удалось получить эмбеддинг для вашего вопроса. "
-                "Индекс в Chroma уже заполнен, но для каждого запроса нужна работающая модель эмбеддингов "
-                "(например, загрузите модель в LM Studio и проверьте OLLAMA_EMBEDDING_MODEL и INFERENCE_BACKEND=lmstudio)."
-            ),
-            citations=[],
-            sources=[],
-            retrieve_error="embedding_unavailable",
-        )
-
-        def gen_embed_err():
-            payload = {"type": "done", **_rag_result_to_api_dict(rr)}
-            yield _sse_event(payload)
-
-        return Response(stream_with_context(gen_embed_err()), headers=stream_headers)
-
-    if retrieve_error == "search_error":
-        return jsonify({"error": "Ошибка поиска в векторной базе"}), 500
-
-    if not documents:
-        rr = RAGResult(
-            answer="К сожалению, я не нашёл релевантной информации для ответа на ваш вопрос.",
-            citations=[],
-            sources=[],
-        )
-
-        def gen_no_docs():
-            yield _sse_event({"type": "done", **_rag_result_to_api_dict(rr)})
-
-        return Response(stream_with_context(gen_no_docs()), headers=stream_headers)
-
     def generate():
         # Комментарий SSE: первый байты уходят клиенту до первого токена LLM (лучше для прокси/буферов).
         yield ": stream-open\n\n"
+        yield _sse_event({"type": "status", "message": "Ищу релевантные документы..."})
+        started = time.time()
         try:
-            for evt in rag.stream_rag_answer(query, documents, settings.RAG_MAX_CITATIONS):
+            documents, retrieve_error = rag.retrieve_documents(query, options["top_k"], options["min_score"])
+
+            if retrieve_error == "embedding_unavailable":
+                rr = RAGResult(
+                    answer=(
+                        "Поиск по базе не выполнен: не удалось получить эмбеддинг для вашего вопроса. "
+                        "Индекс в Chroma уже заполнен, но для каждого запроса нужна работающая модель эмбеддингов "
+                        "(например, загрузите модель в LM Studio и проверьте OLLAMA_EMBEDDING_MODEL и INFERENCE_BACKEND=lmstudio)."
+                    ),
+                    citations=[],
+                    sources=[],
+                    retrieve_error="embedding_unavailable",
+                )
+                assistant_message = chat_history.add_message(
+                    session_id=chat_id,
+                    role="assistant",
+                    content=rr.answer,
+                    metadata={"retrieve_error": "embedding_unavailable"},
+                )
+                _maybe_update_chat_title(chat_history, chat_id, query)
+                yield _sse_event({
+                    "type": "done",
+                    "chat_id": chat_id,
+                    "message_id": assistant_message.id,
+                    **_rag_result_to_api_dict(rr),
+                })
+                return
+
+            if retrieve_error == "search_error":
+                yield _sse_event({"type": "error", "message": "Ошибка поиска в векторной базе"})
+                return
+
+            if not documents:
+                rr = RAGResult(
+                    answer="К сожалению, я не нашёл релевантной информации для ответа на ваш вопрос.",
+                    citations=[],
+                    sources=[],
+                )
+                assistant_message = chat_history.add_message(
+                    session_id=chat_id,
+                    role="assistant",
+                    content=rr.answer,
+                    metadata={"retrieval_status": "no_documents"},
+                )
+                _maybe_update_chat_title(chat_history, chat_id, query)
+                yield _sse_event({
+                    "type": "done",
+                    "chat_id": chat_id,
+                    "message_id": assistant_message.id,
+                    **_rag_result_to_api_dict(rr),
+                })
+                return
+
+            yield _sse_event({"type": "status", "message": "Документы найдены, модель формирует ответ..."})
+            for evt in rag.stream_rag_answer(
+                query,
+                documents,
+                settings.RAG_MAX_CITATIONS,
+                answer_mode=options["answer_mode"],
+            ):
                 if evt.get("type") == "delta":
                     yield _sse_event({"type": "delta", "text": evt.get("text", "")})
                 elif evt.get("type") == "done":
@@ -320,7 +453,31 @@ def chat_stream():
                     if rag_result is None:
                         yield _sse_event({"type": "error", "message": "Пустой результат RAG"})
                         return
-                    yield _sse_event({"type": "done", **_rag_result_to_api_dict(rag_result)})
+                    payload = _rag_result_to_api_dict(rag_result)
+                    assistant_message = chat_history.add_message(
+                        session_id=chat_id,
+                        role="assistant",
+                        content=payload["answer"],
+                        sources=payload["sources"],
+                        citations=payload["citations"],
+                        metadata={
+                            "model_name": settings.OLLAMA_CHAT_MODEL,
+                            "rag_settings_snapshot": {
+                                "top_k": options["top_k"] or settings.RAG_TOP_K,
+                                "min_score": options["min_score"] if options["min_score"] is not None else settings.RAG_MIN_SCORE,
+                                "answer_mode": options["answer_mode"],
+                            },
+                            "latency_ms": int((time.time() - started) * 1000),
+                            "diagnostics": payload.get("diagnostics", {}),
+                        },
+                    )
+                    _maybe_update_chat_title(chat_history, chat_id, query)
+                    yield _sse_event({
+                        "type": "done",
+                        "chat_id": chat_id,
+                        "message_id": assistant_message.id,
+                        **payload,
+                    })
         except Exception:
             logger.error("Ошибка в потоке /api/chat/stream:\n%s", traceback.format_exc())
             yield _sse_event({
@@ -350,6 +507,14 @@ def log_request_info():
     # Пропускаем логирование статических файлов
     if request.path.startswith('/static'):
         return
+    if settings.API_KEY and request.path.startswith('/api/'):
+        api_key = request.headers.get("X-API-Key") or request.args.get("api_key")
+        admin_key = request.headers.get("X-Admin-Key") or request.args.get("admin_key")
+        if request.path.startswith('/api/admin') and settings.ADMIN_API_KEY:
+            if admin_key != settings.ADMIN_API_KEY:
+                return jsonify({"error": "Требуется админ-доступ"}), 401
+        elif api_key != settings.API_KEY and admin_key != settings.ADMIN_API_KEY:
+            return jsonify({"error": "Требуется API key"}), 401
     
     logger.info(
         f"Request: {request.method} {request.path} | "

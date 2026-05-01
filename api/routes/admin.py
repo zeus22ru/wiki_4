@@ -1,0 +1,92 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""Админ-диагностика без раскрытия секретов."""
+
+from flask import Blueprint, jsonify
+import chromadb
+
+from config import (
+    settings,
+    get_logger,
+    inference_server_reachable,
+    fetch_remote_model_ids,
+)
+from core.chat_history import get_chat_history
+
+logger = get_logger(__name__)
+admin_bp = Blueprint("admin", __name__, url_prefix="/api/admin")
+
+
+def _public_settings() -> dict:
+    return {
+        "inference_backend": settings.INFERENCE_BACKEND,
+        "embedding_api_mode": settings.EMBEDDING_API_MODE,
+        "chat_api_mode": settings.CHAT_API_MODE,
+        "ollama_url": settings.OLLAMA_URL,
+        "embedding_model": settings.OLLAMA_EMBEDDING_MODEL,
+        "chat_model": settings.OLLAMA_CHAT_MODEL,
+        "chroma_persist_dir": settings.CHROMA_PERSIST_DIR,
+        "chroma_collection_name": settings.CHROMA_COLLECTION_NAME,
+        "data_dir": settings.DATA_DIR,
+        "upload_dir": settings.UPLOAD_DIR,
+        "rag_top_k": settings.RAG_TOP_K,
+        "rag_min_score": settings.RAG_MIN_SCORE,
+        "rag_max_citations": settings.RAG_MAX_CITATIONS,
+        "rag_max_context_length": settings.RAG_MAX_CONTEXT_LENGTH,
+        "api_host": settings.API_HOST,
+        "api_port": settings.API_PORT,
+        "cors_origins": settings.CORS_ORIGINS,
+    }
+
+
+def _chroma_status() -> dict:
+    try:
+        client = chromadb.PersistentClient(path=settings.CHROMA_PERSIST_DIR)
+        collection = client.get_collection(name=settings.CHROMA_COLLECTION_NAME)
+        return {
+            "ok": True,
+            "collection": settings.CHROMA_COLLECTION_NAME,
+            "count": collection.count(),
+        }
+    except Exception as exc:
+        return {
+            "ok": False,
+            "collection": settings.CHROMA_COLLECTION_NAME,
+            "error": str(exc),
+        }
+
+
+@admin_bp.route("/overview", methods=["GET"])
+def overview():
+    """Сводное состояние приложения, Chroma, LLM и истории."""
+    models = []
+    models_error = None
+    try:
+        models = fetch_remote_model_ids()
+    except Exception as exc:
+        models_error = str(exc)
+        logger.warning("Не удалось получить модели: %s", exc)
+
+    history = get_chat_history()
+    return jsonify({
+        "health": {
+            "llm": inference_server_reachable(),
+            "chroma": _chroma_status(),
+        },
+        "settings": _public_settings(),
+        "models": {
+            "available": models,
+            "error": models_error,
+            "current_embedding_model_present": settings.OLLAMA_EMBEDDING_MODEL in models,
+            "current_chat_model_present": settings.OLLAMA_CHAT_MODEL in models,
+        },
+        "usage": {
+            "chat_count": history.get_session_count(),
+        },
+    })
+
+
+@admin_bp.route("/settings", methods=["GET"])
+def public_settings():
+    """Безопасная выдача runtime-настроек для UI."""
+    return jsonify({"settings": _public_settings()})

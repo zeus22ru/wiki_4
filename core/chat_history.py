@@ -29,6 +29,7 @@ class ChatHistoryManager:
         """Получить соединение с базой данных"""
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
         return conn
     
     def _ensure_database_exists(self) -> None:
@@ -60,8 +61,50 @@ class ChatHistoryManager:
                     role TEXT NOT NULL,
                     content TEXT NOT NULL,
                     sources_json TEXT,
+                    citations_json TEXT,
+                    metadata_json TEXT,
                     created_at TEXT NOT NULL,
                     FOREIGN KEY (session_id) REFERENCES chat_sessions (id) ON DELETE CASCADE
+                )
+            ''')
+
+            self._ensure_column(cursor, 'messages', 'citations_json', 'TEXT')
+            self._ensure_column(cursor, 'messages', 'metadata_json', 'TEXT')
+            
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS feedback (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    message_id INTEGER,
+                    session_id INTEGER,
+                    rating TEXT NOT NULL,
+                    comment TEXT,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY (message_id) REFERENCES messages (id) ON DELETE SET NULL,
+                    FOREIGN KEY (session_id) REFERENCES chat_sessions (id) ON DELETE CASCADE
+                )
+            ''')
+            
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS documents (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    path TEXT NOT NULL UNIQUE,
+                    filename TEXT NOT NULL,
+                    file_type TEXT,
+                    size_bytes INTEGER NOT NULL DEFAULT 0,
+                    modified_at TEXT,
+                    indexed_at TEXT,
+                    status TEXT NOT NULL DEFAULT 'known',
+                    error TEXT
+                )
+            ''')
+            
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS index_jobs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    status TEXT NOT NULL,
+                    message TEXT,
+                    started_at TEXT NOT NULL,
+                    finished_at TEXT
                 )
             ''')
             
@@ -78,6 +121,13 @@ class ChatHistoryManager:
             
             conn.commit()
             logger.info("Таблицы истории чатов созданы или уже существуют")
+
+    def _ensure_column(self, cursor: sqlite3.Cursor, table: str, column: str, ddl: str) -> None:
+        """Добавить колонку при мягкой миграции SQLite."""
+        cursor.execute(f"PRAGMA table_info({table})")
+        columns = {row[1] for row in cursor.fetchall()}
+        if column not in columns:
+            cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
     
     # ========== Методы для работы с сессиями ==========
     
@@ -200,18 +250,24 @@ class ChatHistoryManager:
         session_id: int,
         role: str,
         content: str,
-        sources: Optional[List[dict]] = None
+        sources: Optional[List[dict]] = None,
+        citations: Optional[List[dict]] = None,
+        metadata: Optional[dict] = None
     ) -> Message:
         """Добавить сообщение в сессию"""
         now = datetime.now().isoformat()
         sources_json = json.dumps(sources) if sources else None
+        citations_json = json.dumps(citations) if citations else None
+        metadata_json = json.dumps(metadata) if metadata else None
         
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute('''
-                INSERT INTO messages (session_id, role, content, sources_json, created_at)
-                VALUES (?, ?, ?, ?, ?)
-            ''', (session_id, role, content, sources_json, now))
+                INSERT INTO messages (
+                    session_id, role, content, sources_json, citations_json, metadata_json, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            ''', (session_id, role, content, sources_json, citations_json, metadata_json, now))
             
             message_id = cursor.lastrowid
             conn.commit()
@@ -227,6 +283,8 @@ class ChatHistoryManager:
                 role=role,
                 content=content,
                 sources=sources or [],
+                citations=citations or [],
+                metadata=metadata or {},
                 created_at=datetime.fromisoformat(now)
             )
     
@@ -235,7 +293,7 @@ class ChatHistoryManager:
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute('''
-                SELECT id, session_id, role, content, sources_json, created_at
+                SELECT id, session_id, role, content, sources_json, created_at, citations_json, metadata_json
                 FROM messages
                 WHERE session_id = ?
                 ORDER BY created_at ASC
@@ -277,6 +335,58 @@ class ChatHistoryManager:
             cursor = conn.cursor()
             cursor.execute('SELECT COUNT(*) FROM messages WHERE session_id = ?', (session_id,))
             return cursor.fetchone()[0]
+
+    def search_sessions(self, query: str, limit: int = 20) -> List[ChatSession]:
+        """Найти сессии по заголовку или тексту сообщений."""
+        like = f"%{query}%"
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT DISTINCT s.id, s.user_id, s.title, s.created_at, s.updated_at
+                FROM chat_sessions s
+                LEFT JOIN messages m ON m.session_id = s.id
+                WHERE s.title LIKE ? OR m.content LIKE ?
+                ORDER BY s.updated_at DESC
+                LIMIT ?
+            ''', (like, like, limit))
+            return [ChatSession.from_row(row) for row in cursor.fetchall()]
+
+    def add_feedback(
+        self,
+        session_id: Optional[int],
+        message_id: Optional[int],
+        rating: str,
+        comment: Optional[str] = None
+    ) -> dict:
+        """Сохранить пользовательскую оценку ответа."""
+        now = datetime.now().isoformat()
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO feedback (message_id, session_id, rating, comment, created_at)
+                VALUES (?, ?, ?, ?, ?)
+            ''', (message_id, session_id, rating, comment, now))
+            conn.commit()
+            return {
+                "id": cursor.lastrowid,
+                "message_id": message_id,
+                "session_id": session_id,
+                "rating": rating,
+                "comment": comment,
+                "created_at": now,
+            }
+
+    def get_feedback(self, limit: int = 50) -> List[dict]:
+        """Последние оценки ответов для анализа качества."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT id, message_id, session_id, rating, comment, created_at
+                FROM feedback
+                ORDER BY created_at DESC
+                LIMIT ?
+            ''', (limit,))
+            return [dict(row) for row in cursor.fetchall()]
 
 
 # Глобальный экземпляр менеджера

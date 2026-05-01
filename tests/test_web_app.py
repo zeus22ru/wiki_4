@@ -140,6 +140,8 @@ def test_api_chat_stream_success(mock_reachable, mock_init, client):
     rv = client.post("/api/chat/stream", json={"message": "привет мир"})
     assert rv.status_code == 200
     text = rv.get_data(as_text=True)
+    assert "Ищу релевантные документы" in text
+    assert "Документы найдены" in text
     assert "Часть" in text
     assert "Полный ответ" in text
     rag.retrieve_documents.assert_called_once()
@@ -154,5 +156,6 @@ def test_api_chat_stream_search_error(mock_reachable, mock_init, client):
     mock_init.return_value = (MagicMock(), rag)
     rag.retrieve_documents.return_value = ([], "search_error")
     rv = client.post("/api/chat/stream", json={"message": "вопрос тут"})
-    assert rv.status_code == 500
+    assert rv.status_code == 200
+    assert "Ошибка поиска" in rv.get_data(as_text=True)
     rag.stream_rag_answer.assert_not_called()

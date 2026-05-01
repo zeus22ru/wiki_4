@@ -324,7 +324,7 @@ def extract_text_from_pptx(pptx_path: Path) -> Optional[Dict[str, str]]:
         return {
             "title": title or Path(pptx_path).stem,
             "content": text,
-            "path": str(pptx_path.relative_to(DATA_DIR))
+            "path": str(pptx_path.relative_to(settings.DATA_DIR))
         }
     except Exception as e:
         logger.error(f"Ошибка при чтении PPTX {pptx_path}: {e}")
