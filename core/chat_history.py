@@ -242,6 +242,20 @@ class ChatHistoryManager:
                 logger.info(f"Сессия {session_id} удалена")
             
             return deleted
+
+    def delete_all_sessions(self) -> int:
+        """Удалить все сессии чатов и связанные данные."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('DELETE FROM chat_sessions')
+            conn.commit()
+
+            deleted_count = cursor.rowcount
+
+            if deleted_count:
+                logger.info(f"Удалены все сессии чатов: {deleted_count}")
+
+            return deleted_count
     
     # ========== Методы для работы с сообщениями ==========
     

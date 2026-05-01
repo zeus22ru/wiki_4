@@ -80,6 +80,10 @@ body {
     color: var(--text-color);
 }
 
+.clear-chats-btn {
+    width: 100%;
+}
+
 .chat-list {
     display: flex;
     flex-direction: column;
@@ -1175,6 +1179,25 @@ select:focus-visible {
     border-color: var(--primary-color);
 }
 
+.source-reference-link {
+    display: inline;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--primary-color);
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
+    text-align: left;
+    text-decoration: underline;
+    text-underline-offset: 0.18em;
+}
+
+.source-reference-link:hover,
+.source-reference-link:focus-visible {
+    color: var(--primary-hover);
+}
+
 .feedback-controls button {
     background: var(--surface-muted);
 }
@@ -1223,6 +1246,15 @@ select:focus-visible {
 
 .source-item:hover {
     box-shadow: var(--shadow-md);
+}
+
+.source-item[role="button"] {
+    cursor: pointer;
+}
+
+.source-item--active {
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 2px var(--primary-soft), var(--shadow-md);
 }
 
 .source-title {

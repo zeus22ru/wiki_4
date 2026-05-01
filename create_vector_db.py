@@ -454,6 +454,7 @@ def process_all_files(data_dir: str) -> List[Dict]:
                     "text": chunk,
                     "metadata": {
                         "title": doc_data["title"],
+                        "source": doc_data["title"] or doc_data["path"],
                         "path": doc_data["path"],
                         "file_type": ext,
                         "chunk_index": j,

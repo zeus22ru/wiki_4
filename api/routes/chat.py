@@ -86,6 +86,21 @@ def create_chat():
         return jsonify({'error': 'Ошибка при создании чата'}), 500
 
 
+@chat_bp.route('', methods=['DELETE'])
+def delete_all_chats():
+    """Удалить все чаты"""
+    try:
+        chat_history = get_chat_history()
+        deleted_count = chat_history.delete_all_sessions()
+
+        logger.info(f"Очищена история чатов: {deleted_count} сессий")
+
+        return jsonify({'success': True, 'deleted': deleted_count})
+    except Exception as e:
+        logger.error(f"Ошибка при очистке истории чатов: {e}")
+        return jsonify({'error': 'Ошибка при очистке истории чатов'}), 500
+
+
 @chat_bp.route('/<int:chat_id>', methods=['PUT'])
 def update_chat(chat_id: int):
     """Обновить чат"""

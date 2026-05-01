@@ -168,6 +168,18 @@ def test_api_chat_stream_search_error(mock_reachable, mock_init, client):
     rag.stream_rag_answer.assert_not_called()
 
 
+def test_api_chats_delete_all(client):
+    manager = MagicMock()
+    manager.delete_all_sessions.return_value = 3
+
+    with patch("api.routes.chat.get_chat_history", return_value=manager):
+        rv = client.delete("/api/chats")
+
+    assert rv.status_code == 200
+    assert rv.get_json() == {"success": True, "deleted": 3}
+    manager.delete_all_sessions.assert_called_once_with()
+
+
 def test_api_documents_open_serves_file_inside_data_dir(client, tmp_path, monkeypatch):
     doc = tmp_path / "source.txt"
     doc.write_text("source content", encoding="utf-8")

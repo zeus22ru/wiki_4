@@ -8,7 +8,7 @@ import threading
 import traceback
 from uuid import uuid4
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, send_file
 from werkzeug.utils import secure_filename
 
 from config import settings, get_logger
@@ -56,6 +56,26 @@ def _scan_documents() -> list[dict]:
     return docs
 
 
+def _resolve_document_path(raw_path: str | None) -> Path | None:
+    """Разрешить путь только внутри DATA_DIR, чтобы не отдавать произвольные файлы."""
+    if not raw_path or raw_path == "N/A":
+        return None
+
+    data_dir = Path(settings.DATA_DIR).resolve()
+    requested = Path(raw_path)
+    candidates = [requested] if requested.is_absolute() else [data_dir / requested, requested]
+
+    for candidate in candidates:
+        resolved = candidate.resolve()
+        try:
+            resolved.relative_to(data_dir)
+        except ValueError:
+            continue
+        if resolved.is_file() and _allowed_file(resolved.name):
+            return resolved
+    return None
+
+
 def _set_job(job_id: str, **updates) -> None:
     with _jobs_lock:
         _jobs.setdefault(job_id, {}).update(updates)
@@ -96,6 +116,15 @@ def _run_reindex(job_id: str) -> None:
 def list_documents():
     """Список документов из DATA_DIR/UPLOAD_DIR."""
     return jsonify({"documents": _scan_documents()})
+
+
+@documents_bp.route("/open", methods=["GET"])
+def open_document():
+    """Открыть исходный документ по относительному пути из базы знаний."""
+    document_path = _resolve_document_path(request.args.get("path"))
+    if not document_path:
+        return jsonify({"error": "Документ не найден"}), 404
+    return send_file(document_path, as_attachment=False, download_name=document_path.name)
 
 
 @documents_bp.route("/upload", methods=["POST"])

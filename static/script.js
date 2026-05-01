@@ -2,6 +2,7 @@ let currentSources = [];
 let currentCitations = [];
 let currentChatId = null;
 let isProcessing = false;
+const SOURCE_REFERENCE_PATTERN = /\[Источник:\s*([^\]]+)\]/g;
 
 const messagesContainer = document.getElementById('messages');
 const messageForm = document.getElementById('messageForm');
@@ -14,6 +15,7 @@ const sourcesList = document.getElementById('sourcesList');
 const closeSources = document.getElementById('closeSources');
 const newChatBtn = document.getElementById('newChatBtn');
 const sidebarNewChatBtn = document.getElementById('sidebarNewChatBtn');
+const clearChatsBtn = document.getElementById('clearChatsBtn');
 const chatList = document.getElementById('chatList');
 const chatSearchInput = document.getElementById('chatSearchInput');
 const answerModeSelect = document.getElementById('answerModeSelect');
@@ -38,6 +40,7 @@ document.addEventListener('DOMContentLoaded', () => {
     closeSources.addEventListener('click', closeSourcesPanel);
     newChatBtn.addEventListener('click', startNewChat);
     sidebarNewChatBtn.addEventListener('click', startNewChat);
+    clearChatsBtn.addEventListener('click', clearAllChats);
     chatSearchInput.addEventListener('input', debounce(() => loadChats(chatSearchInput.value.trim()), 250));
     exportChatBtn.addEventListener('click', exportCurrentChat);
     refreshDocumentsBtn.addEventListener('click', loadDocuments);
@@ -235,6 +238,21 @@ async function deleteChat(chatId) {
     }
 }
 
+async function clearAllChats() {
+    if (!confirm('Очистить все чаты? Это действие нельзя отменить.')) {
+        return;
+    }
+    try {
+        await apiJson('/api/chats', {method: 'DELETE'});
+        currentChatId = null;
+        chatSearchInput.value = '';
+        resetMessages(true);
+        loadChats();
+    } catch (error) {
+        showInlineError(error.message);
+    }
+}
+
 async function ensureChat() {
     if (currentChatId) {
         return currentChatId;
@@ -397,6 +415,7 @@ async function readStream(response) {
                 ensureStreamShell();
                 streamContent.innerHTML = formatMessage(finalText);
                 streamContent.classList.remove('streaming-in-progress');
+                linkifySourceReferences(streamShell, payload.sources || [], payload.citations || []);
                 addSourcesButton(streamShell, payload.sources || [], payload.citations || []);
                 addFeedbackControls(streamShell, payload.message_id);
             } else if (payload.type === 'error') {
@@ -448,6 +467,9 @@ function addMessage(text, type, details = {}) {
 
     messageDiv.append(avatar, content);
     messagesContainer.appendChild(messageDiv);
+    if (type === 'bot') {
+        linkifySourceReferences(messageDiv, details.sources || [], details.citations || []);
+    }
     scrollToBottom();
     return messageDiv;
 }
@@ -490,6 +512,109 @@ function sanitizeHtml(html) {
         });
     });
     return template.innerHTML;
+}
+
+function normalizeSourceLabel(value) {
+    return String(value || '').trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+function sourceLabels(source = {}, citation = {}) {
+    return [
+        source.title,
+        source.source,
+        source.path,
+        citation.source,
+        citation.chunk_id,
+    ].map(normalizeSourceLabel).filter(Boolean);
+}
+
+function findSourceIndexByTitle(title, sources = [], citations = []) {
+    const needle = normalizeSourceLabel(title);
+    if (!needle) {
+        return -1;
+    }
+
+    const max = Math.max(sources.length, citations.length);
+    for (let i = 0; i < max; i += 1) {
+        if (sourceLabels(sources[i] || {}, citations[i] || {}).includes(needle)) {
+            return i;
+        }
+    }
+    for (let i = 0; i < max; i += 1) {
+        if (sourceLabels(sources[i] || {}, citations[i] || {}).some((label) => label.includes(needle) || needle.includes(label))) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+function openDocumentFromSource(source = {}) {
+    const path = source.path;
+    if (!path || path === 'N/A') {
+        return false;
+    }
+    window.open(`/api/documents/open?path=${encodeURIComponent(path)}`, '_blank', 'noopener');
+    return true;
+}
+
+function openSourceReference(title, sources = [], citations = []) {
+    const index = findSourceIndexByTitle(title, sources, citations);
+    currentSources = sources;
+    currentCitations = citations;
+    openSourcesPanel({focusIndex: index, focusTitle: title});
+    if (index >= 0) {
+        openDocumentFromSource(sources[index] || {});
+    }
+}
+
+function linkifySourceReferences(messageEl, sources = [], citations = []) {
+    const root = messageEl?.querySelector('.markdown-content');
+    if (!root) {
+        return;
+    }
+
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+        acceptNode(node) {
+            if (!/\[Источник:\s*[^\]]+\]/.test(node.nodeValue || '')) {
+                return NodeFilter.FILTER_REJECT;
+            }
+            if (node.parentElement?.closest('a, button, code, pre')) {
+                return NodeFilter.FILTER_REJECT;
+            }
+            return NodeFilter.FILTER_ACCEPT;
+        },
+    });
+    const nodes = [];
+    while (walker.nextNode()) {
+        nodes.push(walker.currentNode);
+    }
+
+    nodes.forEach((node) => {
+        const text = node.nodeValue || '';
+        const fragment = document.createDocumentFragment();
+        let lastIndex = 0;
+        SOURCE_REFERENCE_PATTERN.lastIndex = 0;
+        let match = SOURCE_REFERENCE_PATTERN.exec(text);
+        while (match) {
+            if (match.index > lastIndex) {
+                fragment.appendChild(document.createTextNode(text.slice(lastIndex, match.index)));
+            }
+            const sourceTitle = match[1];
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'source-reference-link';
+            button.textContent = match[0];
+            button.title = 'Открыть источник';
+            button.addEventListener('click', () => openSourceReference(sourceTitle, sources, citations));
+            fragment.appendChild(button);
+            lastIndex = SOURCE_REFERENCE_PATTERN.lastIndex;
+            match = SOURCE_REFERENCE_PATTERN.exec(text);
+        }
+        if (lastIndex < text.length) {
+            fragment.appendChild(document.createTextNode(text.slice(lastIndex)));
+        }
+        node.replaceWith(fragment);
+    });
 }
 
 function showTypingIndicator() {
@@ -563,11 +688,14 @@ async function sendFeedback(messageId, rating, controls) {
     }
 }
 
-function openSourcesPanel() {
+function openSourcesPanel(options = {}) {
     sourcesList.innerHTML = '';
     const citations = currentCitations || [];
     const sources = currentSources || [];
     const max = Math.max(citations.length, sources.length);
+    const focusIndex = Number.isInteger(options.focusIndex) && options.focusIndex >= 0
+        ? options.focusIndex
+        : findSourceIndexByTitle(options.focusTitle, sources, citations);
     if (!max) {
         sourcesList.innerHTML = '<div class="empty-state">Источники не найдены</div>';
     }
@@ -576,6 +704,21 @@ function openSourcesPanel() {
         const citation = citations[i] || {};
         const sourceItem = document.createElement('div');
         sourceItem.className = 'source-item';
+        if (i === focusIndex) {
+            sourceItem.classList.add('source-item--active');
+        }
+        if (source.path && source.path !== 'N/A') {
+            sourceItem.tabIndex = 0;
+            sourceItem.setAttribute('role', 'button');
+            sourceItem.title = 'Открыть документ';
+            sourceItem.addEventListener('click', () => openDocumentFromSource(source));
+            sourceItem.addEventListener('keydown', (event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    openDocumentFromSource(source);
+                }
+            });
+        }
         sourceItem.innerHTML = `
             <div class="source-title">${escapeHtml(source.title || citation.source || 'Без названия')}</div>
             <div class="source-path">${escapeHtml(source.path || source.source || citation.chunk_id || 'N/A')}</div>
@@ -585,6 +728,10 @@ function openSourcesPanel() {
         sourcesList.appendChild(sourceItem);
     }
     sourcesPanel.classList.add('open');
+    const activeSource = sourcesList.querySelector('.source-item--active');
+    if (activeSource) {
+        activeSource.scrollIntoView({block: 'nearest'});
+    }
 }
 
 function closeSourcesPanel() {
