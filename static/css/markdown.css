@@ -1,8 +1,9 @@
 /* Markdown стили для рендеринга ответов */
 
 .markdown-content {
-    line-height: 1.6;
-    color: #000000;
+    color: var(--bot-message-text);
+    line-height: 1.68;
+    overflow-wrap: anywhere;
 }
 
 /* Заголовки */
@@ -14,50 +15,55 @@
 .markdown-content h6 {
     margin-top: 1.5em;
     margin-bottom: 0.5em;
-    font-weight: 600;
-    color: #000000;
+    color: var(--text-color);
+    font-weight: 700;
+    line-height: 1.25;
+    letter-spacing: -0.01em;
 }
 
 .markdown-content h1 {
-    font-size: 2em;
-    border-bottom: 1px solid #444;
-    padding-bottom: 0.3em;
+    font-size: 1.55em;
+    border-bottom: 1px solid var(--border-color);
+    padding-bottom: 0.35em;
 }
 
 .markdown-content h2 {
-    font-size: 1.5em;
-    border-bottom: 1px solid #444;
-    padding-bottom: 0.3em;
+    font-size: 1.32em;
+    border-bottom: 1px solid var(--border-color);
+    padding-bottom: 0.35em;
 }
 
 .markdown-content h3 {
-    font-size: 1.25em;
+    font-size: 1.14em;
 }
 
 /* Параграфы */
 .markdown-content p {
-    margin: 0.5em 0;
+    margin: 0.65em 0;
 }
 
 /* Ссылки */
 .markdown-content a {
-    color: #4a9eff;
+    color: var(--link-color);
     text-decoration: none;
+    text-underline-offset: 0.18em;
+    font-weight: 600;
 }
 
 .markdown-content a:hover {
+    color: var(--link-hover);
     text-decoration: underline;
 }
 
 /* Списки */
 .markdown-content ul,
 .markdown-content ol {
-    margin: 0.5em 0;
-    padding-left: 2em;
+    margin: 0.65em 0;
+    padding-left: 1.5em;
 }
 
 .markdown-content li {
-    margin: 0.25em 0;
+    margin: 0.35em 0;
 }
 
 .markdown-content ul li {
@@ -78,25 +84,29 @@
 
 /* Код */
 .markdown-content code {
-    background-color: #2d2d2d;
-    padding: 0.2em 0.4em;
-    border-radius: 3px;
-    font-family: 'Courier New', monospace;
+    background-color: var(--code-bg);
+    color: var(--code-text);
+    padding: 0.18em 0.38em;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    font-family: var(--mono-font);
     font-size: 0.9em;
-    color: #e6db74;
 }
 
 .markdown-content pre {
-    background-color: #1e1e1e;
-    border: 1px solid #444;
-    border-radius: 5px;
+    background-color: var(--code-block-bg);
+    color: var(--code-block-text);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-md);
     padding: 1em;
     overflow-x: auto;
     margin: 1em 0;
+    box-shadow: var(--shadow-sm);
 }
 
 .markdown-content pre code {
     background-color: transparent;
+    border: none;
     padding: 0;
     border-radius: 0;
     color: inherit;
@@ -104,22 +114,25 @@
 
 /* Блоки кода с подсветкой */
 .markdown-content pre code.hljs {
-    background-color: transparent;
+    background-color: transparent !important;
+    color: inherit;
 }
 
 /* Цитаты */
 .markdown-content blockquote {
-    border-left: 4px solid #4a9eff;
-    padding-left: 1em;
+    background: var(--blockquote-bg);
+    border-left: 4px solid var(--blockquote-border);
+    border-radius: 0 var(--radius-md) var(--radius-md) 0;
+    padding: 0.8em 1em;
     margin: 1em 0;
-    color: #b0b0b0;
+    color: var(--secondary-text);
     font-style: italic;
 }
 
 /* Горизонтальная линия */
 .markdown-content hr {
     border: none;
-    border-top: 1px solid #444;
+    border-top: 1px solid var(--border-color);
     margin: 2em 0;
 }
 
@@ -128,28 +141,33 @@
     border-collapse: collapse;
     width: 100%;
     margin: 1em 0;
+    border-radius: var(--radius-md);
+    overflow: hidden;
+    box-shadow: 0 0 0 1px var(--table-border);
 }
 
 .markdown-content th,
 .markdown-content td {
-    border: 1px solid #444;
-    padding: 0.5em 1em;
+    border: 1px solid var(--table-border);
+    padding: 0.65em 0.85em;
     text-align: left;
+    vertical-align: top;
 }
 
 .markdown-content th {
-    background-color: #2d2d2d;
-    font-weight: 600;
+    background-color: var(--table-header-bg);
+    color: var(--text-color);
+    font-weight: 700;
 }
 
 .markdown-content tr:nth-child(even) {
-    background-color: #1a1a1a;
+    background-color: var(--table-hover);
 }
 
 /* Жирный и курсив */
 .markdown-content strong {
-    font-weight: bold;
-    color: #2327af;
+    color: var(--text-color);
+    font-weight: 700;
 }
 
 .markdown-content em {
@@ -159,36 +177,40 @@
 /* Чекбоксы в списках задач */
 .markdown-content input[type="checkbox"] {
     margin-right: 0.5em;
+    accent-color: var(--primary-color);
 }
 
 /* Картинки */
 .markdown-content img {
     max-width: 100%;
     height: auto;
-    border-radius: 5px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
     margin: 1em 0;
+    box-shadow: var(--shadow-sm);
 }
 
 /* Удаленный текст */
 .markdown-content del {
     text-decoration: line-through;
-    color: #888;
+    color: var(--muted-text);
 }
 
 /* Вставленный текст */
 .markdown-content ins {
     text-decoration: underline;
-    color: #4a9eff;
+    color: var(--link-color);
 }
 
 /* Клавиатурные сокращения */
 .markdown-content kbd {
-    background-color: #2d2d2d;
-    border: 1px solid #555;
-    border-radius: 3px;
+    background-color: var(--code-bg);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
     padding: 0.2em 0.4em;
-    font-family: monospace;
+    font-family: var(--mono-font);
     font-size: 0.9em;
+    color: var(--code-text);
 }
 
 /* Скрытие пустых параграфов */

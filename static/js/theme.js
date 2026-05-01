@@ -1,6 +1,6 @@
 /**
  * Theme Manager
- * Управление темами (светлая/тёмная/auto)
+ * Управление темами (светлая/тёмная)
  */
 
 class ThemeManager {
@@ -22,15 +22,7 @@ class ThemeManager {
             themeToggle.addEventListener('click', () => this.toggleTheme());
         }
 
-        // Слушаем изменения системной темы
-        if (window.matchMedia) {
-            const darkModeQuery = window.matchMedia('(prefers-color-scheme: dark)');
-            darkModeQuery.addEventListener('change', () => {
-                if (this.currentTheme === 'auto') {
-                    this.applyTheme('auto');
-                }
-            });
-        }
+        // Системная тема используется только как стартовая, если настройка ещё не сохранена.
     }
 
     /**
@@ -38,7 +30,7 @@ class ThemeManager {
      */
     getStoredTheme() {
         const stored = localStorage.getItem('theme');
-        return stored || 'auto';
+        return ['light', 'dark'].includes(stored) ? stored : this.getSystemTheme();
     }
 
     /**
@@ -65,10 +57,6 @@ class ThemeManager {
     applyTheme(theme) {
         let actualTheme = theme;
 
-        if (theme === 'auto') {
-            actualTheme = this.getSystemTheme();
-        }
-
         // Устанавливаем атрибут data-theme
         if (actualTheme === 'dark') {
             document.documentElement.setAttribute('data-theme', 'dark');
@@ -89,11 +77,9 @@ class ThemeManager {
 
         const sunIcon = themeToggle.querySelector('.sun-icon');
         const moonIcon = themeToggle.querySelector('.moon-icon');
-        const autoIcon = themeToggle.querySelector('.auto-icon');
 
         if (sunIcon) sunIcon.style.display = 'none';
         if (moonIcon) moonIcon.style.display = 'none';
-        if (autoIcon) autoIcon.style.display = 'none';
 
         switch (theme) {
             case 'light':
@@ -102,17 +88,21 @@ class ThemeManager {
             case 'dark':
                 if (moonIcon) moonIcon.style.display = 'block';
                 break;
-            case 'auto':
-                if (autoIcon) autoIcon.style.display = 'block';
-                break;
         }
+
+        const labels = {
+            light: 'Светлая тема. Переключить тему',
+            dark: 'Тёмная тема. Переключить тему'
+        };
+        themeToggle.setAttribute('aria-label', labels[theme] || labels.light);
+        themeToggle.setAttribute('title', labels[theme] || labels.light);
     }
 
     /**
-     * Переключить тему (light -> dark -> auto -> light)
+     * Переключить тему (light -> dark -> light)
      */
     toggleTheme() {
-        const themes = ['light', 'dark', 'auto'];
+        const themes = ['light', 'dark'];
         const currentIndex = themes.indexOf(this.currentTheme);
         const nextIndex = (currentIndex + 1) % themes.length;
         const nextTheme = themes[nextIndex];
@@ -130,18 +120,19 @@ class ThemeManager {
     showThemeNotification(theme) {
         const messages = {
             light: '☀️ Светлая тема',
-            dark: '🌙 Тёмная тема',
-            auto: '🔄 Автоматическая тема'
+            dark: '🌙 Тёмная тема'
         };
 
-        showToast(messages[theme] || 'Тема изменена', 'success');
+        if (typeof showToast === 'function') {
+            showToast(messages[theme] || 'Тема изменена', 'success');
+        }
     }
 
     /**
      * Установить конкретную тему
      */
     setTheme(theme) {
-        if (['light', 'dark', 'auto'].includes(theme)) {
+        if (['light', 'dark'].includes(theme)) {
             this.saveTheme(theme);
             this.applyTheme(theme);
         }
@@ -155,12 +146,9 @@ class ThemeManager {
     }
 
     /**
-     * Получить фактическую тему (с учётом auto)
+     * Получить фактическую тему
      */
     getActualTheme() {
-        if (this.currentTheme === 'auto') {
-            return this.getSystemTheme();
-        }
         return this.currentTheme;
     }
 }
