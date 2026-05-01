@@ -4,8 +4,22 @@ import io
 from unittest.mock import MagicMock, patch
 
 import pytest
+from werkzeug.security import generate_password_hash
 
 from core.rag import Citation, RAGResult
+
+
+def login_admin(client):
+    from core.chat_history import get_chat_history
+
+    get_chat_history().create_user(
+        username="admin",
+        email="admin@example.com",
+        password_hash=generate_password_hash("password123"),
+        role="admin",
+    )
+    rv = client.post("/api/auth/login", json={"identifier": "admin", "password": "password123"})
+    assert rv.status_code == 200
 
 
 @pytest.fixture
@@ -231,6 +245,7 @@ def test_api_chat_suggestions(mock_reachable, mock_init, client):
 
 
 def test_api_documents_preview_txt(client, tmp_path, monkeypatch):
+    login_admin(client)
     monkeypatch.setattr("api.routes.documents.settings.DATA_DIR", str(tmp_path))
     monkeypatch.setattr("api.routes.documents.settings.UPLOAD_DIR", str(tmp_path / "uploads"))
 
@@ -249,6 +264,7 @@ def test_api_documents_preview_txt(client, tmp_path, monkeypatch):
 
 
 def test_api_documents_preview_diff_existing_txt(client, tmp_path, monkeypatch):
+    login_admin(client)
     uploads = tmp_path / "uploads"
     uploads.mkdir()
     existing = uploads / "source.txt"
@@ -270,6 +286,7 @@ def test_api_documents_preview_diff_existing_txt(client, tmp_path, monkeypatch):
 
 
 def test_api_documents_related_uses_only_data_dir(client, tmp_path, monkeypatch):
+    login_admin(client)
     base = tmp_path / "wiki" / "printer"
     base.mkdir(parents=True)
     (base / "setup.txt").write_text("setup", encoding="utf-8")
@@ -291,6 +308,7 @@ def test_api_documents_related_uses_only_data_dir(client, tmp_path, monkeypatch)
 @patch("api.routes.admin.inference_server_reachable")
 @patch("api.routes.admin.get_chat_history")
 def test_api_admin_overview_quality(mock_history, mock_reachable, mock_models, mock_chroma, client):
+    login_admin(client)
     history = MagicMock()
     history.get_session_count.return_value = 2
     history.get_total_message_count.return_value = 7
@@ -320,6 +338,11 @@ def test_api_admin_overview_quality(mock_history, mock_reachable, mock_models, m
 
 
 def test_api_chats_delete_all(client):
+    rv = client.post(
+        "/api/auth/register",
+        json={"username": "alice", "email": "alice@example.com", "password": "password123"},
+    )
+    user_id = rv.get_json()["user"]["id"]
     manager = MagicMock()
     manager.delete_all_sessions.return_value = 3
 
@@ -328,10 +351,11 @@ def test_api_chats_delete_all(client):
 
     assert rv.status_code == 200
     assert rv.get_json() == {"success": True, "deleted": 3}
-    manager.delete_all_sessions.assert_called_once_with()
+    manager.delete_all_sessions.assert_called_once_with(user_id=user_id)
 
 
 def test_api_documents_open_serves_file_inside_data_dir(client, tmp_path, monkeypatch):
+    login_admin(client)
     doc = tmp_path / "source.txt"
     doc.write_text("source content", encoding="utf-8")
     monkeypatch.setattr("api.routes.documents.settings.DATA_DIR", str(tmp_path))
@@ -343,6 +367,7 @@ def test_api_documents_open_serves_file_inside_data_dir(client, tmp_path, monkey
 
 
 def test_api_documents_open_rejects_path_outside_data_dir(client, tmp_path, monkeypatch):
+    login_admin(client)
     outside = tmp_path.parent / "outside.txt"
     outside.write_text("secret", encoding="utf-8")
     monkeypatch.setattr("api.routes.documents.settings.DATA_DIR", str(tmp_path))

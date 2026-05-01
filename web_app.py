@@ -23,6 +23,8 @@ from core.chat_history import get_chat_history
 from api.routes.chat import chat_bp
 from api.routes.documents import documents_bp
 from api.routes.admin import admin_bp
+from api.routes.auth import auth_bp
+from api.middleware.auth import can_access_chat, current_user_id, remember_guest_chat
 
 # Получаем логгер для этого модуля
 logger = get_logger(__name__)
@@ -88,10 +90,15 @@ def _chat_options(data: dict) -> dict:
 def _resolve_chat_session(data: dict, query: str):
     chat_history = get_chat_history()
     chat_id = _int_or_none(data.get("chat_id"))
-    if chat_id and chat_history.get_session(chat_id):
-        return chat_history, chat_id
+    if chat_id:
+        chat_session = chat_history.get_session(chat_id)
+        if chat_session and can_access_chat(chat_session):
+            return chat_history, chat_id
+        raise PermissionError("Нет доступа к чату")
     title = (query[:60] + "...") if len(query) > 60 else query
-    session = chat_history.create_session(user_id=data.get("user_id"), title=title or "Новый чат")
+    session = chat_history.create_session(user_id=current_user_id(), title=title or "Новый чат")
+    if session.user_id is None:
+        remember_guest_chat(session.id)
     return chat_history, session.id
 
 
@@ -121,6 +128,11 @@ def _sse_event(payload: dict) -> str:
 
 
 app = Flask(__name__)
+app.secret_key = settings.SECRET_KEY
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+)
 _cors = settings.CORS_ORIGINS.strip()
 if _cors in ("*", ""):
     CORS(app)
@@ -131,6 +143,7 @@ else:
 app.register_blueprint(chat_bp)
 app.register_blueprint(documents_bp)
 app.register_blueprint(admin_bp)
+app.register_blueprint(auth_bp)
 
 if not settings.FLASK_DEBUG:
     settings.validate()
@@ -157,7 +170,7 @@ def log_api_request(f):
                 data = request.get_json()
                 # Удаляем чувствительные данные
                 safe_data = {k: v for k, v in data.items()
-                           if k not in ['password', 'token', 'secret']}
+                           if k not in ['password', 'password_hash', 'token', 'secret']}
                 logger.debug(f"Тело запроса: {safe_data}")
             except (ValueError, TypeError, json.JSONDecodeError):
                 pass
@@ -284,7 +297,10 @@ def chat():
     # Полная RAG-цепочка одним вызовом (порог и top_k — из settings.RAG_MIN_SCORE / RAG_TOP_K)
     logger.info(f"Выполнение RAG запроса: '{query}'")
     try:
-        chat_history, chat_id = _resolve_chat_session(data, query)
+        try:
+            chat_history, chat_id = _resolve_chat_session(data, query)
+        except PermissionError:
+            return jsonify({"error": "Нет доступа к чату"}), 403
         conversation_history = _conversation_history_for_rag(chat_history, chat_id)
         chat_history.add_message(
             session_id=chat_id,
@@ -384,7 +400,10 @@ def chat_stream():
             "error": "Сервер LLM недоступен. Проверьте OLLAMA_URL и запуск Ollama или LM Studio.",
         }), 500
 
-    chat_history, chat_id = _resolve_chat_session(data, query)
+    try:
+        chat_history, chat_id = _resolve_chat_session(data, query)
+    except PermissionError:
+        return jsonify({"error": "Нет доступа к чату"}), 403
     conversation_history = _conversation_history_for_rag(chat_history, chat_id)
     chat_history.add_message(
         session_id=chat_id,
@@ -591,7 +610,7 @@ def log_request_info():
     # Пропускаем логирование статических файлов
     if request.path.startswith('/static'):
         return
-    if settings.API_KEY and request.path.startswith('/api/'):
+    if settings.API_KEY and request.path.startswith('/api/') and not request.path.startswith('/api/auth'):
         api_key = request.headers.get("X-API-Key") or request.args.get("api_key")
         admin_key = request.headers.get("X-Admin-Key") or request.args.get("admin_key")
         if request.path.startswith('/api/admin') and settings.ADMIN_API_KEY:

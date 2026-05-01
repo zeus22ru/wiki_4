@@ -9,6 +9,7 @@ from collections import Counter
 from flask import Blueprint, jsonify
 import chromadb
 
+from api.middleware.auth import require_admin_access
 from config import (
     settings,
     get_logger,
@@ -19,6 +20,12 @@ from core.chat_history import get_chat_history
 
 logger = get_logger(__name__)
 admin_bp = Blueprint("admin", __name__, url_prefix="/api/admin")
+
+
+@admin_bp.before_request
+def require_admin_role():
+    """Админ-диагностика доступна только роли admin."""
+    return require_admin_access()
 
 
 def _public_settings() -> dict:

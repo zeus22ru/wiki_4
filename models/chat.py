@@ -59,6 +59,59 @@ class ChatSession:
         )
 
 
+class User:
+    """Модель пользователя приложения."""
+
+    def __init__(
+        self,
+        id: Optional[int] = None,
+        username: str = "",
+        email: str = "",
+        password_hash: str = "",
+        role: str = "user",
+        is_active: bool = True,
+        created_at: Optional[datetime] = None,
+        updated_at: Optional[datetime] = None,
+    ):
+        self.id = id
+        self.username = username
+        self.email = email
+        self.password_hash = password_hash
+        self.role = role
+        self.is_active = is_active
+        self.created_at = created_at or datetime.now()
+        self.updated_at = updated_at or datetime.now()
+
+    def to_dict(self, include_private: bool = False) -> Dict[str, Any]:
+        """Преобразовать в безопасный словарь для API."""
+        data = {
+            'id': self.id,
+            'username': self.username,
+            'email': self.email,
+            'role': self.role,
+            'is_active': self.is_active,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+        }
+        if include_private:
+            data['password_hash'] = self.password_hash
+        return data
+
+    @classmethod
+    def from_row(cls, row: tuple) -> 'User':
+        """Создать пользователя из строки SQLite."""
+        return cls(
+            id=row[0],
+            username=row[1],
+            email=row[2],
+            password_hash=row[3],
+            role=row[4],
+            is_active=bool(row[5]),
+            created_at=datetime.fromisoformat(row[6]) if row[6] else None,
+            updated_at=datetime.fromisoformat(row[7]) if row[7] else None,
+        )
+
+
 class Message:
     """Модель сообщения в чате"""
     

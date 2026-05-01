@@ -2,6 +2,7 @@ let currentSources = [];
 let currentCitations = [];
 let currentChatId = null;
 let isProcessing = false;
+let currentAuth = {authenticated: false, role: 'guest', user: null};
 const SOURCE_REFERENCE_PATTERN = /\[Источник:\s*([^\]]+)\]/g;
 
 const messagesContainer = document.getElementById('messages');
@@ -32,6 +33,22 @@ const jobStatus = document.getElementById('jobStatus');
 const indexPreview = document.getElementById('indexPreview');
 const refreshAdminBtn = document.getElementById('refreshAdminBtn');
 const adminOverview = document.getElementById('adminOverview');
+const authStatus = document.getElementById('authStatus');
+const authOpenBtn = document.getElementById('authOpenBtn');
+const logoutBtn = document.getElementById('logoutBtn');
+const authModal = document.getElementById('authModal');
+const authBackdrop = document.getElementById('authBackdrop');
+const authCloseBtn = document.getElementById('authCloseBtn');
+const loginTabBtn = document.getElementById('loginTabBtn');
+const registerTabBtn = document.getElementById('registerTabBtn');
+const loginForm = document.getElementById('loginForm');
+const registerForm = document.getElementById('registerForm');
+const loginIdentifier = document.getElementById('loginIdentifier');
+const loginPassword = document.getElementById('loginPassword');
+const registerUsername = document.getElementById('registerUsername');
+const registerEmail = document.getElementById('registerEmail');
+const registerPassword = document.getElementById('registerPassword');
+const authMessage = document.getElementById('authMessage');
 const assistantAvatarSrc = '/static/img/assistant-avatar.svg';
 
 function createMessageAvatar(type) {
@@ -51,6 +68,7 @@ function createMessageAvatar(type) {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
+    initializeAuth();
     checkHealth();
     loadChats();
     setInterval(checkHealth, 30000);
@@ -67,6 +85,14 @@ document.addEventListener('DOMContentLoaded', () => {
     reindexBtn.addEventListener('click', startReindex);
     uploadForm.addEventListener('submit', uploadDocument);
     refreshAdminBtn.addEventListener('click', loadAdminOverview);
+    authOpenBtn.addEventListener('click', () => openAuthModal('login'));
+    logoutBtn.addEventListener('click', logout);
+    authBackdrop.addEventListener('click', closeAuthModal);
+    authCloseBtn.addEventListener('click', closeAuthModal);
+    loginTabBtn.addEventListener('click', () => switchAuthForm('login'));
+    registerTabBtn.addEventListener('click', () => switchAuthForm('register'));
+    loginForm.addEventListener('submit', login);
+    registerForm.addEventListener('submit', register);
     document.querySelectorAll('.tab-btn').forEach((btn) => {
         btn.addEventListener('click', () => switchPanel(btn.dataset.panel));
     });
@@ -82,7 +108,7 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 async function apiJson(url, options = {}) {
-    const response = await fetch(url, options);
+    const response = await fetch(url, {credentials: 'same-origin', ...options});
     let data = {};
     try {
         data = await response.json();
@@ -95,6 +121,110 @@ async function apiJson(url, options = {}) {
     return data;
 }
 
+async function initializeAuth() {
+    try {
+        currentAuth = await apiJson('/api/auth/me');
+    } catch (_) {
+        currentAuth = {authenticated: false, role: 'guest', user: null};
+    }
+    applyAuthState();
+}
+
+function applyAuthState() {
+    const isAdminRole = currentAuth.role === 'admin';
+    const user = currentAuth.user || {};
+    authStatus.textContent = currentAuth.authenticated
+        ? `${user.username || user.email || 'Пользователь'} · ${currentAuth.role}`
+        : 'Гость';
+    authOpenBtn.hidden = currentAuth.authenticated;
+    logoutBtn.hidden = !currentAuth.authenticated;
+    document.querySelectorAll('.admin-only').forEach((node) => {
+        node.hidden = !isAdminRole;
+    });
+    if (!isAdminRole && document.getElementById('adminPanel').classList.contains('active')) {
+        switchPanel('chatPanel');
+    }
+    if (!isAdminRole && document.getElementById('documentsPanel').classList.contains('active')) {
+        switchPanel('chatPanel');
+    }
+}
+
+function openAuthModal(mode = 'login') {
+    switchAuthForm(mode);
+    authMessage.textContent = '';
+    authModal.hidden = false;
+    setTimeout(() => (mode === 'login' ? loginIdentifier : registerUsername).focus(), 0);
+}
+
+function closeAuthModal() {
+    authModal.hidden = true;
+}
+
+function switchAuthForm(mode) {
+    const registerMode = mode === 'register';
+    loginTabBtn.classList.toggle('active', !registerMode);
+    registerTabBtn.classList.toggle('active', registerMode);
+    loginForm.classList.toggle('active', !registerMode);
+    registerForm.classList.toggle('active', registerMode);
+    document.getElementById('authTitle').textContent = registerMode ? 'Регистрация' : 'Вход';
+    authMessage.textContent = '';
+}
+
+async function login(e) {
+    e.preventDefault();
+    authMessage.textContent = 'Выполняю вход...';
+    try {
+        currentAuth = await apiJson('/api/auth/login', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                identifier: loginIdentifier.value.trim(),
+                password: loginPassword.value,
+            }),
+        });
+        loginPassword.value = '';
+        closeAuthModal();
+        applyAuthState();
+        loadChats();
+    } catch (error) {
+        authMessage.textContent = error.message;
+    }
+}
+
+async function register(e) {
+    e.preventDefault();
+    authMessage.textContent = 'Создаю аккаунт...';
+    try {
+        currentAuth = await apiJson('/api/auth/register', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                username: registerUsername.value.trim(),
+                email: registerEmail.value.trim(),
+                password: registerPassword.value,
+            }),
+        });
+        registerPassword.value = '';
+        closeAuthModal();
+        applyAuthState();
+        loadChats();
+    } catch (error) {
+        authMessage.textContent = error.message;
+    }
+}
+
+async function logout() {
+    try {
+        currentAuth = await apiJson('/api/auth/logout', {method: 'POST'});
+        currentChatId = null;
+        resetMessages(true);
+        applyAuthState();
+        loadChats();
+    } catch (error) {
+        showInlineError(error.message);
+    }
+}
+
 function debounce(fn, delay) {
     let timer = null;
     return (...args) => {
@@ -104,6 +234,10 @@ function debounce(fn, delay) {
 }
 
 function switchPanel(panelId) {
+    if ((panelId === 'documentsPanel' || panelId === 'adminPanel') && currentAuth.role !== 'admin') {
+        showInlineError('Этот раздел доступен только администратору');
+        panelId = 'chatPanel';
+    }
     document.querySelectorAll('.tab-btn').forEach((btn) => {
         btn.classList.toggle('active', btn.dataset.panel === panelId);
     });
@@ -354,6 +488,7 @@ async function handleSubmit(e) {
     try {
         const response = await fetch('/api/chat/stream', {
             method: 'POST',
+            credentials: 'same-origin',
             headers: {
                 'Content-Type': 'application/json',
                 'Accept': 'text/event-stream',
@@ -828,6 +963,9 @@ function renderFollowupSuggestions(messageEl, suggestions) {
 }
 
 async function loadRelatedDocuments(messageEl, sources = []) {
+    if (currentAuth.role !== 'admin') {
+        return;
+    }
     if (!messageEl || !sources.length || messageEl.querySelector('.related-documents')) {
         return;
     }
@@ -969,6 +1107,10 @@ function scrollToBottom() {
 }
 
 async function loadDocuments() {
+    if (currentAuth.role !== 'admin') {
+        documentsList.innerHTML = '<div class="empty-state">Раздел доступен только администратору</div>';
+        return;
+    }
     documentsList.innerHTML = '<div class="empty-state">Загрузка...</div>';
     try {
         const data = await apiJson('/api/documents');
@@ -1090,6 +1232,10 @@ async function pollJobs() {
 }
 
 async function loadAdminOverview() {
+    if (currentAuth.role !== 'admin') {
+        adminOverview.innerHTML = '<div class="empty-state">Раздел доступен только администратору</div>';
+        return;
+    }
     adminOverview.innerHTML = '<div class="empty-state">Проверка...</div>';
     try {
         const data = await apiJson('/api/admin/overview');

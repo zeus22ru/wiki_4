@@ -4,6 +4,6 @@
 Модели данных для приложения
 """
 
-from .chat import ChatSession, Message
+from .chat import ChatSession, Message, User
 
-__all__ = ['ChatSession', 'Message']
+__all__ = ['ChatSession', 'Message', 'User']

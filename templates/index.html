@@ -27,12 +27,17 @@
                 <div class="header-actions">
                     <nav class="workspace-tabs" aria-label="Разделы">
                         <button class="tab-btn active" data-panel="chatPanel">Чат</button>
-                        <button class="tab-btn" data-panel="documentsPanel">База знаний</button>
-                        <button class="tab-btn" data-panel="adminPanel">Админка</button>
+                        <button class="tab-btn admin-only" data-panel="documentsPanel">База знаний</button>
+                        <button class="tab-btn admin-only" data-panel="adminPanel">Админка</button>
                     </nav>
                     <div class="status-indicator">
                         <span class="status-dot" id="statusDot"></span>
                         <span class="status-text" id="statusText">Проверка...</span>
+                    </div>
+                    <div class="auth-widget" id="authWidget">
+                        <span class="auth-status" id="authStatus">Гость</span>
+                        <button class="secondary-btn" id="authOpenBtn" type="button">Войти</button>
+                        <button class="secondary-btn" id="logoutBtn" type="button" hidden>Выйти</button>
                     </div>
                     <button class="new-chat-btn" id="newChatBtn" title="Новый чат">
                         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -145,6 +150,42 @@
                 <div class="admin-grid" id="adminOverview"></div>
             </section>
         </main>
+    </div>
+
+    <div class="auth-modal" id="authModal" hidden>
+        <div class="auth-modal__backdrop" id="authBackdrop"></div>
+        <div class="auth-modal__dialog" role="dialog" aria-modal="true" aria-labelledby="authTitle">
+            <div class="auth-modal__header">
+                <h2 id="authTitle">Вход</h2>
+                <button class="icon-btn" id="authCloseBtn" type="button" aria-label="Закрыть">×</button>
+            </div>
+            <div class="auth-tabs">
+                <button class="tab-btn active" id="loginTabBtn" type="button">Войти</button>
+                <button class="tab-btn" id="registerTabBtn" type="button">Регистрация</button>
+            </div>
+            <form class="auth-form active" id="loginForm">
+                <label>Логин или email
+                    <input id="loginIdentifier" type="text" autocomplete="username" required>
+                </label>
+                <label>Пароль
+                    <input id="loginPassword" type="password" autocomplete="current-password" required>
+                </label>
+                <button class="new-chat-btn" type="submit">Войти</button>
+            </form>
+            <form class="auth-form" id="registerForm">
+                <label>Имя пользователя
+                    <input id="registerUsername" type="text" autocomplete="username" required>
+                </label>
+                <label>Email
+                    <input id="registerEmail" type="email" autocomplete="email" required>
+                </label>
+                <label>Пароль
+                    <input id="registerPassword" type="password" autocomplete="new-password" required>
+                </label>
+                <button class="new-chat-btn" type="submit">Зарегистрироваться</button>
+            </form>
+            <div class="auth-message" id="authMessage"></div>
+        </div>
     </div>
 
     <!-- Marked.js для Markdown рендеринга -->

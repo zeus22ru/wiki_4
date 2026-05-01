@@ -13,10 +13,17 @@ from uuid import uuid4
 from flask import Blueprint, jsonify, request, send_file
 from werkzeug.utils import secure_filename
 
+from api.middleware.auth import require_admin_access
 from config import settings, get_logger
 
 logger = get_logger(__name__)
 documents_bp = Blueprint("documents", __name__, url_prefix="/api/documents")
+
+
+@documents_bp.before_request
+def require_admin_role():
+    """Управление базой знаний доступно только администраторам."""
+    return require_admin_access()
 
 _jobs = {}
 _jobs_lock = threading.Lock()

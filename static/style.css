@@ -359,6 +359,95 @@ body {
     gap: 0.75rem;
 }
 
+.auth-widget {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.auth-status {
+    max-width: 220px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--secondary-text);
+    font-size: 0.85rem;
+}
+
+.auth-modal[hidden],
+.auth-form {
+    display: none;
+}
+
+.auth-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 30;
+    display: grid;
+    place-items: center;
+    padding: 1rem;
+}
+
+.auth-modal__backdrop {
+    position: absolute;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.45);
+}
+
+.auth-modal__dialog {
+    position: relative;
+    z-index: 1;
+    width: min(420px, 100%);
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    padding: 1.25rem;
+    border: 1px solid var(--border-color);
+    border-radius: 16px;
+    background: var(--chat-bg);
+    box-shadow: 0 20px 60px var(--shadow-color);
+}
+
+.auth-modal__header,
+.auth-tabs {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+}
+
+.auth-tabs {
+    justify-content: flex-start;
+}
+
+.auth-form.active {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.auth-form label {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    color: var(--secondary-text);
+    font-size: 0.9rem;
+}
+
+.auth-form input {
+    padding: 0.7rem 0.8rem;
+    border: 1px solid var(--input-border);
+    border-radius: 10px;
+    background: var(--input-bg);
+    color: var(--text-color);
+}
+
+.auth-message {
+    min-height: 1.2rem;
+    color: var(--secondary-text);
+    font-size: 0.9rem;
+}
+
 .chat-header .status-indicator {
     display: flex;
     align-items: center;

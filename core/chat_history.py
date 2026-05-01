@@ -12,7 +12,7 @@ from typing import List, Optional
 from datetime import datetime
 
 from config import settings, get_logger
-from models import ChatSession, Message
+from models import ChatSession, Message, User
 
 logger = get_logger(__name__)
 
@@ -44,6 +44,24 @@ class ChatHistoryManager:
             cursor = conn.cursor()
             
             # Таблица сессий чата
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS users (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    username TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                    email TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                    password_hash TEXT NOT NULL,
+                    role TEXT NOT NULL DEFAULT 'user',
+                    is_active INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+            ''')
+
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_users_role
+                ON users(role)
+            ''')
+
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS chat_sessions (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -129,6 +147,87 @@ class ChatHistoryManager:
         columns = {row[1] for row in cursor.fetchall()}
         if column not in columns:
             cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+
+    # ========== Методы для работы с пользователями ==========
+
+    def create_user(
+        self,
+        username: str,
+        email: str,
+        password_hash: str,
+        role: str = "user",
+        is_active: bool = True,
+    ) -> User:
+        """Создать пользователя приложения."""
+        now = datetime.now().isoformat()
+        normalized_email = email.strip().lower()
+        normalized_username = username.strip()
+
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO users (username, email, password_hash, role, is_active, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                normalized_username,
+                normalized_email,
+                password_hash,
+                role,
+                1 if is_active else 0,
+                now,
+                now,
+            ))
+            conn.commit()
+            return User(
+                id=cursor.lastrowid,
+                username=normalized_username,
+                email=normalized_email,
+                password_hash=password_hash,
+                role=role,
+                is_active=is_active,
+                created_at=datetime.fromisoformat(now),
+                updated_at=datetime.fromisoformat(now),
+            )
+
+    def get_user(self, user_id: int) -> Optional[User]:
+        """Получить пользователя по ID."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT id, username, email, password_hash, role, is_active, created_at, updated_at
+                FROM users
+                WHERE id = ?
+            ''', (user_id,))
+            row = cursor.fetchone()
+            return User.from_row(row) if row else None
+
+    def get_user_by_identifier(self, identifier: str) -> Optional[User]:
+        """Найти пользователя по email или username."""
+        value = (identifier or "").strip()
+        if not value:
+            return None
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT id, username, email, password_hash, role, is_active, created_at, updated_at
+                FROM users
+                WHERE email = ? COLLATE NOCASE OR username = ? COLLATE NOCASE
+            ''', (value.lower(), value))
+            row = cursor.fetchone()
+            return User.from_row(row) if row else None
+
+    def update_user_role(self, user_id: int, role: str) -> bool:
+        """Изменить роль пользователя."""
+        now = datetime.now().isoformat()
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                UPDATE users
+                SET role = ?, updated_at = ?
+                WHERE id = ?
+            ''', (role, now, user_id))
+            conn.commit()
+            return cursor.rowcount > 0
     
     # ========== Методы для работы с сессиями ==========
     
@@ -244,11 +343,14 @@ class ChatHistoryManager:
             
             return deleted
 
-    def delete_all_sessions(self) -> int:
+    def delete_all_sessions(self, user_id: Optional[int] = None) -> int:
         """Удалить все сессии чатов и связанные данные."""
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute('DELETE FROM chat_sessions')
+            if user_id is None:
+                cursor.execute('DELETE FROM chat_sessions')
+            else:
+                cursor.execute('DELETE FROM chat_sessions WHERE user_id = ?', (user_id,))
             conn.commit()
 
             deleted_count = cursor.rowcount
@@ -373,19 +475,34 @@ class ChatHistoryManager:
             cursor.execute('SELECT COUNT(*) FROM messages')
             return cursor.fetchone()[0]
 
-    def search_sessions(self, query: str, limit: int = 20) -> List[ChatSession]:
+    def search_sessions(
+        self,
+        query: str,
+        limit: int = 20,
+        user_id: Optional[int] = None
+    ) -> List[ChatSession]:
         """Найти сессии по заголовку или тексту сообщений."""
         like = f"%{query}%"
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute('''
-                SELECT DISTINCT s.id, s.user_id, s.title, s.created_at, s.updated_at
-                FROM chat_sessions s
-                LEFT JOIN messages m ON m.session_id = s.id
-                WHERE s.title LIKE ? OR m.content LIKE ?
-                ORDER BY s.updated_at DESC
-                LIMIT ?
-            ''', (like, like, limit))
+            if user_id is None:
+                cursor.execute('''
+                    SELECT DISTINCT s.id, s.user_id, s.title, s.created_at, s.updated_at
+                    FROM chat_sessions s
+                    LEFT JOIN messages m ON m.session_id = s.id
+                    WHERE s.title LIKE ? OR m.content LIKE ?
+                    ORDER BY s.updated_at DESC
+                    LIMIT ?
+                ''', (like, like, limit))
+            else:
+                cursor.execute('''
+                    SELECT DISTINCT s.id, s.user_id, s.title, s.created_at, s.updated_at
+                    FROM chat_sessions s
+                    LEFT JOIN messages m ON m.session_id = s.id
+                    WHERE s.user_id = ? AND (s.title LIKE ? OR m.content LIKE ?)
+                    ORDER BY s.updated_at DESC
+                    LIMIT ?
+                ''', (user_id, like, like, limit))
             return [ChatSession.from_row(row) for row in cursor.fetchall()]
 
     def add_feedback(
