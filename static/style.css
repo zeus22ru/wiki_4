@@ -263,6 +263,25 @@ body {
     margin: 0.4rem 0 0 1rem;
 }
 
+.version-diff {
+    display: grid;
+    gap: 0.35rem;
+}
+
+.diff-list {
+    padding: 0.5rem;
+    border-radius: 10px;
+    border: 1px solid var(--border-color);
+}
+
+.diff-list--added {
+    background: rgba(25, 135, 84, 0.08);
+}
+
+.diff-list--removed {
+    background: rgba(220, 53, 69, 0.08);
+}
+
 .data-list,
 .admin-grid {
     display: grid;
@@ -752,6 +771,38 @@ body {
 .followup-suggestions button:hover {
     border-color: var(--primary-color);
     color: var(--primary-color);
+}
+
+.related-documents {
+    display: grid;
+    gap: 0.45rem;
+    margin-top: 0.75rem;
+}
+
+.related-title {
+    color: var(--secondary-text);
+    font-size: 0.82rem;
+}
+
+.related-documents button {
+    border: 1px solid var(--border-color);
+    background: var(--copy-btn-bg);
+    color: var(--text-color);
+    border-radius: 10px;
+    padding: 0.5rem 0.65rem;
+    cursor: pointer;
+    text-align: left;
+}
+
+.related-documents button span {
+    display: block;
+    color: var(--secondary-text);
+    font-size: 0.78rem;
+    margin-top: 0.15rem;
+}
+
+.related-documents button:hover {
+    border-color: var(--primary-color);
 }
 
 .thinking-status {

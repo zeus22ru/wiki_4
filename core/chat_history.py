@@ -6,6 +6,7 @@
 
 import sqlite3
 import json
+import re
 from pathlib import Path
 from typing import List, Optional
 from datetime import datetime
@@ -476,6 +477,128 @@ class ChatHistoryManager:
                 LIMIT ?
             ''', (limit,))
             return [dict(row) for row in cursor.fetchall()]
+
+    def get_source_feedback(self, limit: int = 10) -> List[dict]:
+        """Источники, чаще всего встречающиеся в ответах с негативной оценкой."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT m.sources_json
+                FROM feedback f
+                JOIN messages m ON m.id = f.message_id
+                WHERE f.rating = 'down' AND m.sources_json IS NOT NULL
+            ''')
+            counts: dict[str, dict] = {}
+            for row in cursor.fetchall():
+                try:
+                    sources = json.loads(row['sources_json'] or '[]')
+                except json.JSONDecodeError:
+                    continue
+                for source in sources:
+                    key = source.get('path') or source.get('title') or source.get('source') or 'N/A'
+                    item = counts.setdefault(key, {
+                        "title": source.get('title') or source.get('source') or key,
+                        "path": source.get('path') or key,
+                        "negative_count": 0,
+                    })
+                    item["negative_count"] += 1
+            return sorted(counts.values(), key=lambda item: item["negative_count"], reverse=True)[:limit]
+
+    @staticmethod
+    def _message_quality_reason(message: Message) -> Optional[str]:
+        diagnostics = message.metadata.get("diagnostics") if isinstance(message.metadata, dict) else {}
+        diagnostics = diagnostics if isinstance(diagnostics, dict) else {}
+        retrieve_error = message.metadata.get("retrieve_error") if isinstance(message.metadata, dict) else None
+        retrieval_status = diagnostics.get("retrieval_status") or retrieve_error or message.metadata.get("retrieval_status")
+        scores = diagnostics.get("score_distribution") or []
+        source_count = len(message.sources or [])
+
+        if retrieve_error:
+            return f"Ошибка retrieval: {retrieve_error}"
+        if retrieval_status in {"no_documents", "embedding_unavailable", "search_error"}:
+            return f"Статус поиска: {retrieval_status}"
+        if source_count == 0:
+            return "Ответ без источников"
+        if isinstance(scores, list) and scores:
+            numeric_scores = [float(score) for score in scores if isinstance(score, (int, float))]
+            if numeric_scores:
+                best_score = max(numeric_scores)
+                if best_score < 0.35:
+                    return f"Низкая максимальная релевантность: {best_score:.2f}"
+        return None
+
+    def get_weak_answers(self, limit: int = 10) -> List[dict]:
+        """Ответы, которые стоит проверить редактору базы знаний."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT id, session_id, role, content, sources_json, created_at, citations_json, metadata_json
+                FROM messages
+                ORDER BY created_at ASC
+            ''')
+            messages = [Message.from_row(row) for row in cursor.fetchall()]
+
+        previous_user_by_session: dict[int, Message] = {}
+        weak = []
+        for message in messages:
+            if message.role == "user":
+                previous_user_by_session[message.session_id] = message
+                continue
+            if message.role != "assistant":
+                continue
+            reason = self._message_quality_reason(message)
+            if not reason:
+                continue
+            question = previous_user_by_session.get(message.session_id)
+            weak.append({
+                "message_id": message.id,
+                "session_id": message.session_id,
+                "question": question.content if question else "",
+                "answer": message.content,
+                "reason": reason,
+                "source_count": len(message.sources or []),
+                "created_at": message.created_at.isoformat() if message.created_at else None,
+            })
+        return list(reversed(weak))[:limit]
+
+    @staticmethod
+    def _gap_key(question: str) -> str:
+        words = re.findall(r"[A-Za-zА-Яа-я0-9]{4,}", (question or "").lower())
+        stop_words = {"как", "что", "где", "когда", "если", "почему", "нужно", "можно", "надо", "какой", "какая"}
+        useful = [word for word in words if word not in stop_words]
+        return " ".join(useful[:5]) or (question or "Без вопроса")[:80]
+
+    def get_knowledge_gaps(self, limit: int = 10) -> List[dict]:
+        """Сгруппировать слабые ответы в темы для пополнения базы знаний."""
+        groups: dict[str, dict] = {}
+        for item in self.get_weak_answers(limit=200):
+            key = self._gap_key(item.get("question", ""))
+            group = groups.setdefault(key, {
+                "topic": key,
+                "count": 0,
+                "reasons": {},
+                "last_question": "",
+                "last_seen_at": None,
+                "recommended_action": "Добавить или обновить документ по этой теме",
+            })
+            group["count"] += 1
+            reason = item.get("reason") or "Слабый ответ"
+            group["reasons"][reason] = group["reasons"].get(reason, 0) + 1
+            group["last_question"] = item.get("question") or group["last_question"]
+            group["last_seen_at"] = item.get("created_at") or group["last_seen_at"]
+
+        result = []
+        for group in groups.values():
+            top_reason = max(group["reasons"].items(), key=lambda item: item[1])[0] if group["reasons"] else "Слабый ответ"
+            result.append({
+                "topic": group["topic"],
+                "count": group["count"],
+                "reason": top_reason,
+                "last_question": group["last_question"],
+                "last_seen_at": group["last_seen_at"],
+                "recommended_action": group["recommended_action"],
+            })
+        return sorted(result, key=lambda item: (item["count"], item["last_seen_at"] or ""), reverse=True)[:limit]
 
 
 # Глобальный экземпляр менеджера

@@ -75,6 +75,23 @@ def test_api_chat_rag_success(mock_reachable, mock_init, client):
 
 @patch("web_app.initialize_database")
 @patch("web_app.inference_server_reachable")
+def test_api_chat_employee_instruction_mode(mock_reachable, mock_init, client):
+    mock_reachable.return_value = True
+    rag = MagicMock()
+    mock_init.return_value = (MagicMock(), rag)
+    rag.query.return_value = RAGResult(answer="Инструкция", citations=[], sources=[])
+
+    rv = client.post("/api/chat", json={
+        "message": "настрой принтер",
+        "answer_mode": "employee_instruction",
+    })
+
+    assert rv.status_code == 200
+    assert rag.query.call_args.kwargs["answer_mode"] == "employee_instruction"
+
+
+@patch("web_app.initialize_database")
+@patch("web_app.inference_server_reachable")
 def test_api_chat_embedding_unavailable(mock_reachable, mock_init, client):
     mock_reachable.return_value = True
     rag = MagicMock()
@@ -231,6 +248,44 @@ def test_api_documents_preview_txt(client, tmp_path, monkeypatch):
     assert preview["chunks"]
 
 
+def test_api_documents_preview_diff_existing_txt(client, tmp_path, monkeypatch):
+    uploads = tmp_path / "uploads"
+    uploads.mkdir()
+    existing = uploads / "source.txt"
+    existing.write_text("Старая инструкция\nШаг один\n", encoding="utf-8")
+    monkeypatch.setattr("api.routes.documents.settings.DATA_DIR", str(tmp_path))
+    monkeypatch.setattr("api.routes.documents.settings.UPLOAD_DIR", str(uploads))
+
+    rv = client.post(
+        "/api/documents/preview",
+        data={"file": (io.BytesIO("Новая инструкция\nШаг два\n".encode("utf-8")), "source.txt")},
+        content_type="multipart/form-data",
+    )
+
+    assert rv.status_code == 200
+    diff = rv.get_json()["preview"]["version_diff"]
+    assert diff["existing_path"] == "uploads/source.txt"
+    assert diff["changed"] is True
+    assert diff["added"]
+
+
+def test_api_documents_related_uses_only_data_dir(client, tmp_path, monkeypatch):
+    base = tmp_path / "wiki" / "printer"
+    base.mkdir(parents=True)
+    (base / "setup.txt").write_text("setup", encoding="utf-8")
+    (base / "errors.txt").write_text("errors", encoding="utf-8")
+    monkeypatch.setattr("api.routes.documents.settings.DATA_DIR", str(tmp_path))
+
+    rv = client.post("/api/documents/related", json={
+        "sources": [{"path": "wiki/printer/setup.txt", "title": "Настройка принтера"}],
+    })
+
+    assert rv.status_code == 200
+    docs = rv.get_json()["documents"]
+    assert docs
+    assert docs[0]["path"] == "wiki/printer/errors.txt"
+
+
 @patch("api.routes.admin._chroma_status")
 @patch("api.routes.admin.fetch_remote_model_ids")
 @patch("api.routes.admin.inference_server_reachable")
@@ -243,6 +298,9 @@ def test_api_admin_overview_quality(mock_history, mock_reachable, mock_models, m
     history.get_feedback.return_value = []
     history.get_top_sources.return_value = [{"title": "Doc", "path": "doc.txt", "count": 2}]
     history.get_negative_feedback_context.return_value = []
+    history.get_source_feedback.return_value = [{"title": "Bad", "path": "bad.txt", "negative_count": 1}]
+    history.get_weak_answers.return_value = [{"question": "?", "reason": "Ответ без источников"}]
+    history.get_knowledge_gaps.return_value = [{"topic": "printer", "count": 1, "reason": "Ответ без источников"}]
     mock_history.return_value = history
     mock_reachable.return_value = True
     mock_models.return_value = []
@@ -255,6 +313,10 @@ def test_api_admin_overview_quality(mock_history, mock_reachable, mock_models, m
     assert body["usage"]["message_count"] == 7
     assert body["quality"]["feedback"]["down"] == 1
     assert body["quality"]["top_sources"][0]["title"] == "Doc"
+    assert body["quality"]["negative_sources"][0]["title"] == "Bad"
+    assert body["quality"]["weak_answers"][0]["reason"] == "Ответ без источников"
+    assert body["quality"]["knowledge_gaps"][0]["topic"] == "printer"
+    assert body["quality"]["risks"]
 
 
 def test_api_chats_delete_all(client):

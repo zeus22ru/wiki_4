@@ -191,6 +191,7 @@ async function openChat(chatId) {
                     sources: msg.sources || [],
                     citations: msg.citations || [],
                 });
+                loadRelatedDocuments(messageEl, msg.sources || []);
                 addFeedbackControls(messageEl, msg.id);
             }
         });
@@ -314,6 +315,7 @@ async function sendChatClassic(message) {
         sources: data.sources || [],
         citations: data.citations || [],
     });
+    loadRelatedDocuments(botMessage, data.sources || []);
     addFeedbackControls(botMessage, data.message_id);
     loadChats();
 }
@@ -450,6 +452,7 @@ async function readStream(response) {
                     sources: payload.sources || [],
                     citations: payload.citations || [],
                 });
+                loadRelatedDocuments(streamShell, payload.sources || []);
                 addFeedbackControls(streamShell, payload.message_id);
             } else if (payload.type === 'error') {
                 ensureStreamShell();
@@ -811,6 +814,46 @@ function renderFollowupSuggestions(messageEl, suggestions) {
     content.appendChild(wrapper);
 }
 
+async function loadRelatedDocuments(messageEl, sources = []) {
+    if (!messageEl || !sources.length || messageEl.querySelector('.related-documents')) {
+        return;
+    }
+    try {
+        const data = await apiJson('/api/documents/related', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({sources, limit: 5}),
+        });
+        const documents = Array.isArray(data.documents) ? data.documents : [];
+        if (documents.length) {
+            renderRelatedDocuments(messageEl, documents);
+        }
+    } catch (_) {
+        /* Связанные документы не критичны для основного ответа. */
+    }
+}
+
+function renderRelatedDocuments(messageEl, documents) {
+    const content = messageEl.querySelector('.message-content');
+    if (!content || content.querySelector('.related-documents')) {
+        return;
+    }
+    const wrapper = document.createElement('div');
+    wrapper.className = 'related-documents';
+    wrapper.innerHTML = '<div class="related-title">Что читать дальше:</div>';
+    documents.forEach((doc) => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.innerHTML = `
+            <strong>${escapeHtml(doc.filename || doc.path || 'Документ')}</strong>
+            <span>${escapeHtml(doc.path || '')}</span>
+        `;
+        btn.addEventListener('click', () => openDocumentFromSource(doc));
+        wrapper.appendChild(btn);
+    });
+    content.appendChild(wrapper);
+}
+
 function addFeedbackControls(messageEl, messageId) {
     if (!messageEl || !messageId) {
         return;
@@ -970,6 +1013,7 @@ async function previewDocument() {
 function renderIndexPreview(preview) {
     const warnings = preview.warnings || [];
     const chunks = preview.chunks || [];
+    const versionDiff = preview.version_diff || null;
     indexPreview.innerHTML = `
         <div class="preview-card">
             <div class="preview-header">
@@ -982,7 +1026,23 @@ function renderIndexPreview(preview) {
             </div>
             ${warnings.length ? `<div class="preview-warnings">${warnings.map((item) => `<span>${escapeHtml(item)}</span>`).join('')}</div>` : ''}
             ${(preview.headings || []).length ? `<div class="preview-section"><strong>Похожие на заголовки фразы</strong>${renderPreviewList(preview.headings)}</div>` : ''}
+            ${versionDiff ? renderVersionDiff(versionDiff) : ''}
             <div class="preview-section"><strong>Первые чанки</strong>${chunks.length ? chunks.map((chunk) => `<p>${escapeHtml(clipText(chunk, 500))}</p>`).join('') : '<span>Чанки не найдены</span>'}</div>
+        </div>
+    `;
+}
+
+function renderVersionDiff(diff) {
+    const added = diff.added || [];
+    const removed = diff.removed || [];
+    return `
+        <div class="preview-section version-diff">
+            <strong>Сравнение с текущей версией</strong>
+            <span>Файл: ${escapeHtml(diff.existing_path || '')}</span>
+            <span>Сходство: ${Math.round(Number(diff.similarity || 0) * 100)}% · было ${diff.old_length || 0} символов, стало ${diff.new_length || 0}</span>
+            ${added.length ? `<div class="diff-list diff-list--added"><b>Добавлено</b>${renderPreviewList(added.map((item) => clipText(item, 180)))}</div>` : ''}
+            ${removed.length ? `<div class="diff-list diff-list--removed"><b>Удалено</b>${renderPreviewList(removed.map((item) => clipText(item, 180)))}</div>` : ''}
+            ${!added.length && !removed.length ? '<span>Существенных текстовых отличий не найдено</span>' : ''}
         </div>
     `;
 }
@@ -1028,18 +1088,27 @@ async function loadAdminOverview() {
         const documents = quality.documents || {};
         const topSources = quality.top_sources || [];
         const negativeFeedback = quality.negative_feedback || [];
+        const negativeSources = quality.negative_sources || [];
+        const weakAnswers = quality.weak_answers || [];
+        const knowledgeGaps = quality.knowledge_gaps || [];
+        const risks = quality.risks || [];
         adminOverview.innerHTML = `
             <div class="data-card"><strong>LLM</strong><span>${data.health.llm ? 'доступен' : 'недоступен'}</span></div>
             <div class="data-card"><strong>Chroma</strong><span>${chroma.ok ? `${chroma.count} чанков` : escapeHtml(chroma.error || 'ошибка')}</span></div>
             <div class="data-card"><strong>Модели</strong><span>chat: ${escapeHtml(settings.chat_model || '')}<br>embed: ${escapeHtml(settings.embedding_model || '')}</span></div>
             <div class="data-card"><strong>История</strong><span>${data.usage.chat_count} чатов<br>${data.usage.message_count || 0} сообщений</span></div>
             <div class="data-card"><strong>Оценки</strong><span>Полезно: ${feedback.up || 0}<br>Не полезно: ${feedback.down || 0}</span></div>
-            <div class="data-card"><strong>Документы</strong><span>${documents.total || 0} файлов<br>Устаревших: ${(documents.stale || []).length}</span></div>
+            <div class="data-card"><strong>Документы</strong><span>${documents.total || 0} файлов<br>Устаревших: ${documents.stale_count || (documents.stale || []).length}<br>Дублей: ${(documents.duplicates || []).length}</span></div>
+            <div class="data-card wide"><strong>Риски качества</strong>${renderAdminRiskList(risks)}</div>
             <div class="data-card wide"><strong>Доступные модели</strong><span>${escapeHtml((models.available || []).join(', ') || models.error || 'нет данных')}</span></div>
             <div class="data-card wide"><strong>RAG</strong><span>top_k=${settings.rag_top_k}, min_score=${settings.rag_min_score}, citations=${settings.rag_max_citations}</span></div>
             <div class="data-card wide"><strong>Топ источников</strong>${renderAdminList(topSources, (item) => `${item.count} × ${item.title || item.path}`)}</div>
+            <div class="data-card wide"><strong>Источники с плохими оценками</strong>${renderAdminList(negativeSources, (item) => `${item.negative_count} × ${item.title || item.path}`)}</div>
+            <div class="data-card wide"><strong>Слабые ответы</strong>${renderAdminList(weakAnswers, (item) => `${item.reason}: ${clipText(item.question || item.answer || '', 160)}`)}</div>
+            <div class="data-card wide"><strong>Пробелы в базе знаний</strong>${renderAdminList(knowledgeGaps, (item) => `${item.count} × ${item.topic}: ${clipText(item.last_question || item.reason || '', 140)}`)}</div>
             <div class="data-card wide"><strong>Последние дизлайки</strong>${renderAdminList(negativeFeedback, (item) => `${item.chat_title || 'Чат'}: ${clipText(item.answer || item.comment || '', 140)}`)}</div>
             <div class="data-card wide"><strong>Давно не обновлялись</strong>${renderAdminList(documents.stale || [], (item) => `${item.path} · ${formatDate(item.modified_at)}`)}</div>
+            <div class="data-card wide"><strong>Дубли документов</strong>${renderAdminList(documents.duplicates || [], (item) => `${item.count} × ${item.filename}: ${(item.paths || []).join(', ')}`)}</div>
         `;
     } catch (error) {
         adminOverview.innerHTML = `<div class="empty-state">${escapeHtml(error.message)}</div>`;
@@ -1051,6 +1120,15 @@ function renderAdminList(items, formatter) {
         return '<span>Нет данных</span>';
     }
     return `<ul class="admin-list">${items.map((item) => `<li>${escapeHtml(formatter(item))}</li>`).join('')}</ul>`;
+}
+
+function renderAdminRiskList(items) {
+    if (!items.length) {
+        return '<span>Критичных рисков не найдено</span>';
+    }
+    return `<ul class="admin-list">${items.map((item) => `
+        <li><strong>${escapeHtml(item.title || 'Риск')}</strong>: ${escapeHtml(item.details || item.level || '')}</li>
+    `).join('')}</ul>`;
 }
 
 function exportCurrentChat() {

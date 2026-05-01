@@ -4,6 +4,7 @@
 
 from datetime import datetime
 from pathlib import Path
+import difflib
 import tempfile
 import threading
 import traceback
@@ -55,6 +56,93 @@ def _scan_documents() -> list[dict]:
             docs.append(_file_record(path))
     docs.sort(key=lambda item: item["modified_at"], reverse=True)
     return docs
+
+
+def _find_existing_document(filename: str) -> Path | None:
+    """Найти существующий документ с таким именем только внутри DATA_DIR."""
+    safe_name = secure_filename(filename)
+    if not safe_name:
+        return None
+    data_dir = Path(settings.DATA_DIR)
+    candidates = [Path(settings.UPLOAD_DIR) / safe_name, data_dir / safe_name]
+    if data_dir.exists():
+        candidates.extend(path for path in data_dir.rglob(safe_name) if path.is_file())
+    for candidate in candidates:
+        resolved = candidate.resolve()
+        try:
+            resolved.relative_to(data_dir.resolve())
+        except ValueError:
+            continue
+        if resolved.is_file() and _allowed_file(resolved.name):
+            return resolved
+    return None
+
+
+def _extract_preview_text(path: Path) -> str:
+    from create_vector_db import get_file_handlers
+
+    handler = get_file_handlers().get(path.suffix.lower())
+    if not handler:
+        return ""
+    doc_data = handler(path)
+    return (doc_data or {}).get("content") or ""
+
+
+def _text_version_diff(old_text: str, new_text: str) -> dict:
+    old_lines = [line.strip() for line in old_text.splitlines() if line.strip()]
+    new_lines = [line.strip() for line in new_text.splitlines() if line.strip()]
+    matcher = difflib.SequenceMatcher(a=old_lines, b=new_lines)
+    added = []
+    removed = []
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag in {"insert", "replace"}:
+            added.extend(new_lines[j1:j2])
+        if tag in {"delete", "replace"}:
+            removed.extend(old_lines[i1:i2])
+    return {
+        "changed": bool(added or removed),
+        "similarity": round(matcher.ratio(), 3),
+        "old_length": len(old_text),
+        "new_length": len(new_text),
+        "added": added[:8],
+        "removed": removed[:8],
+    }
+
+
+def _related_score(doc: dict, source: dict) -> int:
+    doc_path = str(doc.get("path") or "")
+    source_path = str(source.get("path") or "")
+    source_title = str(source.get("title") or source.get("source") or "")
+    if not doc_path or doc_path == source_path:
+        return 0
+
+    score = 0
+    doc_parent = str(Path(doc_path).parent).replace("\\", "/")
+    source_parent = str(Path(source_path).parent).replace("\\", "/")
+    if doc_parent and doc_parent == source_parent:
+        score += 6
+    if source_parent and doc_path.startswith(source_parent + "/"):
+        score += 3
+
+    title_words = {word.lower() for word in source_title.replace(".", " ").split() if len(word) > 3}
+    doc_words = {word.lower() for word in f"{doc.get('filename', '')} {doc_path}".replace(".", " ").split() if len(word) > 3}
+    score += min(len(title_words & doc_words), 4)
+    return score
+
+
+def _find_related_documents(sources: list[dict], limit: int = 5) -> list[dict]:
+    documents = _scan_documents()
+    scored: dict[str, dict] = {}
+    for source in sources:
+        for doc in documents:
+            score = _related_score(doc, source)
+            if score <= 0:
+                continue
+            key = doc["path"]
+            existing = scored.get(key)
+            if not existing or score > existing["score"]:
+                scored[key] = {**doc, "score": score, "reason": "Похожая папка или название источника"}
+    return sorted(scored.values(), key=lambda item: item["score"], reverse=True)[:limit]
 
 
 def _resolve_document_path(raw_path: str | None) -> Path | None:
@@ -162,7 +250,8 @@ def preview_document_upload():
         return jsonify({"error": "Формат файла не поддерживается"}), 400
 
     filename = secure_filename(file.filename)
-    duplicate_exists = (Path(settings.UPLOAD_DIR) / filename).exists() or (Path(settings.DATA_DIR) / filename).exists()
+    existing_document = _find_existing_document(filename)
+    duplicate_exists = existing_document is not None
     try:
         from create_vector_db import preview_document
 
@@ -170,11 +259,33 @@ def preview_document_upload():
             temp_path = Path(tmp_dir) / filename
             file.save(temp_path)
             preview = preview_document(temp_path, duplicate_exists=duplicate_exists)
+            if existing_document and preview.get("supported"):
+                old_text = _extract_preview_text(existing_document)
+                new_text = _extract_preview_text(temp_path)
+                preview["version_diff"] = {
+                    "existing_path": str(existing_document.relative_to(Path(settings.DATA_DIR))).replace("\\", "/"),
+                    **_text_version_diff(old_text, new_text),
+                }
     except Exception:
         logger.error("Ошибка предпросмотра документа:\n%s", traceback.format_exc())
         return jsonify({"error": "Ошибка предпросмотра документа"}), 500
 
     return jsonify({"preview": preview})
+
+
+@documents_bp.route("/related", methods=["POST"])
+def related_documents():
+    """Подобрать соседние документы по источникам ответа."""
+    data = request.get_json(silent=True) or {}
+    sources = data.get("sources") or []
+    if not isinstance(sources, list):
+        return jsonify({"error": "sources должен быть списком"}), 400
+    limit = data.get("limit") or 5
+    try:
+        limit = max(1, min(int(limit), 10))
+    except (TypeError, ValueError):
+        limit = 5
+    return jsonify({"documents": _find_related_documents(sources, limit=limit)})
 
 
 @documents_bp.route("/reindex", methods=["POST"])
