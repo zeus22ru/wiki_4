@@ -2,13 +2,17 @@
 
 Система для создания векторной базы данных из различных форматов файлов и вопрос-ответной системы на базе знаний с использованием **Ollama** или **LM Studio** (OpenAI-совместимый локальный API) и ChromaDB. Переключение задаётся в `.env` через `INFERENCE_BACKEND`.
 
+Отдельная инструкция для конечных пользователей: `[docs/user_guide.md](docs/user_guide.md)`.
+Инструкция для системного администратора по установке на Linux-сервер: `[docs/production_setup.md](docs/production_setup.md)`.
+Инструкция для системного администратора по установке на Windows Server: `[docs/windows_server_setup.md](docs/windows_server_setup.md)`.
+
 ## Структура проекта
 
 ```
 wiki_4/
 ├── api/                     # API модуль
-│   ├── middleware/         # Middleware (валидация, логирование)
-│   └── routes/             # API маршруты (chat, health, models)
+│   ├── middleware/         # Middleware (доступ, роли, гостевые сессии)
+│   └── routes/             # API маршруты (chat, auth, documents, admin)
 ├── config/                  # Конфигурация
 │   ├── settings.py         # Централизованные настройки
 │   └── logging_config.py   # Настройки логирования
@@ -20,7 +24,8 @@ wiki_4/
 ├── docs/                    # Документация
 ├── logs/                    # Логи системы
 ├── models/                  # Модели данных
-├── scripts/                 # Скрипты утилит
+├── tests/                   # Автотесты (pytest)
+├── scripts/                 # Скрипты утилит (включая create_admin.py)
 ├── static/                  # Статические файлы (CSS, JS)
 ├── templates/               # HTML шаблоны
 ├── utils/                   # Утилиты
@@ -43,7 +48,7 @@ wiki_4/
 
 ## Требования
 
-- Python 3.8+
+- Python 3.10+
 - Сервер инференса: **Ollama** (Docker или нативно) или **LM Studio** с включённым локальным сервером
 - Модели эмбеддингов и чата, согласованные с размерностью уже собранной Chroma (для `bge-m3` обычно 1024 измерений)
 
@@ -91,22 +96,35 @@ cp .env.example .env
 ```
 
 Отредактируйте `.env` файл с вашими настройками:
-- **`INFERENCE_BACKEND`** (`ollama` или `lmstudio`) и **`OLLAMA_URL`**
+
+- `**INFERENCE_BACKEND**` (`ollama` или `lmstudio`) и `**OLLAMA_URL**`
 - Идентификаторы моделей (`OLLAMA_EMBEDDING_MODEL`, `OLLAMA_CHAT_MODEL`): у LM Studio — как в `GET /v1/models` (поле `id`)
 - Путь к векторной БД (ChromaDB), размеры чанков, пороги RAG и прочее
 
+### 4. (Опционально) Создание администратора
+
+Если планируете пользоваться вкладками администрирования и управлять базой знаний через веб-интерфейс, создайте admin-пользователя:
+
+```bash
+python scripts/create_admin.py --username admin --email admin@example.com
+```
+
+Пароль можно передать аргументом `--password` или ввести скрытым вводом при запуске.
+
 ### Переключатель Ollama и LM Studio (`INFERENCE_BACKEND`)
 
-Одна переменная задаёт пресет HTTP API и проверок доступности сервера (см. [`config/settings.py`](config/settings.py)):
+Одна переменная задаёт пресет HTTP API и проверок доступности сервера (см. `[config/settings.py](config/settings.py)`):
 
-| `INFERENCE_BACKEND` | Эмбеддинги | Ответы чата | Проверка «сервер жив» |
-|---------------------|------------|-------------|------------------------|
-| **`ollama`** | `POST /api/embed` | `POST /api/generate` | `GET /api/tags` |
-| **`lmstudio`** | `POST /v1/embeddings` | `POST /v1/chat/completions` | `GET /v1/models` (список не пустой) |
 
-Если **`INFERENCE_BACKEND` не задан**, используются явные **`EMBEDDING_API_MODE`** / **`CHAT_API_MODE`** (`ollama` или `openai`), иначе по умолчанию режим Ollama.
+| `INFERENCE_BACKEND` | Эмбеддинги            | Ответы чата                 | Проверка «сервер жив»               |
+| ------------------- | --------------------- | --------------------------- | ----------------------------------- |
+| `**ollama**`        | `POST /api/embed`     | `POST /api/generate`        | `GET /api/tags`                     |
+| `**lmstudio**`      | `POST /v1/embeddings` | `POST /v1/chat/completions` | `GET /v1/models` (список не пустой) |
 
-Явные **`EMBEDDING_API_MODE`** и **`CHAT_API_MODE`** в `.env` **перекрывают** пресет (для нестандартных схем).
+
+Если `**INFERENCE_BACKEND` не задан**, используются явные `**EMBEDDING_API_MODE`** / `**CHAT_API_MODE**` (`ollama` или `openai`), иначе по умолчанию режим Ollama.
+
+Явные `**EMBEDDING_API_MODE**` и `**CHAT_API_MODE**` в `.env` **перекрывают** пресет (для нестандартных схем).
 
 **LM Studio:** укажите `OLLAMA_URL` на локальный API (часто порт `1234`), в моделях — точные `id` из списка сервера, например `text-embedding-bge-m3` и `qwen/qwen3.5-9b`. Перед запросами загрузите модели в LM Studio. Сырой `GET /api/tags` у LM Studio не является признаком работоспособности; приложение для режима `lmstudio` опирается на `/v1/models`.
 
@@ -123,6 +141,7 @@ python create_vector_db.py
 ```
 
 Скрипт поддерживает следующие форматы файлов:
+
 - **HTML/HTM** - веб-страницы
 - **DOCX** - документы Microsoft Word
 - **PDF** - документы Adobe Acrobat
@@ -131,6 +150,7 @@ python create_vector_db.py
 - **DOC** - документы Word (старый формат)
 
 Скрипт выполнит следующие действия:
+
 - Просканирует папку `data/` и найдет все поддерживаемые файлы
 - Извлечет текст из файлов
 - Разобьет текст на чанки (по 500 символов с перекрытием 50)
@@ -173,55 +193,87 @@ python web_app.py
 start.bat
 ```
 
-Приложение будет доступно по адресу: http://localhost:5000
+Приложение будет доступно по адресу: [http://localhost:5000](http://localhost:5000)
 
 #### API Endpoints
 
-**Проверка здоровья системы:**
+> Если в `.env` задан `API_KEY`, для `/api/*` нужен заголовок `X-API-Key`.  
+> Если задан `ADMIN_API_KEY`, для `/api/admin/*` также проверяется `X-Admin-Key`.  
+> Роуты управления документами (`/api/documents/*`) и админ-диагностики требуют роль `admin` в сессии.
+
+**Системные эндпоинты:**
+
 ```bash
 curl http://localhost:5000/api/health
+curl http://localhost:5000/api/models
 ```
 
-**Запрос чата:**
+**RAG-чат:**
+
 ```bash
 curl -X POST http://localhost:5000/api/chat \
   -H "Content-Type: application/json" \
-  -d '{"message": "Как настроить принтер на ТСД?"}'
-```
+  -d '{"message":"Как настроить принтер на ТСД?","top_k":5,"min_score":0.0,"answer_mode":"default"}'
 
-**Потоковый запрос чата с историей:**
-```bash
 curl -N -X POST http://localhost:5000/api/chat/stream \
   -H "Content-Type: application/json" \
   -H "Accept: text/event-stream" \
-  -d '{"message": "Как настроить принтер на ТСД?", "chat_id": 1, "answer_mode": "steps"}'
+  -d '{"message":"Как настроить принтер на ТСД?","chat_id":1,"answer_mode":"steps"}'
+
+curl -X POST http://localhost:5000/api/chat/verify \
+  -H "Content-Type: application/json" \
+  -d '{"answer":"...","sources":[],"citations":[]}'
+
+curl -X POST http://localhost:5000/api/chat/suggestions \
+  -H "Content-Type: application/json" \
+  -d '{"answer":"...","sources":[],"citations":[]}'
 ```
 
-**История диалогов:**
+**История диалогов (`/api/chats`):**
+
 ```bash
 curl http://localhost:5000/api/chats
+curl -X POST http://localhost:5000/api/chats -H "Content-Type: application/json" -d '{"title":"Новый чат"}'
 curl http://localhost:5000/api/chats/1
+curl -X PUT http://localhost:5000/api/chats/1 -H "Content-Type: application/json" -d '{"title":"Обновлённый заголовок"}'
+curl -X DELETE http://localhost:5000/api/chats/1
+curl -X DELETE http://localhost:5000/api/chats
+curl http://localhost:5000/api/chats/1/messages
+curl -X POST http://localhost:5000/api/chats/1/messages -H "Content-Type: application/json" -d '{"role":"user","content":"Привет"}'
+curl -X POST http://localhost:5000/api/chats/feedback -H "Content-Type: application/json" -d '{"rating":"up","session_id":1}'
 ```
 
-**Документы базы знаний:**
+**Авторизация (`/api/auth`):**
+
+```bash
+curl http://localhost:5000/api/auth/me
+curl -X POST http://localhost:5000/api/auth/register -H "Content-Type: application/json" -d '{"username":"user1","email":"user1@example.com","password":"secret"}'
+curl -X POST http://localhost:5000/api/auth/login -H "Content-Type: application/json" -d '{"identifier":"user1@example.com","password":"secret"}'
+curl -X POST http://localhost:5000/api/auth/logout
+```
+
+**База знаний (`/api/documents`, только admin):**
+
 ```bash
 curl http://localhost:5000/api/documents
+curl "http://localhost:5000/api/documents/open?path=uploads/example.docx"
+curl -X POST http://localhost:5000/api/documents/upload -F "file=@example.docx"
+curl -X POST http://localhost:5000/api/documents/preview -F "file=@example.docx"
+curl -X POST http://localhost:5000/api/documents/related -H "Content-Type: application/json" -d '{"sources":[],"limit":5}'
 curl -X POST http://localhost:5000/api/documents/reindex
+curl http://localhost:5000/api/documents/jobs
 ```
 
-**Админ-диагностика:**
+**Админ-диагностика (только admin):**
+
 ```bash
 curl http://localhost:5000/api/admin/overview
-```
-
-**Список моделей на сервере инференса** (Ollama или LM Studio — в зависимости от `.env`):
-```bash
-curl http://localhost:5000/api/models
+curl http://localhost:5000/api/admin/settings
 ```
 
 ## Конфигурация
 
-Конфигурация централизована в [`config/settings.py`](config/settings.py) и загружается из `.env` файла. Вспомогательные функции: `inference_server_reachable()`, `fetch_remote_model_ids()`, `uses_openai_compatible_api()` (экспорт из пакета `config`).
+Конфигурация централизована в `[config/settings.py](config/settings.py)` и загружается из `.env` файла. Вспомогательные функции: `inference_server_reachable()`, `fetch_remote_model_ids()`, `uses_openai_compatible_api()` (экспорт из пакета `config`).
 
 ### Основные параметры
 
@@ -232,7 +284,7 @@ INFERENCE_BACKEND = "ollama"           # или "lmstudio"
 # Базовый URL (Ollama :11434, LM Studio — см. порт локального сервера)
 OLLAMA_URL = "http://localhost:11434"
 OLLAMA_EMBEDDING_MODEL = "bge-m3"      # У LM Studio — id из /v1/models
-OLLAMA_CHAT_MODEL = "qwen3.5:4b"       # У LM Studio — id из /v1/models
+OLLAMA_CHAT_MODEL = "qwen2.5:7b"       # У LM Studio — id из /v1/models
 
 # ChromaDB настройки
 CHROMA_PERSIST_DIR = "./chroma_db"
@@ -265,7 +317,7 @@ CACHE_TTL = 3600
 
 ### Полный список настроек
 
-Смотрите [`config/settings.py`](config/settings.py) или `.env.example` для полного списка настроек.
+Смотрите `[config/settings.py](config/settings.py)` или `.env.example` для полного списка настроек.
 
 ## Архитектура
 
@@ -350,9 +402,10 @@ Ollama доступен по адресу: http://localhost:11434
 
 ### Веб-приложение
 
-Откройте браузер и перейдите по адресу: http://localhost:5000
+Откройте браузер и перейдите по адресу: [http://localhost:5000](http://localhost:5000)
 
 Интерфейс позволяет:
+
 - Вести несколько диалогов: создавать, открывать, переименовывать и удалять чаты
 - Автоматически сохранять историю вопросов, ответов, источников и цитат в SQLite
 - Получать ответы потоково: сначала отображается статус поиска документов, затем текст ответа по мере генерации
@@ -374,6 +427,7 @@ $ curl -X POST http://localhost:5000/api/chat \
 ```
 
 Ответ:
+
 ```json
 {
   "answer": "Для настройки принтера на ТСД выполните следующие шаги:\n1. Подключите принтер к ТСД через Bluetooth или USB\n2. Установите драйверы принтера\n3. Настройте параметры печати в 1С\n\n**Источники:**\n\n1. WMS. Настройка принтера на ТСД (ID: abc123) [релевантность: 85.00%]",
@@ -395,8 +449,24 @@ $ curl -X POST http://localhost:5000/api/chat \
 }
 ```
 
-Источник: WMS. Настройка принтера на ТСД
-------------------------------------------------------------
+## Источник: WMS. Настройка принтера на ТСД
+
+```
+
+## Тестирование
+
+Запуск тестов:
+
+```bash
+pytest
+```
+
+Запуск отдельных наборов:
+
+```bash
+pytest tests/test_web_app.py
+pytest tests/test_auth.py
+pytest tests/test_product_features.py
 ```
 
 ## Устранение неполадок
@@ -406,7 +476,7 @@ $ curl -X POST http://localhost:5000/api/chat \
 Убедитесь, что Docker контейнер с Ollama запущен:
 
 ```bash
-docker ps | grep ollama
+docker ps --filter "name=ollama"
 ```
 
 Если не запущен:
@@ -463,6 +533,7 @@ python -c "from utils.embeddings import invalidate_embedding_cache; invalidate_e
 ### Логи
 
 Логи системы хранятся в папке `logs/`:
+
 - `logs/rag/rag_detailed.log` - детальные логи RAG системы
 - `logs/web_app.log` - логи веб-приложения
 

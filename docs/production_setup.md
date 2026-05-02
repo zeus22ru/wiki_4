@@ -1,702 +1,654 @@
-# Инструкция по установке Wiki QA System на продакшн-сервер
+# Инструкция администратора по установке Wiki QA System на Linux-сервер
 
-## Содержание
+Документ описывает установку веб-приложения Wiki QA System на Linux-сервер, настройку инференса через Ollama или LM Studio, первичную индексацию базы знаний, запуск как systemd-сервиса, публикацию через Nginx и базовое сопровождение.
 
-1. [Требования к серверу](#требования-к-серверу)
-2. [Установка системных зависимостей](#установка-системных-зависимостей)
-3. [Установка Docker и Ollama](#установка-docker-и-ollama)
-4. [Клонирование и настройка проекта](#клонирование-и-настройка-проекта)
-5. [Настройка переменных окружения](#настройка-переменных-окружения)
-6. [Создание векторной базы данных](#создание-векторной-базы-данных)
-7. [Запуск веб-приложения](#запуск-веб-приложения)
-8. [Настройка systemd для автозапуска](#настройка-systemd-для-автозапуска)
-9. [Настройка Nginx (рекомендуется)](#настройка-nginx-рекомендуется)
-10. [Настройка SSL сертификатов](#настройка-ssl-сертификатов)
-11. [Резервное копирование](#резервное-копирование)
-12. [Мониторинг и логирование](#мониторинг-и-логирование)
-13. [Обновление системы](#обновление-системы)
-14. [Устранение неполадок](#устранение-неполадок)
+Для Windows Server используйте отдельную инструкцию: `[docs/windows_server_setup.md](windows_server_setup.md)`.
 
----
+Инструкция рассчитана на администратора, который разворачивает приложение в рабочей среде. Примеры ниже используют Ubuntu/Debian и путь установки `/opt/wiki-qa`.
 
-## Требования к серверу
+## 1. Что устанавливается
 
-### Минимальные требования
+Wiki QA System - это Flask-приложение для вопросно-ответного поиска по базе знаний. Система использует:
 
-| Компонент | Минимальные требования | Рекомендуемые требования |
-|-----------|----------------------|------------------------|
-| **ОС** | Ubuntu 20.04 LTS / Debian 11+ | Ubuntu 22.04 LTS / Debian 12+ |
-| **CPU** | 2 ядра | 4+ ядра |
-| **RAM** | 8 ГБ | 16+ ГБ |
-| **Диск** | 50 ГБ | 100+ ГБ SSD |
-| **Сеть** | Стабильное соединение | Выделенный IP / домен |
+- Python-приложение `web_app.py` для веб-интерфейса и API.
+- SQLite для пользователей, истории чатов и служебных данных.
+- ChromaDB в локальном каталоге для векторной базы.
+- Ollama или LM Studio для эмбеддингов и генерации ответов.
+- Каталоги `data`, `chroma_db`, `cache` и `logs` для рабочих данных.
 
-### Проверка системных требований
+Основные сетевые порты:
+
+- `5000` - внутренний порт Flask/Gunicorn.
+- `80` и `443` - публичный доступ через Nginx.
+- `11434` - Ollama API, если используется Ollama.
+- `1234` или другой локальный порт - LM Studio API, если используется LM Studio.
+
+## 2. Требования к серверу
+
+Минимальная конфигурация:
+
+- ОС: Ubuntu 22.04 LTS, Debian 12 или совместимая Linux-система.
+- CPU: 2 ядра.
+- RAM: 8 ГБ.
+- Диск: от 50 ГБ SSD.
+- Python: 3.10 или новее.
+- Доступ в интернет для установки пакетов и загрузки моделей.
+
+Рекомендуемая конфигурация:
+
+- CPU: 4+ ядра.
+- RAM: 16+ ГБ.
+- Диск: 100+ ГБ SSD.
+- GPU NVIDIA с установленным драйвером и NVIDIA Container Toolkit, если планируется запуск больших моделей в Ollama.
+
+Проверьте сервер:
 
 ```bash
-# Проверка версии ОС
 cat /etc/os-release
-
-# Проверка CPU
-nproc
-
-# Проверка RAM
-free -h
-
-# Проверка свободного дискового пространства
-df -h
-
-# Проверка портов (5000, 11434, 6333)
-netstat -tuln | grep -E '5000|11434|6333'
-```
-
----
-
-## Установка системных зависимостей
-
-### 1. Обновление системы
-
-```bash
-sudo apt update && sudo apt upgrade -y
-```
-
-### 2. Установка Python 3.10+
-
-```bash
-# Проверка версии Python
 python3 --version
+nproc
+free -h
+df -h
+```
 
-# Если версия ниже 3.10, установите Python 3.10+
-sudo apt install -y software-properties-common
-sudo add-apt-repository ppa:deadsnakes/ppa
+## 3. Подготовка системы
+
+Обновите пакеты и установите базовые зависимости:
+
+```bash
 sudo apt update
-sudo apt install -y python3.10 python3.10-venv python3.10-dev python3-pip
-```
-
-### 3. Установка необходимых системных пакетов
-
-```bash
+sudo apt upgrade -y
 sudo apt install -y \
-    git \
-    curl \
-    wget \
-    build-essential \
-    libpq-dev \
-    libssl-dev \
-    libffi-dev \
-    nginx \
-    supervisor \
-    certbot \
-    python3-certbot-nginx \
-    htop \
-    iotop \
-    net-tools
+  git curl wget ca-certificates gnupg \
+  python3 python3-venv python3-dev python3-pip \
+  build-essential nginx certbot python3-certbot-nginx \
+  sqlite3 htop net-tools
 ```
 
-### 4. Создание пользователя для приложения
+Создайте отдельного пользователя приложения:
 
 ```bash
-# Создание системного пользователя
 sudo useradd -r -s /bin/bash -m -d /opt/wiki-qa wikiqa
-
-# Создание директорий
-sudo mkdir -p /opt/wiki-qa/{data,logs,cache,backups}
+sudo mkdir -p /opt/wiki-qa
 sudo chown -R wikiqa:wikiqa /opt/wiki-qa
 ```
 
----
-
-## Установка Docker и Ollama
-
-### 1. Установка Docker
+Все дальнейшие команды установки приложения выполняйте от пользователя `wikiqa`, если не указано `sudo`:
 
 ```bash
-# Установка Docker
+sudo -iu wikiqa
+```
+
+## 4. Установка проекта
+
+Склонируйте репозиторий или скопируйте архив проекта на сервер:
+
+```bash
+cd /opt
+git clone <URL_РЕПОЗИТОРИЯ> wiki-qa
+sudo chown -R wikiqa:wikiqa /opt/wiki-qa
+sudo -iu wikiqa
+cd /opt/wiki-qa
+```
+
+Создайте виртуальное окружение и установите зависимости:
+
+```bash
+python3 -m venv venv
+source venv/bin/activate
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+pip install gunicorn
+```
+
+Проверьте, что приложение импортируется:
+
+```bash
+python -c "from web_app import app; print(app.name)"
+```
+
+## 5. Настройка инференса
+
+Для работы системы нужен сервер, который умеет:
+
+- строить эмбеддинги для вопросов и документов;
+- генерировать текстовые ответы.
+
+Поддерживаются два варианта: Ollama и LM Studio. В продакшене обычно проще обслуживать Ollama на том же сервере или на отдельной машине в локальной сети.
+
+### Вариант A: Ollama
+
+Установите Docker от пользователя с правами `sudo`:
+
+```bash
 curl -fsSL https://get.docker.com -o get-docker.sh
 sudo sh get-docker.sh
-
-# Добавление пользователя в группу docker
-sudo usermod -aG docker $USER
-newgrp docker
-
-# Проверка установки
-docker --version
+sudo usermod -aG docker wikiqa
 ```
 
-### 2. Установка Docker Compose
+Перезайдите в сессию пользователя `wikiqa` после добавления в группу `docker`.
+
+Запустите Ollama без GPU:
 
 ```bash
-# Установка Docker Compose
-sudo curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
-sudo chmod +x /usr/local/bin/docker-compose
-
-# Проверка установки
-docker-compose --version
-```
-
-### 3. Запуск Ollama
-
-```bash
-# Запуск контейнера Ollama
 docker run -d \
-    --name ollama \
-    --restart unless-stopped \
-    -p 11434:11434 \
-    -v ollama_data:/root/.ollama \
-    ollama/ollama
-
-# Ожидание запуска Ollama (около 30 секунд)
-sleep 30
-
-# Проверка статуса
-docker ps | grep ollama
-
-# Проверка доступности API
-curl http://localhost:11434/api/tags
+  --name ollama \
+  --restart unless-stopped \
+  -p 127.0.0.1:11434:11434 \
+  -v ollama_data:/root/.ollama \
+  ollama/ollama
 ```
 
-### 4. Загрузка моделей
+Если настроен GPU NVIDIA, используйте:
 
 ```bash
-# Загрузка модели для эмбеддингов (bge-m3)
+docker run -d \
+  --name ollama \
+  --restart unless-stopped \
+  --gpus all \
+  -p 127.0.0.1:11434:11434 \
+  -v ollama_data:/root/.ollama \
+  ollama/ollama
+```
+
+Загрузите модели:
+
+```bash
 docker exec -it ollama ollama pull bge-m3
-
-# Загрузка модели для генерации ответов (qwen2.5:7b)
 docker exec -it ollama ollama pull qwen2.5:7b
-
-# Проверка загруженных моделей
 docker exec -it ollama ollama list
+curl http://127.0.0.1:11434/api/tags
 ```
 
-> **Примечание:** Модель `qwen2.5:7b` требует около 4.7 ГБ VRAM. Если у вас нет дискретной видеокарты, используйте модель `qwen2.5:3b` (меньше по размеру).
+Важно: модель эмбеддингов должна совпадать с моделью, которой создана ChromaDB. Для `bge-m3` размерность обычно 1024. Если заменить embedding-модель, векторную базу нужно пересоздать.
 
----
+### Вариант B: LM Studio
 
-## Клонирование и настройка проекта
+LM Studio должен быть установлен на сервере или на отдельной машине, доступной приложению по сети.
 
-### 1. Клонирование репозитория
+В LM Studio:
+
+1. Загрузите embedding-модель и chat-модель.
+2. Включите локальный OpenAI-совместимый сервер.
+3. Запомните базовый URL, например `http://127.0.0.1:1234`.
+4. Получите точные идентификаторы моделей:
 
 ```bash
-# Переключение в директорию /opt
-cd /opt
-
-# Клонирование проекта (замените URL на ваш репозиторий)
-git clone <URL_РЕПОЗИТОРИЯ> wiki-qa
-cd wiki-qa
+curl http://127.0.0.1:1234/v1/models
 ```
 
-### 2. Создание виртуального окружения
+В `.env` для LM Studio обязательно укажите `INFERENCE_BACKEND=lmstudio`, URL сервера и `id` моделей из ответа `/v1/models`.
+
+## 6. Конфигурация `.env`
+
+Создайте конфигурацию:
 
 ```bash
-# Создание виртуального окружения Python
-python3.10 -m venv venv
-
-# Активация виртуального окружения
-source venv/bin/activate
-
-# Обновление pip
-pip install --upgrade pip
-```
-
-### 3. Установка Python зависимостей
-
-```bash
-# Установка зависимостей из requirements.txt
-pip install -r requirements.txt
-
-# Установка дополнительных пакетов
-pip install gunicorn
-pip install waitress
-```
-
-### 4. Копирование файла конфигурации
-
-```bash
-# Копирование .env.example в .env
+cd /opt/wiki-qa
 cp .env.example .env
-
-# Редактирование файла .env (см. следующий раздел)
 nano .env
 ```
 
----
-
-## Настройка переменных окружения
-
-### Файл `.env`
-
-Скопируйте и отредактируйте файл `.env` с следующими настройками:
+Сгенерируйте секретные ключи:
 
 ```bash
-# ============================================
-# Wiki QA System - Production Configuration
-# ============================================
+python -c "import secrets; print(secrets.token_hex(32))"
+python -c "import secrets; print(secrets.token_hex(32))"
+```
 
-# ============================================
-# Ollama настройки
-# ============================================
-# URL для подключения к Ollama API
-OLLAMA_URL=http://localhost:11434
+Пример `.env` для установки с Ollama:
 
-# Модель для генерации эмбеддингов
+```dotenv
+INFERENCE_BACKEND=ollama
+OLLAMA_URL=http://127.0.0.1:11434
 OLLAMA_EMBEDDING_MODEL=bge-m3
-
-# Модель для генерации ответов
-# Для систем без GPU: qwen2.5:3b
-# Для систем с GPU: qwen2.5:7b
 OLLAMA_CHAT_MODEL=qwen2.5:7b
+CHAT_MAX_TOKENS=2048
 
-# ============================================
-# ChromaDB настройки
-# ============================================
-# Директория для хранения векторной базы данных
-CHROMA_PERSIST_DIR=/opt/wiki-qa/data/chroma_db
-
-# Имя коллекции в ChromaDB
+CHROMA_PERSIST_DIR=/opt/wiki-qa/chroma_db
 CHROMA_COLLECTION_NAME=wiki_knowledge
-
-# ============================================
-# Data настройки
-# ============================================
-# Директория с исходными данными
-DATA_DIR=/opt/wiki-qa/data/pages
-
-# Директория для загруженных файлов
+DATA_DIR=/opt/wiki-qa/data
 UPLOAD_DIR=/opt/wiki-qa/data/uploads
 
-# Размер чанка в символах для разбиения текста
-CHUNK_SIZE=500
-
-# Перекрытие чанков в символах
-CHUNK_OVERLAP=50
-
-# Размер пакета для пакетной обработки эмбеддингов
-BATCH_SIZE=10
-
-# ============================================
-# API настройка
-# ============================================
-# Хост для запуска API сервера
-API_HOST=0.0.0.0
-
-# Порт для запуска API сервера
+API_HOST=127.0.0.1
 API_PORT=5000
+FLASK_DEBUG=false
+CORS_ORIGINS=https://wiki.example.com
 
-# Количество релевантных документов для поиска
-TOP_K_RESULTS=3
-
-# ============================================
-# RAG настройка
-# ============================================
 RAG_TOP_K=5
+RAG_MIN_SCORE=0.0
 RAG_MAX_CITATIONS=5
-RAG_MIN_SCORE=0.5
 RAG_MAX_CONTEXT_LENGTH=3000
 
-# ============================================
-# Logging настройка
-# ============================================
-# Уровень логирования: DEBUG, INFO, WARNING, ERROR, CRITICAL
 LOG_LEVEL=INFO
-
-# Директория для хранения логов
 LOG_DIR=/opt/wiki-qa/logs
 
-# ============================================
-# Security настройка
-# ============================================
-# Секретный ключ для приложения (ОБЯЗАТЕЛЬНО ИЗМЕНИТЬ!)
-# Сгенерируйте случайный ключ: python -c "import secrets; print(secrets.token_hex(32))"
-SECRET_KEY=<ВАШ_СЛУЧАЙНЫЙ_СЕКРЕТ_КЛЮЧ>
+SECRET_KEY=<СГЕНЕРИРОВАННЫЙ_SECRET_KEY>
+JWT_SECRET_KEY=<СГЕНЕРИРОВАННЫЙ_JWT_SECRET_KEY>
+JWT_EXPIRATION_HOURS=24
 
-# ============================================
-# Database настройка
-# ============================================
-# Путь к файлу базы данных SQLite
 DATABASE_PATH=/opt/wiki-qa/data/wiki_qa.db
 
-# ============================================
-# Cache настройка
-# ============================================
-# Включить кэширование эмбеддингов
 CACHE_ENABLED=true
-
-# Время жизни кэша в секундах
 CACHE_TTL=3600
-
-# Директория для хранения кэша
 CACHE_DIR=/opt/wiki-qa/cache
 
-# ============================================
-# File upload настройка
-# ============================================
-# Максимальный размер загружаемого файла в байтах (10MB)
 MAX_FILE_SIZE=10485760
-
-# Разрешённые расширения файлов
 ALLOWED_EXTENSIONS=html,htm,txt,docx,doc,pdf,xlsx,xls,pptx
 ```
 
-### Генерация секретных ключей
+Для LM Studio замените блок инференса:
 
-```bash
-# Генерация SECRET_KEY
-python3 -c "import secrets; print(secrets.token_hex(32))"
+```dotenv
+INFERENCE_BACKEND=lmstudio
+OLLAMA_URL=http://127.0.0.1:1234
+OLLAMA_EMBEDDING_MODEL=<ID_EMBEDDING_МОДЕЛИ_ИЗ_/v1/models>
+OLLAMA_CHAT_MODEL=<ID_CHAT_МОДЕЛИ_ИЗ_/v1/models>
 ```
 
-### Проверка конфигурации
+Назначение важных параметров:
+
+- `INFERENCE_BACKEND` - `ollama` или `lmstudio`; задает формат API-запросов.
+- `OLLAMA_URL` - базовый URL сервера инференса. Название переменной историческое и используется также для LM Studio.
+- `OLLAMA_EMBEDDING_MODEL` - модель эмбеддингов.
+- `OLLAMA_CHAT_MODEL` - модель генерации ответов.
+- `CHROMA_PERSIST_DIR` - каталог локальной векторной базы.
+- `DATA_DIR` - каталог исходных документов базы знаний.
+- `UPLOAD_DIR` - каталог документов, загруженных через веб-интерфейс.
+- `DATABASE_PATH` - SQLite-файл пользователей, чатов и истории.
+- `SECRET_KEY` и `JWT_SECRET_KEY` - обязательные секреты, которые нельзя оставлять значениями из примера.
+- `API_KEY` - необязательный ключ для защиты `/api/*`.
+- `ADMIN_API_KEY` - необязательный ключ для защиты `/api/admin/*`.
+- `CORS_ORIGINS` - список разрешенных origin через запятую; в продакшене не оставляйте `*`, если фронтенд доступен по известному домену.
+
+Проверьте права:
 
 ```bash
-# Проверка валидации настроек
-python3 -c "from config.settings import settings; print('OK' if settings.validate() else 'ERROR')"
+chmod 600 /opt/wiki-qa/.env
+mkdir -p /opt/wiki-qa/data/uploads /opt/wiki-qa/chroma_db /opt/wiki-qa/cache /opt/wiki-qa/logs
+chown -R wikiqa:wikiqa /opt/wiki-qa
 ```
 
----
-
-## Создание векторной базы данных
-
-### 1. Подготовка данных
+Проверьте загрузку настроек:
 
 ```bash
-# Создание директории для данных
-mkdir -p /opt/wiki-qa/data/pages
-
-# Загрузка HTML файлов в директорию /opt/wiki-qa/data/pages
-# (через FTP, SCP или другие методы)
-```
-
-### 2. Создание векторной базы данных
-
-```bash
-# Активация виртуального окружения
 source venv/bin/activate
-
-# Запуск скрипта создания векторной базы данных
-python3 create_vector_db.py
-
-# Скрипт выполнит:
-# - Сканирование папки data/pages/
-# - Извлечение текста из HTML файлов
-# - Разбиение на чанки
-# - Генерацию эмбеддингов через Ollama
-# - Сохранение в ChromaDB
+python -c "from config import settings; print(settings.INFERENCE_BACKEND, settings.OLLAMA_URL); print(settings.validate())"
 ```
 
-### 3. Проверка созданной базы данных
+## 7. Подготовка базы знаний
+
+Скопируйте документы в каталог `DATA_DIR`, например:
 
 ```bash
-# Проверка количества документов в базе
-python3 -c "
+mkdir -p /opt/wiki-qa/data
+rsync -av /path/to/exported/wiki/ /opt/wiki-qa/data/
+```
+
+Поддерживаемые форматы:
+
+- `html`, `htm`, `txt`;
+- `docx`, `doc`;
+- `pdf`;
+- `xlsx`, `xls`;
+- `pptx`.
+
+Создайте векторную базу:
+
+```bash
+cd /opt/wiki-qa
+source venv/bin/activate
+python create_vector_db.py
+```
+
+После завершения проверьте коллекцию ChromaDB:
+
+```bash
+python - <<'PY'
 import chromadb
-from chromadb.config import Settings
-client = chromadb.PersistentClient(path='/opt/wiki-qa/data/chroma_db')
-collection = client.get_collection(name='wiki_knowledge')
-print(f'Документов в базе: {collection.count()}')
-"
+from config import settings
+
+client = chromadb.PersistentClient(path=settings.CHROMA_PERSIST_DIR)
+collection = client.get_collection(settings.CHROMA_COLLECTION_NAME)
+print("Документов в ChromaDB:", collection.count())
+PY
 ```
 
----
-
-## Запуск веб-приложения
-
-### 1. Тестовый запуск
+Если менялись исходные документы или embedding-модель, пересоздайте векторную базу и очистите кэш:
 
 ```bash
-# Активация виртуального окружения
+python -c "from utils.embeddings import invalidate_embedding_cache; invalidate_embedding_cache()"
+python create_vector_db.py
+```
+
+## 8. Создание администратора
+
+Администратор нужен для вкладок управления документами и диагностики.
+
+```bash
+cd /opt/wiki-qa
 source venv/bin/activate
-
-# Тестовый запуск Flask приложения
-python3 web_app.py
-
-# Откройте в браузере: http://localhost:5000
-# Проверьте API: http://localhost:5000/api/health
+python scripts/create_admin.py --username admin --email admin@example.com
 ```
 
-### 2. Запуск через Gunicorn (рекомендуется)
+Скрипт запросит пароль скрытым вводом. Также пароль можно передать параметром `--password`, но для продакшена безопаснее вводить его интерактивно.
+
+## 9. Проверочный запуск
+
+Запустите приложение вручную:
 
 ```bash
-# Установка Gunicorn
-pip install gunicorn
-
-# Запуск через Gunicorn
-gunicorn --bind 0.0.0.0:5000 \
-         --workers 4 \
-         --timeout 120 \
-         --access-logfile /opt/wiki-qa/logs/access.log \
-         --error-logfile /opt/wiki-qa/logs/error.log \
-         --log-level info \
-         web_app:app
+cd /opt/wiki-qa
+source venv/bin/activate
+python web_app.py
 ```
 
-### 3. Запуск через Waitress (альтернатива для Windows)
+В другом терминале проверьте:
 
 ```bash
-# Установка Waitress
-pip install waitress
-
-# Запуск через Waitress
-waitress-serve --host=0.0.0.0 --port=5000 --threads=4 web_app:app
+curl http://127.0.0.1:5000/api/health
+curl http://127.0.0.1:5000/api/models
 ```
 
----
+Проверьте вопрос к базе знаний:
 
-## Настройка systemd для автозапуска
+```bash
+curl -X POST http://127.0.0.1:5000/api/chat \
+  -H "Content-Type: application/json" \
+  -d '{"message":"Тестовый вопрос","top_k":3,"min_score":0.0}'
+```
 
-### 1. Создание файла сервиса
+Остановите ручной запуск `Ctrl+C` и переходите к настройке сервиса.
+
+## 10. Systemd-сервис
+
+Создайте сервис:
 
 ```bash
 sudo nano /etc/systemd/system/wiki-qa.service
 ```
 
-### 2. Содержимое файла wiki-qa.service
+Содержимое:
 
 ```ini
 [Unit]
-Description=Wiki QA System - Векторная база знаний
-After=network.target docker.service
-Requires=docker.service
+Description=Wiki QA System
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
 User=wikiqa
 Group=wikiqa
 WorkingDirectory=/opt/wiki-qa
-Environment="PATH=/opt/wiki-qa/venv/bin"
+EnvironmentFile=/opt/wiki-qa/.env
 ExecStart=/opt/wiki-qa/venv/bin/gunicorn \
-    --bind 0.0.0.0:5000 \
-    --workers 4 \
-    --timeout 120 \
-    --access-logfile /opt/wiki-qa/logs/access.log \
-    --error-logfile /opt/wiki-qa/logs/error.log \
-    --log-level info \
-    web_app:app
+  --bind 127.0.0.1:5000 \
+  --workers 2 \
+  --threads 4 \
+  --timeout 300 \
+  --access-logfile /opt/wiki-qa/logs/access.log \
+  --error-logfile /opt/wiki-qa/logs/error.log \
+  --log-level info \
+  web_app:app
 Restart=always
 RestartSec=10
+KillSignal=SIGINT
 
 [Install]
 WantedBy=multi-user.target
 ```
 
-### 3. Активация сервиса
+Запустите сервис:
 
 ```bash
-# Перезагрузка конфигурации systemd
 sudo systemctl daemon-reload
-
-# Включение автозапуска при загрузке
 sudo systemctl enable wiki-qa
-
-# Запуск сервиса
 sudo systemctl start wiki-qa
-
-# Проверка статуса
 sudo systemctl status wiki-qa
-
-# Просмотр логов
-sudo journalctl -u wiki-qa -f
 ```
 
-### 4. Управление сервисом
+Проверьте логи:
 
 ```bash
-# Остановка сервиса
-sudo systemctl stop wiki-qa
-
-# Перезапуск сервиса
-sudo systemctl restart wiki-qa
-
-# Проверка логов
-sudo journalctl -u wiki-qa -n 100
+sudo journalctl -u wiki-qa -n 100 --no-pager
+tail -f /opt/wiki-qa/logs/error.log
 ```
 
----
+Если модель отвечает медленно, увеличьте `--timeout`. Если сервер маломощный, уменьшите `--workers` до `1`.
 
-## Настройка Nginx (рекомендуется)
+## 11. Nginx reverse proxy
 
-### 1. Создание конфигурации Nginx
+Создайте конфигурацию:
 
 ```bash
 sudo nano /etc/nginx/sites-available/wiki-qa
 ```
 
-### 2. Содержимое конфигурации
+Пример для домена `wiki.example.com`:
 
 ```nginx
-# Wiki QA System - Nginx Configuration
-
 upstream wikiqa_backend {
     server 127.0.0.1:5000;
-    keepalive 64;
+    keepalive 32;
 }
 
 server {
     listen 80;
     listen [::]:80;
-    server_name your-domain.com;  # Замените на ваш домен
+    server_name wiki.example.com;
 
-    # Логи
     access_log /var/log/nginx/wiki-qa-access.log;
     error_log /var/log/nginx/wiki-qa-error.log;
 
-    # Клиентские тела
     client_max_body_size 10M;
 
-    # Статические файлы
     location /static/ {
         alias /opt/wiki-qa/static/;
         expires 30d;
-        add_header Cache-Control "public, immutable";
+        add_header Cache-Control "public";
     }
 
-    # API и приложение
     location / {
         proxy_pass http://wikiqa_backend;
+        proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_read_timeout 120s;
-        proxy_connect_timeout 120s;
-        proxy_send_timeout 120s;
-    }
-
-    # Health check endpoint
-    location /api/health {
-        proxy_pass http://wikiqa_backend;
-        access_log off;
+        proxy_buffering off;
+        proxy_read_timeout 300s;
+        proxy_connect_timeout 60s;
+        proxy_send_timeout 300s;
     }
 }
 ```
 
-### 3. Активация конфигурации
+Активируйте сайт:
 
 ```bash
-# Создание симлинка
-sudo ln -s /etc/nginx/sites-available/wiki-qa /etc/nginx/sites-enabled/
-
-# Проверка конфигурации
+sudo ln -s /etc/nginx/sites-available/wiki-qa /etc/nginx/sites-enabled/wiki-qa
 sudo nginx -t
-
-# Перезапуск Nginx
-sudo systemctl restart nginx
+sudo systemctl reload nginx
 ```
 
----
+Откройте `http://wiki.example.com` и войдите под созданным администратором.
 
-## Настройка SSL сертификатов
+## 12. HTTPS
 
-### 1. Установка Let's Encrypt
+Выпустите сертификат Let's Encrypt:
 
 ```bash
-# Установка Certbot
-sudo apt install -y certbot python3-certbot-nginx
+sudo certbot --nginx -d wiki.example.com
 ```
 
-### 2. Получение SSL сертификата
+Проверьте автопродление:
 
 ```bash
-# Получение сертификата (замените your-domain.com на ваш домен)
-sudo certbot --nginx -d your-domain.com -d www.your-domain.com
-```
-
-### 3. Автоматическое продление сертификата
-
-```bash
-# Проверка автоматического продления
 sudo certbot renew --dry-run
-
-# Certbot автоматически добавит cron задачу для продления
 ```
 
-### 4. Конфигурация с HTTPS
+После включения HTTPS укажите точный домен в `.env`:
 
-После получения сертификата Nginx автоматически обновит конфигурацию для использования HTTPS.
-
----
-
-## Резервное копирование
-
-### 1. Создание скрипта резервного копирования
-
-```bash
-sudo nano /opt/wiki-qa/scripts/backup.sh
+```dotenv
+CORS_ORIGINS=https://wiki.example.com
 ```
 
-### 2. Содержимое скрипта backup.sh
+Затем перезапустите приложение:
 
 ```bash
-#!/bin/bash
-
-# Wiki QA System - Backup Script
-# ============================================
-
-BACKUP_DIR="/opt/wiki-qa/backups"
-DATE=$(date +%Y%m%d_%H%M%S)
-RETENTION_DAYS=30
-
-# Создание директории для бэкапа
-mkdir -p $BACKUP_DIR
-
-# Бэкап векторной базы данных
-echo "Creating backup of ChromaDB..."
-tar -czf $BACKUP_DIR/chroma_db_$DATE.tar.gz -C /opt/wiki-qa/data chroma_db
-
-# Бэкап базы данных SQLite
-echo "Creating backup of SQLite database..."
-cp /opt/wiki-qa/data/wiki_qa.db $BACKUP_DIR/wiki_qa_$DATE.db
-
-# Бэкап конфигурации
-echo "Creating backup of configuration..."
-cp /opt/wiki-qa/.env $BACKUP_DIR/.env_$DATE
-
-# Бэкап данных
-echo "Creating backup of data..."
-tar -czf $BACKUP_DIR/data_$DATE.tar.gz -C /opt/wiki-qa/data pages
-
-# Удаление старых бэкапов
-echo "Cleaning up old backups (older than $RETENTION_DAYS days)..."
-find $BACKUP_DIR -name "*.tar.gz" -o -name "*.db" -o -name ".env_*" | \
-    while read file; do
-        if [ $(find $file -mtime +$RETENTION_DAYS) ]; then
-            rm -f $file
-            echo "Deleted: $file"
-        fi
-    done
-
-echo "Backup completed: $DATE"
+sudo systemctl restart wiki-qa
 ```
 
-### 3. Настройка прав доступа
+## 13. Ограничение доступа и безопасность
+
+Рекомендуемые меры:
+
+- Не публикуйте порт `5000` наружу; он должен слушать только `127.0.0.1`.
+- Не публикуйте Ollama/LM Studio в интернет. Используйте `127.0.0.1` или закрытую сеть.
+- Храните `.env` с правами `600`.
+- Замените `SECRET_KEY` и `JWT_SECRET_KEY` перед первым запуском.
+- Ограничьте SSH-доступ к серверу.
+- Настройте firewall, оставив снаружи только `22`, `80` и `443`.
+
+Пример `ufw`:
 
 ```bash
-chmod +x /opt/wiki-qa/scripts/backup.sh
-chown wikiqa:wikiqa /opt/wiki-qa/scripts/backup.sh
+sudo ufw allow OpenSSH
+sudo ufw allow 'Nginx Full'
+sudo ufw enable
+sudo ufw status
 ```
 
-### 4. Добавление в cron
+Если внешним интеграциям нужен API, задайте `API_KEY` и передавайте его в заголовке:
 
 ```bash
-# Редактирование crontab
+curl -H "X-API-Key: <API_KEY>" https://wiki.example.com/api/health
+```
+
+Для административных эндпоинтов можно дополнительно задать `ADMIN_API_KEY` и использовать `X-Admin-Key`.
+
+## 14. Резервное копирование
+
+Критичные данные:
+
+- `/opt/wiki-qa/.env` - конфигурация и секреты.
+- `/opt/wiki-qa/data/wiki_qa.db` - пользователи и история.
+- `/opt/wiki-qa/chroma_db` - векторная база.
+- `/opt/wiki-qa/data` - исходные и загруженные документы.
+- `/opt/wiki-qa/cache` - кэш, необязателен для восстановления.
+
+Создайте каталог:
+
+```bash
+sudo mkdir -p /opt/wiki-qa/backups
+sudo chown wikiqa:wikiqa /opt/wiki-qa/backups
+```
+
+Создайте скрипт `/opt/wiki-qa/scripts/backup.sh`:
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+APP_DIR="/opt/wiki-qa"
+BACKUP_DIR="$APP_DIR/backups"
+DATE="$(date +%Y%m%d_%H%M%S)"
+
+mkdir -p "$BACKUP_DIR"
+
+tar -czf "$BACKUP_DIR/wikiqa_config_$DATE.tar.gz" -C "$APP_DIR" .env
+tar -czf "$BACKUP_DIR/wikiqa_data_$DATE.tar.gz" -C "$APP_DIR" data
+tar -czf "$BACKUP_DIR/wikiqa_chroma_$DATE.tar.gz" -C "$APP_DIR" chroma_db
+
+find "$BACKUP_DIR" -type f -mtime +30 -delete
+```
+
+Выдайте права и добавьте cron:
+
+```bash
+chmod 700 /opt/wiki-qa/scripts/backup.sh
 sudo crontab -e
+```
 
-# Добавление задачи на ежедневное резервное копирование в 2:00 ночи
+Пример ежедневного запуска в 02:00:
+
+```cron
 0 2 * * * /opt/wiki-qa/scripts/backup.sh >> /opt/wiki-qa/logs/backup.log 2>&1
 ```
 
----
+Периодически проверяйте восстановление на тестовом сервере. Бэкап без проверки восстановления не считается надежным.
 
-## Мониторинг и логирование
+## 15. Обновление приложения
 
-### 1. Настройка ротации логов
+Перед обновлением сделайте бэкап:
+
+```bash
+/opt/wiki-qa/scripts/backup.sh
+```
+
+Обновите код и зависимости:
+
+```bash
+sudo -iu wikiqa
+cd /opt/wiki-qa
+git pull origin main
+source venv/bin/activate
+pip install -r requirements.txt
+pip install gunicorn
+```
+
+Если изменились документы, embedding-модель или логика индексации, пересоздайте ChromaDB:
+
+```bash
+python -c "from utils.embeddings import invalidate_embedding_cache; invalidate_embedding_cache()"
+python create_vector_db.py
+```
+
+Перезапустите сервис:
+
+```bash
+sudo systemctl restart wiki-qa
+sudo systemctl status wiki-qa
+```
+
+Проверьте:
+
+```bash
+curl https://wiki.example.com/api/health
+curl https://wiki.example.com/api/models
+```
+
+## 16. Мониторинг и логи
+
+Основные команды:
+
+```bash
+sudo systemctl status wiki-qa
+sudo journalctl -u wiki-qa -f
+tail -f /opt/wiki-qa/logs/error.log
+tail -f /opt/wiki-qa/logs/access.log
+tail -f /opt/wiki-qa/logs/rag/rag_detailed.log
+docker logs -f ollama
+```
+
+Проверка доступности:
+
+```bash
+curl -f http://127.0.0.1:5000/api/health
+curl -f http://127.0.0.1:5000/api/models
+```
+
+Настройте ротацию логов:
 
 ```bash
 sudo nano /etc/logrotate.d/wiki-qa
 ```
 
-### 2. Содержимое logrotate конфигурации
+Содержимое:
 
-```
-/opt/wiki-qa/logs/*.log {
+```text
+/opt/wiki-qa/logs/*.log /opt/wiki-qa/logs/rag/*.log {
     daily
     rotate 14
     compress
@@ -704,165 +656,124 @@ sudo nano /etc/logrotate.d/wiki-qa
     missingok
     notifempty
     create 0640 wikiqa wikiqa
-    sharedscripts
-    postrotate
-        systemctl reload wiki-qa > /dev/null 2>&1 || true
-    endscript
 }
 ```
 
-### 3. Настройка мониторинга с помощью Uptime Kuma (опционально)
+## 17. Диагностика типовых проблем
+
+### Веб-приложение не запускается
+
+Проверьте сервис, логи и импорт приложения:
 
 ```bash
-# Установка Uptime Kuma
-docker run -d \
-    --name uptime-kuma \
-    --restart unless-stopped \
-    -p 3001:3001 \
-    -v uptime-kuma:/app/data \
-    louislam/uptime-kuma
-```
-
-### 4. Проверка статуса системы
-
-```bash
-# Проверка всех сервисов
 sudo systemctl status wiki-qa
-docker ps | grep ollama
-sudo systemctl status nginx
+sudo journalctl -u wiki-qa -n 100 --no-pager
+sudo -iu wikiqa
+cd /opt/wiki-qa
+source venv/bin/activate
+python -c "from web_app import app; print('OK')"
 ```
 
----
+Частые причины:
 
-## Обновление системы
+- не установлены зависимости из `requirements.txt`;
+- не задан `SECRET_KEY` или `JWT_SECRET_KEY`;
+- нет прав на `data`, `logs`, `cache` или `chroma_db`;
+- занят порт `5000`.
 
-### 1. Обновление кода
+### Сервер инференса недоступен
+
+Для Ollama:
 
 ```bash
-cd /opt/wiki-qa
-git pull origin main
-
-# Установка новых зависимостей
-source venv/bin/activate
-pip install -r requirements.txt
+docker ps --filter name=ollama
+docker logs ollama --tail 100
+curl http://127.0.0.1:11434/api/tags
+docker exec -it ollama ollama list
 ```
 
-### 2. Перезапуск сервиса
+Для LM Studio:
+
+```bash
+curl http://127.0.0.1:1234/v1/models
+```
+
+Проверьте, что `OLLAMA_URL` и `INFERENCE_BACKEND` в `.env` соответствуют выбранному серверу.
+
+### Модель не найдена
+
+Для Ollama:
+
+```bash
+docker exec -it ollama ollama list
+docker exec -it ollama ollama pull bge-m3
+docker exec -it ollama ollama pull qwen2.5:7b
+```
+
+Для LM Studio используйте точный `id` модели из `/v1/models`, а не отображаемое имя в интерфейсе.
+
+### Плохие или пустые ответы
+
+Проверьте:
+
+- создана ли ChromaDB и есть ли документы в коллекции;
+- совпадает ли embedding-модель с той, на которой строилась база;
+- не слишком ли высокий `RAG_MIN_SCORE`;
+- доступны ли исходные документы в `DATA_DIR`;
+- есть ли ошибки в `logs/rag/rag_detailed.log`.
+
+Команда проверки количества документов:
+
+```bash
+sudo -iu wikiqa
+cd /opt/wiki-qa
+source venv/bin/activate
+python - <<'PY'
+import chromadb
+from config import settings
+client = chromadb.PersistentClient(path=settings.CHROMA_PERSIST_DIR)
+collection = client.get_collection(settings.CHROMA_COLLECTION_NAME)
+print(collection.count())
+PY
+```
+
+### Загрузка файлов не работает
+
+Проверьте:
+
+```bash
+ls -ld /opt/wiki-qa/data/uploads
+grep MAX_FILE_SIZE /opt/wiki-qa/.env
+grep ALLOWED_EXTENSIONS /opt/wiki-qa/.env
+sudo journalctl -u wiki-qa -n 100 --no-pager
+```
+
+Также проверьте `client_max_body_size` в Nginx. Он должен быть не меньше `MAX_FILE_SIZE`.
+
+### Ответы обрываются
+
+Увеличьте лимит:
+
+```dotenv
+CHAT_MAX_TOKENS=4096
+```
+
+После изменения:
 
 ```bash
 sudo systemctl restart wiki-qa
 ```
 
-### 3. Обновление Ollama моделей
+## 18. Контрольный чек-лист после установки
 
-```bash
-# Остановка контейнера
-docker stop ollama
-
-# Удаление старого контейнера
-docker rm ollama
-
-# Запуск нового контейнера
-docker run -d \
-    --name ollama \
-    --restart unless-stopped \
-    -p 11434:11434 \
-    -v ollama_data:/root/.ollama \
-    ollama/ollama
-
-# Ожидание запуска
-sleep 30
-
-# Загрузка моделей
-docker exec -it ollama ollama pull bge-m3
-docker exec -it ollama ollama pull qwen2.5:7b
-```
-
----
-
-## Устранение неполадок
-
-### Проблема: Ollama недоступен
-
-```bash
-# Проверка статуса контейнера
-docker ps | grep ollama
-
-# Проверка логов
-docker logs ollama
-
-# Перезапуск контейнера
-docker restart ollama
-
-# Проверка доступности API
-curl http://localhost:11434/api/tags
-```
-
-### Проблема: Веб-приложение не запускается
-
-```bash
-# Проверка логов сервиса
-sudo journalctl -u wiki-qa -n 50
-
-# Проверка порта
-sudo netstat -tuln | grep 5000
-
-# Проверка прав доступа
-ls -la /opt/wiki-qa/
-ls -la /opt/wiki-qa/data/
-ls -la /opt/wiki-qa/logs/
-```
-
-### Проблема: Ошибка при генерации эмбеддингов
-
-```bash
-# Проверка модели
-docker exec -it ollama ollama list
-
-# Проверка логов RAG
-tail -f /opt/wiki-qa/logs/rag/rag_detailed.log
-
-# Проверка доступности Ollama API
-curl -X POST http://localhost:11434/api/embeddings \
-    -H "Content-Type: application/json" \
-    -d '{"model": "bge-m3", "prompt": "test"}'
-```
-
-### Проблема: Высокая нагрузка на CPU
-
-```bash
-# Проверка использования ресурсов
-htop
-
-# Уменьшение количества workers в Gunicorn
-# Измените --workers 4 на --workers 2 в systemd файле
-```
-
-### Проблема: Ошибка SSL сертификата
-
-```bash
-# Проверка статуса сертификата
-sudo certbot certificates
-
-# Ручное продление
-sudo certbot renew
-
-# Проверка конфигурации Nginx
-sudo nginx -t
-```
-
----
-
-## Дополнительные ресурсы
-
-- [Ollama Documentation](https://ollama.ai/docs)
-- [ChromaDB Documentation](https://docs.trychroma.com/)
-- [Flask Documentation](https://flask.palletsprojects.com/)
-- [Gunicorn Documentation](https://docs.gunicorn.org/)
-- [Nginx Documentation](https://nginx.org/en/docs/)
-
----
-
-## Контактная информация
-
-Для вопросов и поддержки системного администратора.
+- Приложение запускается через `systemd` и имеет статус `active`.
+- Nginx проксирует домен на `127.0.0.1:5000`.
+- HTTPS-сертификат выпущен и автопродление проверено.
+- `SECRET_KEY` и `JWT_SECRET_KEY` заменены.
+- Порт `5000` не открыт наружу.
+- Ollama или LM Studio доступны приложению.
+- Модели эмбеддингов и чата загружены.
+- Векторная база создана и содержит документы.
+- Администратор создан и может войти в веб-интерфейс.
+- Бэкап настроен и тест восстановления запланирован.
+- Логи и logrotate настроены.
