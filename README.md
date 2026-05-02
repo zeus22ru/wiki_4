@@ -1,10 +1,15 @@
 # Векторная база знаний для вопрос-ответной системы
 
-Система для создания векторной базы данных из различных форматов файлов и вопрос-ответной системы на базе знаний с использованием **Ollama** или **LM Studio** (OpenAI-совместимый локальный API) и ChromaDB. Переключение задаётся в `.env` через `INFERENCE_BACKEND`.
+Система для создания локальной векторной базы знаний и RAG-вопрос-ответа по документам. Поддерживает веб-интерфейс, CLI, JSON API и чат-бота Битрикс24. Для инференса используется **Ollama** или **LM Studio** (OpenAI-совместимый локальный API), для векторного поиска — локальная ChromaDB.
 
-Отдельная инструкция для конечных пользователей: `[docs/user_guide.md](docs/user_guide.md)`.
-Инструкция для системного администратора по установке на Linux-сервер: `[docs/production_setup.md](docs/production_setup.md)`.
-Инструкция для системного администратора по установке на Windows Server: `[docs/windows_server_setup.md](docs/windows_server_setup.md)`.
+Переключение между Ollama и LM Studio задаётся в `.env` через `INFERENCE_BACKEND`.
+
+Документация:
+
+- [Инструкция для конечных пользователей](docs/user_guide.md)
+- [Установка на Linux-сервер](docs/production_setup.md)
+- [Установка на Windows Server](docs/windows_server_setup.md)
+- [Настройка чат-бота Битрикс24](docs/bitrix24_bot_setup.md)
 
 ## Структура проекта
 
@@ -17,15 +22,17 @@ wiki_4/
 │   ├── settings.py         # Централизованные настройки
 │   └── logging_config.py   # Настройки логирования
 ├── core/                    # Ядро системы
+│   ├── chat_history.py     # История чатов, пользователи и feedback
 │   └── rag.py              # RAG система с поддержкой цитирования
 ├── data/                    # Исходные данные
 │   ├── wiki_pars/          # Выгруженные страницы XWiki с читаемыми именами
 │   └── uploads/            # Загруженные файлы
 ├── docs/                    # Документация
+├── integrations/            # Внешние интеграции (Bitrix24)
 ├── logs/                    # Логи системы
 ├── models/                  # Модели данных
 ├── tests/                   # Автотесты (pytest)
-├── scripts/                 # Скрипты утилит (включая create_admin.py)
+├── scripts/                 # Скрипты утилит, XWiki и Bitrix24
 ├── static/                  # Статические файлы (CSS, JS)
 ├── templates/               # HTML шаблоны
 ├── utils/                   # Утилиты
@@ -51,12 +58,13 @@ wiki_4/
 - Python 3.10+
 - Сервер инференса: **Ollama** (Docker или нативно) или **LM Studio** с включённым локальным сервером
 - Модели эмбеддингов и чата, согласованные с размерностью уже собранной Chroma (для `bge-m3` обычно 1024 измерений)
+- Для Ollama в Docker: Docker Desktop; для GPU — настроенная поддержка NVIDIA Container Toolkit
 
 ## Установка
 
 ### 1. Установка зависимостей Python
 
-```bash
+```powershell
 pip install -r requirements.txt
 ```
 
@@ -64,9 +72,18 @@ pip install -r requirements.txt
 
 Для **LM Studio** установите приложение, включите локальный сервер, загрузите модели эмбеддингов и чата, в `.env` укажите `INFERENCE_BACKEND=lmstudio` и `OLLAMA_URL` на этот сервер. Раздел «Переключатель Ollama и LM Studio» ниже описывает API.
 
-Для **Ollama** установите и запустите контейнер (или нативный Ollama):
+Для **Ollama** можно использовать `docker-compose.yml`:
 
-```bash
+```powershell
+docker compose up -d
+docker exec -it ollama-llm ollama pull bge-m3
+docker exec -it ollama-llm ollama pull qwen2.5:7b
+docker exec -it ollama-llm ollama list
+```
+
+Или запустить контейнер вручную:
+
+```powershell
 # Запуск контейнера с поддержкой GPU (рекомендуется)
 docker run -d --gpus all -p 11434:11434 --name ollama ollama/ollama
 
@@ -76,12 +93,12 @@ docker run -d -p 11434:11434 --name ollama ollama/ollama
 
 Загрузите необходимые модели:
 
-```bash
+```powershell
 # Модель для эмбеддингов (многоязычная, 1024 измерений)
 docker exec -it ollama ollama pull bge-m3
 
 # Модель для генерации ответов
-docker exec -it ollama ollama pull qwen3.5:4b
+docker exec -it ollama ollama pull qwen2.5:7b
 
 # Проверка доступных моделей
 docker exec -it ollama ollama list
@@ -91,21 +108,23 @@ docker exec -it ollama ollama list
 
 Скопируйте пример конфигурации и настройте параметры:
 
-```bash
+```powershell
 cp .env.example .env
 ```
 
 Отредактируйте `.env` файл с вашими настройками:
 
-- `**INFERENCE_BACKEND**` (`ollama` или `lmstudio`) и `**OLLAMA_URL**`
+- **`INFERENCE_BACKEND`** (`ollama` или `lmstudio`) и **`OLLAMA_URL`**
 - Идентификаторы моделей (`OLLAMA_EMBEDDING_MODEL`, `OLLAMA_CHAT_MODEL`): у LM Studio — как в `GET /v1/models` (поле `id`)
-- Путь к векторной БД (ChromaDB), размеры чанков, пороги RAG и прочее
+- Путь к ChromaDB, директории данных, размеры чанков, пороги RAG и прочее
+- Секреты веб-приложения: `SECRET_KEY`, `JWT_SECRET_KEY`, при необходимости `API_KEY` и `ADMIN_API_KEY`
+- Опционально — настройки Битрикс24 (`BITRIX24_*`)
 
 ### 4. (Опционально) Создание администратора
 
 Если планируете пользоваться вкладками администрирования и управлять базой знаний через веб-интерфейс, создайте admin-пользователя:
 
-```bash
+```powershell
 python scripts/create_admin.py --username admin --email admin@example.com
 ```
 
@@ -113,18 +132,18 @@ python scripts/create_admin.py --username admin --email admin@example.com
 
 ### Переключатель Ollama и LM Studio (`INFERENCE_BACKEND`)
 
-Одна переменная задаёт пресет HTTP API и проверок доступности сервера (см. `[config/settings.py](config/settings.py)`):
+Одна переменная задаёт пресет HTTP API и проверок доступности сервера (см. [config/settings.py](config/settings.py)):
 
 
 | `INFERENCE_BACKEND` | Эмбеддинги            | Ответы чата                 | Проверка «сервер жив»               |
 | ------------------- | --------------------- | --------------------------- | ----------------------------------- |
-| `**ollama**`        | `POST /api/embed`     | `POST /api/generate`        | `GET /api/tags`                     |
-| `**lmstudio**`      | `POST /v1/embeddings` | `POST /v1/chat/completions` | `GET /v1/models` (список не пустой) |
+| `ollama`            | `POST /api/embed`     | `POST /api/generate`        | `GET /api/tags`                     |
+| `lmstudio`          | `POST /v1/embeddings` | `POST /v1/chat/completions` | `GET /v1/models` (список не пустой) |
 
 
-Если `**INFERENCE_BACKEND` не задан**, используются явные `**EMBEDDING_API_MODE`** / `**CHAT_API_MODE**` (`ollama` или `openai`), иначе по умолчанию режим Ollama.
+Если **`INFERENCE_BACKEND` не задан**, используются явные **`EMBEDDING_API_MODE`** / **`CHAT_API_MODE`** (`ollama` или `openai`), иначе по умолчанию режим Ollama.
 
-Явные `**EMBEDDING_API_MODE**` и `**CHAT_API_MODE**` в `.env` **перекрывают** пресет (для нестандартных схем).
+Явные **`EMBEDDING_API_MODE`** и **`CHAT_API_MODE`** в `.env` **перекрывают** пресет (для нестандартных схем).
 
 **LM Studio:** укажите `OLLAMA_URL` на локальный API (часто порт `1234`), в моделях — точные `id` из списка сервера, например `text-embedding-bge-m3` и `qwen/qwen3.5-9b`. Перед запросами загрузите модели в LM Studio. Сырой `GET /api/tags` у LM Studio не является признаком работоспособности; приложение для режима `lmstudio` опирается на `/v1/models`.
 
@@ -154,13 +173,14 @@ python scripts/parse_xwiki.py --clean --include-space sa --include-space 1c --in
 
 Запустите скрипт для создания векторной базы данных из файлов в папке `data/`:
 
-```bash
+```powershell
 python create_vector_db.py
 ```
 
 Скрипт поддерживает следующие форматы файлов:
 
 - **HTML/HTM** - веб-страницы
+- **TXT** - текстовые файлы
 - **DOCX** - документы Microsoft Word
 - **PDF** - документы Adobe Acrobat
 - **XLSX/XLS** - электронные таблицы Excel
@@ -172,7 +192,7 @@ python create_vector_db.py
 - Просканирует папку `data/` и найдет все поддерживаемые файлы
 - Извлечет текст из файлов
 - Разобьет текст на чанки (по 500 символов с перекрытием 50)
-- Сгенерирует эмбеддинги через Ollama (модель bge-m3)
+- Сгенерирует эмбеддинги через выбранный сервер инференса
 - Сохранит векторную базу данных в папку `chroma_db/`
 
 ### 2. Вопрос-ответная система
@@ -181,7 +201,7 @@ python create_vector_db.py
 
 Запустите систему в интерактивном режиме:
 
-```bash
+```powershell
 python qa_system.py
 ```
 
@@ -193,7 +213,7 @@ python qa_system.py
 
 Вы также можете задать вопрос напрямую из командной строки:
 
-```bash
+```powershell
 python qa_system.py "Как настроить принтер на ТСД?"
 ```
 
@@ -201,13 +221,13 @@ python qa_system.py "Как настроить принтер на ТСД?"
 
 Запустите Flask веб-приложение:
 
-```bash
+```powershell
 python web_app.py
 ```
 
 Или используйте скрипт для Windows:
 
-```bash
+```powershell
 start.bat
 ```
 
@@ -289,59 +309,97 @@ curl http://localhost:5000/api/admin/overview
 curl http://localhost:5000/api/admin/settings
 ```
 
+### 4. Чат-бот Битрикс24
+
+Интеграция использует `imbot.v2` в режиме `fetch`: отдельный worker сам забирает события из Битрикс24 и отправляет ответы через локальный `POST /api/chat`. Публичный HTTPS-адрес для Flask-приложения не требуется.
+
+Краткий запуск:
+
+```powershell
+# 1. Заполните BITRIX24_WEBHOOK_URL и BITRIX24_BOT_TOKEN в .env
+python scripts/register_bitrix24_bot.py --name "Wiki QA Bot" --work-position "База знаний"
+
+# 2. Запишите выведенный BITRIX24_BOT_ID в .env и запустите веб-приложение
+python web_app.py
+
+# 3. Во втором терминале запустите worker
+python scripts/bitrix24_bot_worker.py
+```
+
+Для разовой проверки worker:
+
+```powershell
+python scripts/bitrix24_bot_worker.py --once
+```
+
+Подробная инструкция: [docs/bitrix24_bot_setup.md](docs/bitrix24_bot_setup.md).
+
 ## Конфигурация
 
-Конфигурация централизована в `[config/settings.py](config/settings.py)` и загружается из `.env` файла. Вспомогательные функции: `inference_server_reachable()`, `fetch_remote_model_ids()`, `uses_openai_compatible_api()` (экспорт из пакета `config`).
+Конфигурация централизована в [config/settings.py](config/settings.py) и загружается из `.env` файла. Вспомогательные функции: `inference_server_reachable()`, `fetch_remote_model_ids()`, `uses_openai_compatible_api()` (экспорт из пакета `config`).
 
 ### Основные параметры
 
-```python
+```env
 # Сервер LLM: ollama | lmstudio (пресет API; см. раздел выше)
-INFERENCE_BACKEND = "ollama"           # или "lmstudio"
+INFERENCE_BACKEND=ollama
 
 # Базовый URL (Ollama :11434, LM Studio — см. порт локального сервера)
-OLLAMA_URL = "http://localhost:11434"
-OLLAMA_EMBEDDING_MODEL = "bge-m3"      # У LM Studio — id из /v1/models
-OLLAMA_CHAT_MODEL = "qwen2.5:7b"       # У LM Studio — id из /v1/models
+OLLAMA_URL=http://localhost:11434
+OLLAMA_EMBEDDING_MODEL=bge-m3
+OLLAMA_CHAT_MODEL=qwen2.5:7b
+CHAT_MAX_TOKENS=2048
 
 # ChromaDB настройки
-CHROMA_PERSIST_DIR = "./chroma_db"
-CHROMA_COLLECTION_NAME = "wiki_knowledge"
+CHROMA_PERSIST_DIR=./chroma_db
+CHROMA_COLLECTION_NAME=wiki_knowledge
 
 # Data настройки
-DATA_DIR = "./data"
-UPLOAD_DIR = "./data/uploads"
-CHUNK_SIZE = 500
-CHUNK_OVERLAP = 50
-BATCH_SIZE = 10
+DATA_DIR=./data
+UPLOAD_DIR=./data/uploads
+CHUNK_SIZE=500
+CHUNK_OVERLAP=50
+BATCH_SIZE=10
+DOCUMENT_PROCESS_WORKERS=4
+EMBEDDING_WORKERS=1
 
 # API настройка
-API_HOST = "0.0.0.0"
-API_PORT = 5000
-TOP_K_RESULTS = 3
-API_KEY = ""                            # если задан, все /api/* требуют X-API-Key
-ADMIN_API_KEY = ""                      # если задан, /api/admin/* требуют X-Admin-Key
+API_HOST=0.0.0.0
+API_PORT=5000
+FLASK_DEBUG=false
+CORS_ORIGINS=*
+TOP_K_RESULTS=3
+API_KEY=
+ADMIN_API_KEY=
 
 # RAG настройка
-RAG_TOP_K = 5
-RAG_MAX_CITATIONS = 5
-RAG_MIN_SCORE = 0.0                   # порог 0.5 часто отсекает реальные попадания
-RAG_MAX_CONTEXT_LENGTH = 3000
+RAG_TOP_K=5
+RAG_MAX_CITATIONS=5
+RAG_MIN_SCORE=0.0
+RAG_MAX_CONTEXT_LENGTH=3000
 
 # Cache настройка
-CACHE_ENABLED = true
-CACHE_TTL = 3600
+CACHE_ENABLED=true
+CACHE_TTL=3600
+
+# Bitrix24 chatbot
+BITRIX24_ENABLED=false
+BITRIX24_WEBHOOK_URL=
+BITRIX24_BOT_ID=
+BITRIX24_BOT_TOKEN=
+BITRIX24_INTERNAL_API_URL=http://127.0.0.1:5000
+BITRIX24_INTERNAL_API_KEY=
 ```
 
 ### Полный список настроек
 
-Смотрите `[config/settings.py](config/settings.py)` или `.env.example` для полного списка настроек.
+Смотрите [config/settings.py](config/settings.py) или `.env.example` для полного списка настроек.
 
 ## Архитектура
 
 Система использует архитектуру RAG (Retrieval-Augmented Generation):
 
-1. **Извлечение текста**: BeautifulSoup парсит HTML файлы и извлекает чистый текст
+1. **Извлечение текста**: обработчики читают HTML, TXT, DOCX, PDF, XLSX/XLS, PPTX и DOC
 2. **Чанкование**: Текст разбивается на фрагменты для лучшего поиска
 3. **Эмбеддинги**: сервер инференса (Ollama или LM Studio) генерирует вектор запроса и сопоставляет с индексом
 4. **Векторный поиск**: ChromaDB выполняет семантический поиск по запросу
@@ -467,24 +525,21 @@ $ curl -X POST http://localhost:5000/api/chat \
 }
 ```
 
-## Источник: WMS. Настройка принтера на ТСД
-
-```
-
 ## Тестирование
 
 Запуск тестов:
 
-```bash
+```powershell
 pytest
 ```
 
 Запуск отдельных наборов:
 
-```bash
+```powershell
 pytest tests/test_web_app.py
 pytest tests/test_auth.py
 pytest tests/test_product_features.py
+pytest tests/test_bitrix24_integration.py
 ```
 
 ## Устранение неполадок
@@ -493,33 +548,41 @@ pytest tests/test_product_features.py
 
 Убедитесь, что Docker контейнер с Ollama запущен:
 
-```bash
+```powershell
 docker ps --filter "name=ollama"
 ```
 
 Если не запущен:
 
-```bash
+```powershell
 docker start ollama
 ```
+
+Если Ollama запущен через `docker compose`, имя контейнера по умолчанию — `ollama-llm`.
 
 ### Модель не найдена
 
 Проверьте, что модели загружены:
 
-```bash
+```powershell
 docker exec -it ollama ollama list
 ```
 
 Если модели нет, загрузите их:
 
-```bash
+```powershell
 # Модель для эмбеддингов
 docker exec -it ollama ollama pull bge-m3
 
 # Модель для генерации ответов
-docker exec -it ollama ollama pull qwen3.5:4b
+docker exec -it ollama ollama pull qwen2.5:7b
 ```
+
+Для контейнера из `docker-compose.yml` используйте `ollama-llm` вместо `ollama`.
+
+### LM Studio не отвечает
+
+Проверьте, что в LM Studio включён локальный сервер, модели загружены, а `OLLAMA_URL` указывает на правильный порт. Для режима `INFERENCE_BACKEND=lmstudio` приложение проверяет доступность через `GET /v1/models`.
 
 ### База данных не найдена
 
@@ -529,13 +592,13 @@ docker exec -it ollama ollama pull qwen3.5:4b
 
 Проверьте, что модель bge-m3 загружена:
 
-```bash
+```powershell
 docker exec -it ollama ollama list
 ```
 
 Если модели нет, загрузите её:
 
-```bash
+```powershell
 docker exec -it ollama ollama pull bge-m3
 ```
 
@@ -543,17 +606,22 @@ docker exec -it ollama ollama pull bge-m3
 
 Если вы изменили данные в папке `data/`, инвалидация кэша может потребоваться:
 
-```bash
+```powershell
 # Через Python
 python -c "from utils.embeddings import invalidate_embedding_cache; invalidate_embedding_cache()"
 ```
+
+### Бот Битрикс24 не отвечает
+
+Проверьте, что `BITRIX24_ENABLED=true`, заданы `BITRIX24_WEBHOOK_URL`, `BITRIX24_BOT_ID`, `BITRIX24_BOT_TOKEN`, веб-приложение доступно по `BITRIX24_INTERNAL_API_URL`, а worker запущен командой `python scripts/bitrix24_bot_worker.py`. Для диагностики выполните `python scripts/bitrix24_bot_worker.py --once`.
 
 ### Логи
 
 Логи системы хранятся в папке `logs/`:
 
 - `logs/rag/rag_detailed.log` - детальные логи RAG системы
-- `logs/web_app.log` - логи веб-приложения
+- `logs/wiki_qa.log` - общие логи приложения и worker
+- `logs/wiki_qa_error.log` - ошибки приложения и worker
 
 Уровень логирования можно изменить в `.env` файле через параметр `LOG_LEVEL`.
 
