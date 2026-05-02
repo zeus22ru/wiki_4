@@ -112,6 +112,20 @@ class Settings:
     API_KEY: str = os.getenv("API_KEY", "")
     ADMIN_API_KEY: str = os.getenv("ADMIN_API_KEY", "")
 
+    # Bitrix24 chatbot integration
+    BITRIX24_ENABLED: bool = os.getenv("BITRIX24_ENABLED", "false").lower() == "true"
+    BITRIX24_WEBHOOK_URL: str = os.getenv("BITRIX24_WEBHOOK_URL", "")
+    BITRIX24_BOT_ID: Optional[int] = (
+        int(os.getenv("BITRIX24_BOT_ID"))
+        if (os.getenv("BITRIX24_BOT_ID") or "").strip().isdigit()
+        else None
+    )
+    BITRIX24_BOT_TOKEN: str = os.getenv("BITRIX24_BOT_TOKEN", "")
+    BITRIX24_POLL_INTERVAL_SECONDS: int = int(os.getenv("BITRIX24_POLL_INTERVAL_SECONDS", "10"))
+    BITRIX24_EVENT_OFFSET_PATH: str = os.getenv("BITRIX24_EVENT_OFFSET_PATH", "./data/bitrix24_event_offset.json")
+    BITRIX24_INTERNAL_API_URL: str = os.getenv("BITRIX24_INTERNAL_API_URL", f"http://127.0.0.1:{API_PORT}")
+    BITRIX24_INTERNAL_API_KEY: str = os.getenv("BITRIX24_INTERNAL_API_KEY", os.getenv("API_KEY", ""))
+
     # Database настройки
     DATABASE_PATH: str = os.getenv("DATABASE_PATH", "./data/wiki_qa.db")
 
@@ -143,6 +157,7 @@ class Settings:
 
         for directory in directories:
             Path(directory).mkdir(parents=True, exist_ok=True)
+        Path(self.BITRIX24_EVENT_OFFSET_PATH).parent.mkdir(parents=True, exist_ok=True)
 
     def validate(self) -> bool:
         """Валидация настроек"""
