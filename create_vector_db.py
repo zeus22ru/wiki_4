@@ -6,10 +6,10 @@
 Использует ollama для генерации эмбеддингов и ChromaDB для хранения.
 """
 
-import os
 import re
 import sys
 import requests
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from bs4 import BeautifulSoup
 import chromadb
@@ -427,6 +427,67 @@ def get_file_handlers() -> Dict[str, Callable[[Path], Optional[Dict[str, str]]]]
     }
 
 
+def process_file(file_path: Path, extract_func: Callable[[Path], Optional[Dict[str, str]]]) -> List[Dict]:
+    """Извлечь текст из одного файла и подготовить чанки для индексации."""
+    ext = file_path.suffix.lower()
+    doc_data = extract_func(file_path)
+
+    if not doc_data or not doc_data["content"]:
+        logger.warning(f"  Пропуск: не удалось извлечь текст из {file_path.name}")
+        return []
+
+    chunks = chunk_text(doc_data["content"])
+    documents = []
+
+    for j, chunk in enumerate(chunks):
+        documents.append({
+            "id": f"{hashlib.md5(f'{doc_data['path']}_{j}'.encode()).hexdigest()}",
+            "text": chunk,
+            "metadata": {
+                "title": doc_data["title"],
+                "source": doc_data["title"] or doc_data["path"],
+                "path": doc_data["path"],
+                "file_type": ext,
+                "chunk_index": j,
+                "total_chunks": len(chunks)
+            }
+        })
+
+    return documents
+
+
+def embed_documents_batch(batch_docs: List[Dict]) -> List[Dict]:
+    """Получить эмбеддинги для пачки документов."""
+    batch_texts = [doc["text"] for doc in batch_docs]
+    batch_embeddings = get_embeddings_batch(batch_texts)
+    embedded_documents = []
+
+    if batch_embeddings and len(batch_embeddings) == len(batch_docs):
+        for doc, embedding in zip(batch_docs, batch_embeddings):
+            embedded_documents.append({
+                "id": doc["id"],
+                "text": doc["text"],
+                "metadata": doc["metadata"],
+                "embedding": embedding,
+            })
+        return embedded_documents
+
+    logger.warning("Пакетная обработка эмбеддингов не удалась, пробуем по одному...")
+    for doc in batch_docs:
+        embedding = get_embedding(doc["text"])
+        if embedding:
+            embedded_documents.append({
+                "id": doc["id"],
+                "text": doc["text"],
+                "metadata": doc["metadata"],
+                "embedding": embedding,
+            })
+        else:
+            logger.error(f"Не удалось получить эмбеддинг для документа {doc['id']}")
+
+    return embedded_documents
+
+
 def preview_document(file_path: Path, duplicate_exists: bool = False) -> Dict:
     """Проанализировать документ без записи в ChromaDB."""
     path = Path(file_path)
@@ -521,62 +582,67 @@ def process_all_files(data_dir: str) -> List[Dict]:
     for ext, count in sorted(file_counts.items()):
         logger.info(f"  {ext}: {count}")
     
-    # Обрабатываем каждый файл
-    for i, file_path in enumerate(all_files, 1):
-        ext = file_path.suffix.lower()
-        
-        # Пропускаем файлы без расширения или неподдерживаемые
-        if ext not in file_handlers:
-            continue
-        
-        logger.info(f"Обработка {i}/{len(all_files)}: {file_path.name} ({ext})")
-        
-        # Вызываем соответствующую функцию извлечения
-        extract_func = file_handlers[ext]
-        doc_data = extract_func(file_path)
-        
-        if doc_data and doc_data["content"]:
-            # Разбиваем на чанки
-            chunks = chunk_text(doc_data["content"])
-            
-            for j, chunk in enumerate(chunks):
-                documents.append({
-                    "id": f"{hashlib.md5(f'{doc_data['path']}_{j}'.encode()).hexdigest()}",
-                    "text": chunk,
-                    "metadata": {
-                        "title": doc_data["title"],
-                        "source": doc_data["title"] or doc_data["path"],
-                        "path": doc_data["path"],
-                        "file_type": ext,
-                        "chunk_index": j,
-                        "total_chunks": len(chunks)
-                    }
-                })
-        else:
-            logger.warning(f"  Пропуск: не удалось извлечь текст из {file_path.name}")
+    worker_count = max(1, settings.DOCUMENT_PROCESS_WORKERS)
+    if worker_count == 1 or len(all_files) <= 1:
+        for i, file_path in enumerate(all_files, 1):
+            ext = file_path.suffix.lower()
+
+            if ext not in file_handlers:
+                continue
+
+            logger.info(f"Обработка {i}/{len(all_files)}: {file_path.name} ({ext})")
+            documents.extend(process_file(file_path, file_handlers[ext]))
+    else:
+        logger.info(f"Параллельная обработка файлов: {worker_count} поток(ов)")
+        results: List[List[Dict]] = [[] for _ in all_files]
+
+        with ThreadPoolExecutor(max_workers=worker_count) as executor:
+            futures = {}
+            for i, file_path in enumerate(all_files):
+                ext = file_path.suffix.lower()
+
+                if ext not in file_handlers:
+                    continue
+
+                logger.info(f"Постановка в очередь {i + 1}/{len(all_files)}: {file_path.name} ({ext})")
+                future = executor.submit(process_file, file_path, file_handlers[ext])
+                futures[future] = (i, file_path)
+
+            completed = 0
+            for future in as_completed(futures):
+                index, file_path = futures[future]
+                completed += 1
+
+                try:
+                    results[index] = future.result()
+                    logger.info(
+                        f"Готово {completed}/{len(futures)}: {file_path.name}, чанков: {len(results[index])}"
+                    )
+                except Exception as e:
+                    logger.error(f"Ошибка при обработке {file_path}: {e}")
+
+        for file_documents in results:
+            documents.extend(file_documents)
     
     logger.info(f"Всего создано чанков: {len(documents)}")
     return documents
 
 
-def create_vector_db(documents: List[Dict]):
+def create_vector_db(documents: List[Dict], progress_callback: Optional[Callable[[Dict], None]] = None):
     """Создать векторную базу данных в ChromaDB с пакетной обработкой для GPU"""
     logger.info("Создание векторной базы данных...")
+
+    def report_progress(progress: int, stage: str, message: str) -> None:
+        if progress_callback:
+            progress_callback({
+                "progress": max(0, min(100, progress)),
+                "stage": stage,
+                "message": message,
+            })
     
-    # Создаем клиент ChromaDB
+    # Создаем клиент ChromaDB. Старую коллекцию не трогаем, пока новые эмбеддинги не готовы.
     client = chromadb.PersistentClient(path=settings.CHROMA_PERSIST_DIR)
-    
-    # Удаляем коллекцию если существует
-    try:
-        client.delete_collection(settings.CHROMA_COLLECTION_NAME)
-    except:
-        pass
-    
-    # Создаем коллекцию
-    collection = client.create_collection(
-        name=settings.CHROMA_COLLECTION_NAME,
-        metadata={"description": "База знаний из XWiki"}
-    )
+    report_progress(12, "prepare", "Подготовка векторной коллекции")
     
     # Подготавливаем данные для вставки
     ids = []
@@ -585,42 +651,90 @@ def create_vector_db(documents: List[Dict]):
     embeddings = []
     
     total_docs = len(documents)
-    processed = 0
-    
-    # Пакетная обработка для ускорения на GPU
-    while processed < total_docs:
-        batch_end = min(processed + settings.BATCH_SIZE, total_docs)
-        batch_docs = documents[processed:batch_end]
-        batch_texts = [doc["text"] for doc in batch_docs]
-        
-        logger.info(f"Генерация эмбеддингов {processed+1}-{batch_end}/{total_docs} (пакет {len(batch_texts)} документов)")
-        
-        # Получаем эмбеддинги для всего пакета за один запрос
-        batch_embeddings = get_embeddings_batch(batch_texts)
-        
-        if batch_embeddings and len(batch_embeddings) == len(batch_docs):
-            for doc, embedding in zip(batch_docs, batch_embeddings):
-                ids.append(doc["id"])
-                texts.append(doc["text"])
-                metadatas.append(doc["metadata"])
-                embeddings.append(embedding)
-        else:
-            # Если пакетная обработка не удалась, пробуем по одному
-            logger.warning(f"Пакетная обработка не удалась, пробуем по одному...")
-            for doc in batch_docs:
-                embedding = get_embedding(doc["text"])
-                if embedding:
-                    ids.append(doc["id"])
-                    texts.append(doc["text"])
-                    metadatas.append(doc["metadata"])
-                    embeddings.append(embedding)
-                else:
-                    logger.error(f"Не удалось получить эмбеддинг для документа {doc['id']}")
-        
-        processed = batch_end
+    batches = []
+    for start in range(0, total_docs, settings.BATCH_SIZE):
+        batch_end = min(start + settings.BATCH_SIZE, total_docs)
+        batches.append((start, batch_end, documents[start:batch_end]))
+    report_progress(15, "embedding", f"Генерация эмбеддингов: 0/{total_docs}")
+
+    embedding_workers = max(1, settings.EMBEDDING_WORKERS)
+    embedded_batches: List[List[Dict]] = [[] for _ in batches]
+
+    if embedding_workers == 1 or len(batches) <= 1:
+        embedded_count = 0
+        for batch_index, (start, batch_end, batch_docs) in enumerate(batches):
+            logger.info(
+                f"Генерация эмбеддингов {start + 1}-{batch_end}/{total_docs} "
+                f"(пакет {len(batch_docs)} документов)"
+            )
+            embedded_batches[batch_index] = embed_documents_batch(batch_docs)
+            embedded_count += len(batch_docs)
+            embedding_progress = 15 + int((embedded_count / max(total_docs, 1)) * 70)
+            report_progress(
+                embedding_progress,
+                "embedding",
+                f"Генерация эмбеддингов: {embedded_count}/{total_docs}",
+            )
+    else:
+        logger.info(f"Параллельная генерация эмбеддингов: {embedding_workers} поток(ов)")
+        with ThreadPoolExecutor(max_workers=embedding_workers) as executor:
+            futures = {}
+            for batch_index, (start, batch_end, batch_docs) in enumerate(batches):
+                logger.info(
+                    f"Постановка эмбеддингов в очередь {start + 1}-{batch_end}/{total_docs} "
+                    f"(пакет {len(batch_docs)} документов)"
+                )
+                future = executor.submit(embed_documents_batch, batch_docs)
+                futures[future] = (batch_index, start, batch_end)
+
+            completed = 0
+            embedded_count = 0
+            for future in as_completed(futures):
+                batch_index, start, batch_end = futures[future]
+                completed += 1
+
+                try:
+                    embedded_batches[batch_index] = future.result()
+                    embedded_count += batch_end - start
+                    logger.info(
+                        f"Эмбеддинги готовы {completed}/{len(futures)}: "
+                        f"{start + 1}-{batch_end}/{total_docs}, "
+                        f"получено: {len(embedded_batches[batch_index])}"
+                    )
+                    embedding_progress = 15 + int((embedded_count / max(total_docs, 1)) * 70)
+                    report_progress(
+                        embedding_progress,
+                        "embedding",
+                        f"Генерация эмбеддингов: {embedded_count}/{total_docs}",
+                    )
+                except Exception as e:
+                    logger.error(f"Ошибка при генерации эмбеддингов {start + 1}-{batch_end}: {e}")
+
+    for embedded_batch in embedded_batches:
+        for doc in embedded_batch:
+            ids.append(doc["id"])
+            texts.append(doc["text"])
+            metadatas.append(doc["metadata"])
+            embeddings.append(doc["embedding"])
+
+    if not ids:
+        raise RuntimeError("Не удалось получить эмбеддинги: старая векторная база не изменена")
     
     # Вставляем данные в ChromaDB пакетами (максимальный размер пакета 5461)
     logger.info("Сохранение в ChromaDB...")
+    report_progress(86, "saving", f"Сохранение в ChromaDB: 0/{len(ids)}")
+
+    # Переключаем коллекцию только после успешной генерации эмбеддингов.
+    try:
+        client.delete_collection(settings.CHROMA_COLLECTION_NAME)
+    except Exception:
+        pass
+
+    collection = client.create_collection(
+        name=settings.CHROMA_COLLECTION_NAME,
+        metadata={"description": "База знаний из XWiki"}
+    )
+
     MAX_BATCH_SIZE = 5000  # Оставляем запас от лимита 5461
     
     total_docs = len(ids)
@@ -639,12 +753,15 @@ def create_vector_db(documents: List[Dict]):
         )
         
         saved = batch_end
+        save_progress = 86 + int((saved / max(total_docs, 1)) * 13)
+        report_progress(save_progress, "saving", f"Сохранение в ChromaDB: {saved}/{total_docs}")
     
     logger.info(f"Векторная база данных создана! Всего документов: {len(ids)}")
     logger.info(f"База сохранена в: {settings.CHROMA_PERSIST_DIR}")
     
     # Инвалидируем кэш эмбеддингов после обновления базы
     logger.info("Инвалидация кэша эмбеддингов...")
+    report_progress(99, "cache", "Очистка кэша эмбеддингов")
     invalidate_embedding_cache()
     logger.info("Кэш эмбеддингов очищен")
 

@@ -23,6 +23,8 @@ documents_bp = Blueprint("documents", __name__, url_prefix="/api/documents")
 @documents_bp.before_request
 def require_admin_role():
     """Управление базой знаний доступно только администраторам."""
+    if request.endpoint == "documents.open_document":
+        return None
     return require_admin_access()
 
 _jobs = {}
@@ -178,7 +180,7 @@ def _set_job(job_id: str, **updates) -> None:
 
 
 def _run_reindex(job_id: str) -> None:
-    _set_job(job_id, status="running", message="Индексация запущена")
+    _set_job(job_id, status="running", stage="scan", progress=1, message="Сканирование документов")
     try:
         from create_vector_db import create_vector_db, process_all_files
 
@@ -187,14 +189,24 @@ def _run_reindex(job_id: str) -> None:
             _set_job(
                 job_id,
                 status="failed",
+                stage="scan",
+                progress=100,
                 message="Не найдено документов для индексации",
                 finished_at=datetime.now().isoformat(),
             )
             return
-        create_vector_db(documents)
+        _set_job(
+            job_id,
+            stage="process",
+            progress=10,
+            message=f"Подготовлено чанков: {len(documents)}",
+        )
+        create_vector_db(documents, progress_callback=lambda updates: _set_job(job_id, **updates))
         _set_job(
             job_id,
             status="done",
+            stage="done",
+            progress=100,
             message=f"Индексация завершена: {len(documents)} чанков",
             finished_at=datetime.now().isoformat(),
         )
@@ -203,6 +215,8 @@ def _run_reindex(job_id: str) -> None:
         _set_job(
             job_id,
             status="failed",
+            stage="failed",
+            progress=100,
             message=str(exc),
             finished_at=datetime.now().isoformat(),
         )
@@ -300,7 +314,16 @@ def reindex_documents():
     """Запустить переиндексацию в фоновом потоке."""
     job_id = str(uuid4())
     now = datetime.now().isoformat()
-    _set_job(job_id, id=job_id, status="pending", message="Ожидает запуска", started_at=now, finished_at=None)
+    _set_job(
+        job_id,
+        id=job_id,
+        status="pending",
+        stage="pending",
+        progress=0,
+        message="Ожидает запуска",
+        started_at=now,
+        finished_at=None,
+    )
     thread = threading.Thread(target=_run_reindex, args=(job_id,), daemon=True)
     thread.start()
     return jsonify({"job": _jobs[job_id]}), 202

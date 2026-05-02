@@ -19,7 +19,7 @@ wiki_4/
 ├── core/                    # Ядро системы
 │   └── rag.py              # RAG система с поддержкой цитирования
 ├── data/                    # Исходные данные
-│   ├── pages/              # Экспортированные страницы XWiki
+│   ├── wiki_pars/          # Выгруженные страницы XWiki с читаемыми именами
 │   └── uploads/            # Загруженные файлы
 ├── docs/                    # Документация
 ├── logs/                    # Логи системы
@@ -131,6 +131,24 @@ python scripts/create_admin.py --username admin --email admin@example.com
 **Важно:** векторы в Chroma уже привязаны к модели и размерности, использованным при `create_vector_db.py`. Для каждого **нового** вопроса всё равно нужен **рабочий** сервис эмбеддингов той же размерности.
 
 ## Использование
+
+### 0. Выгрузка статей из XWiki
+
+Для загрузки базы из локальной XWiki используйте скрипт:
+
+```powershell
+python scripts/parse_xwiki.py --base-url http://wiki.bochkari.local --clean --include-space sa --include-space 1c --include-space faq
+```
+
+Если разделы закрыты авторизацией, передайте учётные данные XWiki:
+
+```powershell
+$env:XWIKI_USERNAME = "your_login"
+$env:XWIKI_PASSWORD = "your_password"
+python scripts/parse_xwiki.py --clean --include-space sa --include-space 1c --include-space faq
+```
+
+Скрипт сохраняет HTML-файлы в `data/wiki_pars/`, декодирует русские названия папок и страниц, заменяет `WebHome.html` на имя из заголовка статьи и пишет список выгруженных страниц в `data/wiki_pars/manifest.json`.
 
 ### 1. Создание векторной базы данных
 

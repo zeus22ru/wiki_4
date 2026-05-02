@@ -121,6 +121,87 @@ async function apiJson(url, options = {}) {
     return data;
 }
 
+function setJobStatus(message, options = {}) {
+    if (!jobStatus) {
+        return;
+    }
+
+    const hasProgress = typeof options.progress === 'number';
+    const progress = hasProgress ? Math.max(0, Math.min(100, Math.round(options.progress))) : null;
+    const state = options.state || '';
+    jobStatus.classList.toggle('is-error', state === 'failed' || state === 'error');
+    jobStatus.classList.toggle('is-success', state === 'done' || state === 'success');
+
+    if (!hasProgress && !options.indeterminate) {
+        jobStatus.textContent = message || '';
+        return;
+    }
+
+    const progressLabel = hasProgress ? `${progress}%` : '';
+    const progressStyle = hasProgress ? ` style="width: ${progress}%"` : '';
+    const progressClass = options.indeterminate ? ' job-progress__bar--indeterminate' : '';
+    jobStatus.innerHTML = `
+        <div class="job-status__line">
+            <span>${escapeHtml(message || '')}</span>
+            ${progressLabel ? `<span>${progressLabel}</span>` : ''}
+        </div>
+        <div class="job-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100"${hasProgress ? ` aria-valuenow="${progress}"` : ''}>
+            <div class="job-progress__bar${progressClass}"${progressStyle}></div>
+        </div>
+    `;
+}
+
+function renderJob(job) {
+    if (!job) {
+        return;
+    }
+    const progress = typeof job.progress === 'number' ? job.progress : null;
+    const isActive = job.status === 'pending' || job.status === 'running';
+    setJobStatus(`${job.status}: ${job.message}`, {
+        progress,
+        state: job.status,
+        indeterminate: isActive && progress === null,
+    });
+}
+
+function uploadJsonWithProgress(url, formData, progressMessage) {
+    return new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', url);
+        xhr.withCredentials = true;
+
+        xhr.upload.onprogress = (event) => {
+            if (!event.lengthComputable) {
+                setJobStatus(progressMessage, {state: 'running', indeterminate: true});
+                return;
+            }
+            const progress = Math.round((event.loaded / event.total) * 100);
+            setJobStatus(`${progressMessage}: ${formatBytes(event.loaded)} из ${formatBytes(event.total)}`, {
+                progress,
+                state: 'running',
+            });
+        };
+
+        xhr.onload = () => {
+            let data = {};
+            try {
+                data = JSON.parse(xhr.responseText || '{}');
+            } catch (_) {
+                data = {};
+            }
+            if (xhr.status >= 200 && xhr.status < 300) {
+                resolve(data);
+            } else {
+                reject(new Error(data.error || `Ошибка ${xhr.status}`));
+            }
+        };
+
+        xhr.onerror = () => reject(new Error('Ошибка загрузки файла'));
+        xhr.onabort = () => reject(new Error('Загрузка файла отменена'));
+        xhr.send(formData);
+    });
+}
+
 async function initializeAuth() {
     try {
         currentAuth = await apiJson('/api/auth/me');
@@ -1134,33 +1215,37 @@ async function loadDocuments() {
 async function uploadDocument(e) {
     e.preventDefault();
     if (!documentFileInput.files.length) {
-        jobStatus.textContent = 'Выберите файл';
+        setJobStatus('Выберите файл');
         return;
     }
     const formData = new FormData();
     formData.append('file', documentFileInput.files[0]);
     try {
-        await apiJson('/api/documents/upload', {method: 'POST', body: formData});
-        jobStatus.textContent = 'Файл загружен';
+        setJobStatus('Подготовка загрузки файла', {progress: 0, state: 'running'});
+        await uploadJsonWithProgress('/api/documents/upload', formData, 'Загрузка файла');
+        setJobStatus('Файл загружен', {progress: 100, state: 'done'});
         documentFileInput.value = '';
         loadDocuments();
     } catch (error) {
-        jobStatus.textContent = error.message;
+        setJobStatus(error.message, {state: 'failed'});
     }
 }
 
 async function previewDocument() {
     if (!documentFileInput.files.length) {
-        jobStatus.textContent = 'Выберите файл для предпросмотра';
+        setJobStatus('Выберите файл для предпросмотра');
         return;
     }
     const formData = new FormData();
     formData.append('file', documentFileInput.files[0]);
     indexPreview.innerHTML = '<div class="empty-state">Анализирую документ...</div>';
     try {
-        const data = await apiJson('/api/documents/preview', {method: 'POST', body: formData});
+        setJobStatus('Загрузка файла для предпросмотра', {progress: 0, state: 'running'});
+        const data = await uploadJsonWithProgress('/api/documents/preview', formData, 'Загрузка файла для предпросмотра');
+        setJobStatus('Предпросмотр готов', {progress: 100, state: 'done'});
         renderIndexPreview(data.preview || {});
     } catch (error) {
+        setJobStatus(error.message, {state: 'failed'});
         indexPreview.innerHTML = `<div class="empty-state">${escapeHtml(error.message)}</div>`;
     }
 }
@@ -1209,10 +1294,10 @@ function renderPreviewList(items) {
 async function startReindex() {
     try {
         const data = await apiJson('/api/documents/reindex', {method: 'POST'});
-        jobStatus.textContent = `${data.job.status}: ${data.job.message}`;
+        renderJob(data.job);
         pollJobs();
     } catch (error) {
-        jobStatus.textContent = error.message;
+        setJobStatus(error.message, {state: 'failed'});
     }
 }
 
@@ -1221,7 +1306,7 @@ async function pollJobs() {
         const data = await apiJson('/api/documents/jobs');
         const latest = (data.jobs || [])[0];
         if (latest) {
-            jobStatus.textContent = `${latest.status}: ${latest.message}`;
+            renderJob(latest);
             if (latest.status === 'pending' || latest.status === 'running') {
                 setTimeout(pollJobs, 2000);
             }

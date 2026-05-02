@@ -355,7 +355,6 @@ def test_api_chats_delete_all(client):
 
 
 def test_api_documents_open_serves_file_inside_data_dir(client, tmp_path, monkeypatch):
-    login_admin(client)
     doc = tmp_path / "source.txt"
     doc.write_text("source content", encoding="utf-8")
     monkeypatch.setattr("api.routes.documents.settings.DATA_DIR", str(tmp_path))
@@ -367,7 +366,6 @@ def test_api_documents_open_serves_file_inside_data_dir(client, tmp_path, monkey
 
 
 def test_api_documents_open_rejects_path_outside_data_dir(client, tmp_path, monkeypatch):
-    login_admin(client)
     outside = tmp_path.parent / "outside.txt"
     outside.write_text("secret", encoding="utf-8")
     monkeypatch.setattr("api.routes.documents.settings.DATA_DIR", str(tmp_path))

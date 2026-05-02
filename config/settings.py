@@ -80,6 +80,8 @@ class Settings:
     CHUNK_SIZE: int = int(os.getenv("CHUNK_SIZE", "500"))
     CHUNK_OVERLAP: int = int(os.getenv("CHUNK_OVERLAP", "50"))
     BATCH_SIZE: int = int(os.getenv("BATCH_SIZE", "10"))
+    DOCUMENT_PROCESS_WORKERS: int = int(os.getenv("DOCUMENT_PROCESS_WORKERS", str(min(4, os.cpu_count() or 1))))
+    EMBEDDING_WORKERS: int = int(os.getenv("EMBEDDING_WORKERS", "1"))
 
     # API настройка
     API_HOST: str = os.getenv("API_HOST", "0.0.0.0")
