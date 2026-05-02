@@ -245,6 +245,32 @@
     opacity: 1;
 }
 
+.message-content:focus-within .copy-button {
+    opacity: 1;
+}
+
+.copy-button:focus-visible {
+    opacity: 1;
+    outline: 2px solid var(--primary-color);
+    outline-offset: 2px;
+}
+
+.user-message .message-content .copy-button {
+    background: rgba(255, 255, 255, 0.18);
+    border-color: rgba(255, 255, 255, 0.35);
+    color: rgba(255, 255, 255, 0.95);
+}
+
+.user-message .message-content .copy-button:hover {
+    background: rgba(255, 255, 255, 0.28);
+    border-color: rgba(255, 255, 255, 0.55);
+    color: #fff;
+}
+
+.user-message .message-content .copy-button:focus-visible {
+    outline-color: rgba(255, 255, 255, 0.9);
+}
+
 .copy-button:hover {
     background: var(--copy-btn-hover);
     border-color: var(--primary-color);

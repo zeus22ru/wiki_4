@@ -1,0 +1,929 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Прототип компоновки — БочкарИИ</title>
+    <style>
+        /* Минимальный набор токенов (как в theme.css) */
+        :root {
+            --primary-color: #7c5a22;
+            --primary-hover: #5d4218;
+            --bg-color: #f4f1eb;
+            --chat-bg: #fffdf8;
+            --sidebar-bg: rgba(255, 253, 248, 0.92);
+            --sidebar-border: #ded5c7;
+            --sidebar-text: #25211d;
+            --border-color: #ded5c7;
+            --text-color: #25211d;
+            --secondary-text: #71695f;
+            --input-bg: #fffdf8;
+            --input-border: #c9b99f;
+            --header-bg: rgba(255, 253, 248, 0.88);
+            --header-border: #ded5c7;
+            --success-color: #3f8f58;
+            --shadow-sm: 0 4px 12px rgba(72, 55, 35, 0.08);
+            --danger-muted: #b84a3d;
+            --radius: 8px;
+            --copy-btn-bg: color-mix(in srgb, var(--chat-bg) 88%, var(--text-color));
+            --copy-btn-hover: color-mix(in srgb, var(--chat-bg) 72%, var(--primary-color));
+            --copy-btn-text: var(--secondary-text);
+            --copy-btn-border: var(--border-color);
+        }
+
+        [data-theme="dark"] {
+            --bg-color: #17130f;
+            --chat-bg: #211b15;
+            --sidebar-bg: rgba(33, 27, 21, 0.94);
+            --sidebar-border: #443827;
+            --sidebar-text: #f4eadb;
+            --border-color: #443827;
+            --text-color: #f4eadb;
+            --secondary-text: #c4b49b;
+            --input-bg: #1d1812;
+            --input-border: #5f4f37;
+            --header-bg: rgba(33, 27, 21, 0.9);
+            --header-border: #443827;
+            --success-color: #22c55e;
+            --shadow-sm: 0 4px 16px rgba(0, 0, 0, 0.35);
+            --danger-muted: #f87171;
+            --copy-btn-bg: color-mix(in srgb, var(--chat-bg) 85%, var(--text-color));
+            --copy-btn-hover: color-mix(in srgb, var(--chat-bg) 70%, var(--primary-color));
+            --copy-btn-text: var(--secondary-text);
+            --copy-btn-border: var(--border-color);
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: Inter, system-ui, sans-serif;
+            background:
+                radial-gradient(circle at top left, rgba(196, 147, 58, 0.16), transparent 28rem),
+                linear-gradient(135deg, var(--chat-bg), var(--bg-color));
+            color: var(--text-color);
+            min-height: 100vh;
+        }
+
+        .proto-badge {
+            position: fixed;
+            top: 10px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 100;
+            font-size: 0.72rem;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+            color: var(--secondary-text);
+            background: var(--chat-bg);
+            border: 1px solid var(--border-color);
+            padding: 0.35rem 0.75rem;
+            border-radius: 999px;
+            pointer-events: none;
+            box-shadow: var(--shadow-sm);
+        }
+
+        .app-container {
+            max-width: 1480px;
+            margin: 0 auto;
+            min-height: 100vh;
+            display: flex;
+            gap: 1rem;
+            padding: 2.25rem 1rem 1rem;
+        }
+
+        /* ——— Сайдбар ——— */
+        .workspace-sidebar {
+            width: 280px;
+            min-width: 240px;
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
+            padding: 1rem;
+            background: var(--sidebar-bg);
+            border: 1px solid var(--sidebar-border);
+            border-radius: 14px;
+            color: var(--sidebar-text);
+            box-shadow: var(--shadow-sm);
+        }
+
+        .sidebar-top {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 0.5rem;
+        }
+
+        .sidebar-top strong { font-size: 0.95rem; }
+
+        .sidebar-new-chat-btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.4rem;
+            flex-shrink: 0;
+            padding: 0.4rem 0.65rem;
+            font-size: 0.78rem;
+            font-weight: 600;
+            font-family: inherit;
+            letter-spacing: 0.01em;
+            border: none;
+            border-radius: var(--radius);
+            background: var(--primary-color);
+            color: #fff;
+            cursor: pointer;
+            box-shadow: 0 1px 2px rgba(72, 55, 35, 0.12);
+            transition: background 0.15s ease, box-shadow 0.15s ease;
+        }
+
+        .sidebar-new-chat-btn:hover {
+            background: var(--primary-hover);
+            box-shadow: 0 2px 8px rgba(72, 55, 35, 0.18);
+        }
+
+        .sidebar-new-chat-btn:focus-visible {
+            outline: 2px solid var(--primary-color);
+            outline-offset: 2px;
+        }
+
+        .sidebar-new-chat-btn svg {
+            flex-shrink: 0;
+            width: 16px;
+            height: 16px;
+        }
+
+        [data-theme="dark"] .sidebar-new-chat-btn {
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+        }
+
+        .icon-btn {
+            width: 32px;
+            height: 32px;
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius);
+            background: var(--chat-bg);
+            color: var(--text-color);
+            cursor: pointer;
+            font-size: 1.1rem;
+            line-height: 1;
+        }
+
+        .icon-btn:hover { border-color: var(--primary-color); color: var(--primary-color); }
+
+        .sidebar-search {
+            width: 100%;
+            padding: 0.55rem 0.7rem;
+            border: 1px solid var(--input-border);
+            border-radius: var(--radius);
+            background: var(--input-bg);
+            color: var(--text-color);
+        }
+
+        .sidebar-section-label {
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: var(--secondary-text);
+            margin-top: 0.25rem;
+        }
+
+        .chat-list {
+            flex: 1;
+            min-height: 120px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 0.45rem;
+        }
+
+        .chat-list-item {
+            text-align: left;
+            padding: 0.65rem 0.75rem;
+            border-radius: 10px;
+            border: 1px solid var(--border-color);
+            background: var(--chat-bg);
+            color: var(--text-color);
+            cursor: pointer;
+            font-size: 0.88rem;
+        }
+
+        .chat-list-item.active {
+            border-color: var(--primary-color);
+            box-shadow: 0 2px 8px rgba(124, 90, 34, 0.12);
+        }
+
+        .chat-list-item .meta { font-size: 0.75rem; color: var(--secondary-text); margin-top: 0.2rem; }
+
+        .sidebar-footer {
+            margin-top: auto;
+            padding-top: 0.75rem;
+            border-top: 1px solid var(--border-color);
+        }
+
+        .clear-chats-btn {
+            width: 100%;
+            padding: 0.5rem;
+            font-size: 0.82rem;
+            border-radius: var(--radius);
+            border: 1px dashed var(--border-color);
+            background: transparent;
+            color: var(--danger-muted);
+            cursor: pointer;
+        }
+
+        .clear-chats-btn:hover {
+            border-style: solid;
+            background: rgba(184, 74, 61, 0.06);
+        }
+
+        [data-theme="dark"] .clear-chats-btn:hover {
+            background: rgba(248, 113, 113, 0.08);
+        }
+
+        /* ——— Основная колонка ——— */
+        .chat-container {
+            flex: 1;
+            min-width: 0;
+            display: flex;
+            flex-direction: column;
+            background: var(--chat-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 14px;
+            overflow: hidden;
+            box-shadow: var(--shadow-sm);
+        }
+
+        .chat-header {
+            display: flex;
+            flex-direction: column;
+            gap: 0.65rem;
+            padding: 0.85rem 1.25rem;
+            background: var(--header-bg);
+            border-bottom: 1px solid var(--header-border);
+            backdrop-filter: blur(8px);
+        }
+
+        .header-row-primary {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 1rem;
+            flex-wrap: wrap;
+        }
+
+        .chat-brand {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-weight: 700;
+            font-size: 1.05rem;
+            color: var(--text-color);
+        }
+
+        .chat-brand .logo-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: var(--primary-color);
+        }
+
+        .header-utilities {
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+        }
+
+        /* Статус: тот же фон, что у шапки, без «второй карточки» как у кнопок */
+        .status-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.42rem;
+            padding: 0.22rem 0.55rem 0.22rem 0.45rem;
+            border-radius: 999px;
+            font-size: 0.75rem;
+            font-weight: 500;
+            letter-spacing: 0.02em;
+            color: var(--secondary-text);
+            border: 1px solid color-mix(in srgb, var(--success-color) 22%, var(--border-color));
+            background: color-mix(in srgb, var(--success-color) 11%, var(--header-bg));
+            box-shadow: none;
+        }
+
+        .status-pill__text {
+            color: var(--secondary-text);
+            line-height: 1.2;
+        }
+
+        .status-pill .status-dot {
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            flex-shrink: 0;
+            background: var(--success-color);
+            box-shadow: 0 0 0 2px color-mix(in srgb, var(--success-color) 28%, transparent);
+        }
+
+        [data-theme="dark"] .status-pill {
+            border-color: color-mix(in srgb, var(--success-color) 32%, var(--border-color));
+            background: color-mix(in srgb, var(--success-color) 14%, var(--header-bg));
+        }
+
+        [data-theme="dark"] .status-pill .status-dot {
+            box-shadow: 0 0 0 2px color-mix(in srgb, var(--success-color) 22%, transparent);
+        }
+
+        .auth-compact {
+            font-size: 0.82rem;
+            color: var(--secondary-text);
+            padding: 0.35rem 0.6rem;
+            max-width: 200px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.35rem;
+            border-radius: var(--radius);
+            padding: 0.45rem 0.85rem;
+            font-size: 0.85rem;
+            font-family: inherit;
+            cursor: pointer;
+            border: 1px solid var(--border-color);
+            background: var(--chat-bg);
+            color: var(--text-color);
+        }
+
+        .btn:hover { border-color: var(--primary-color); color: var(--primary-color); }
+
+        .btn svg {
+            width: 18px;
+            height: 18px;
+            flex-shrink: 0;
+        }
+
+        .proto-auth-inline {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 0.4rem 0.55rem;
+        }
+
+        .proto-auth-inline .auth-sep {
+            color: var(--border-color);
+            font-weight: 300;
+            user-select: none;
+        }
+
+        .btn-primary {
+            background: var(--primary-color);
+            color: #fff;
+            border: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.4rem;
+        }
+
+        .btn-primary:hover {
+            background: var(--primary-hover);
+            color: #fff;
+        }
+
+        .theme-toggle {
+            width: 38px;
+            height: 38px;
+            padding: 0;
+            display: grid;
+            place-items: center;
+        }
+
+        .header-row-nav {
+            display: flex;
+            align-items: center;
+            gap: 0.35rem;
+            padding-top: 0.15rem;
+            border-top: 1px solid var(--border-color);
+        }
+
+        .tab-btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.35rem;
+            padding: 0.45rem 0.9rem;
+            font-size: 0.85rem;
+            font-family: inherit;
+            border: 1px solid transparent;
+            border-radius: var(--radius);
+            background: transparent;
+            color: var(--secondary-text);
+            cursor: pointer;
+        }
+
+        .tab-btn svg {
+            width: 16px;
+            height: 16px;
+            flex-shrink: 0;
+        }
+
+        .tab-btn:hover { color: var(--text-color); }
+
+        .tab-btn.active {
+            background: var(--primary-color);
+            color: #fff;
+            border-color: var(--primary-color);
+        }
+
+        /* ——— RAG ——— */
+        .rag-toolbar {
+            border-bottom: 1px solid var(--border-color);
+            background: var(--chat-bg);
+        }
+
+        .rag-primary {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: flex-end;
+            gap: 1rem;
+            padding: 0.75rem 1.25rem;
+        }
+
+        .field {
+            display: flex;
+            flex-direction: column;
+            gap: 0.3rem;
+            min-width: min(100%, 220px);
+            flex: 1 1 200px;
+        }
+
+        .field label, .field-inline label {
+            font-size: 0.78rem;
+            color: var(--secondary-text);
+        }
+
+        .field select {
+            padding: 0.45rem 0.55rem;
+            border-radius: var(--radius);
+            border: 1px solid var(--input-border);
+            background: var(--input-bg);
+            color: var(--text-color);
+            font-size: 0.88rem;
+        }
+
+        .rag-actions {
+            display: flex;
+            align-items: flex-end;
+            margin-left: auto;
+        }
+
+        .rag-advanced-toggle {
+            width: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0.5rem 1.25rem;
+            font-size: 0.82rem;
+            color: var(--secondary-text);
+            background: transparent;
+            border: none;
+            border-top: 1px solid var(--border-color);
+            cursor: pointer;
+            text-align: left;
+        }
+
+        .rag-advanced-toggle:hover { color: var(--text-color); }
+
+        .rag-advanced-toggle .chev {
+            transition: transform 0.2s;
+        }
+
+        .rag-advanced-toggle[aria-expanded="true"] .chev {
+            transform: rotate(180deg);
+        }
+
+        .rag-advanced {
+            display: none;
+            padding: 0.65rem 1.25rem 0.9rem;
+            gap: 1rem;
+            flex-wrap: wrap;
+            background: var(--bg-color);
+            border-top: 1px solid var(--border-color);
+        }
+
+        .rag-advanced.open { display: flex; }
+
+        .field-inline {
+            display: flex;
+            flex-direction: column;
+            gap: 0.3rem;
+        }
+
+        .field-inline input {
+            width: 88px;
+            padding: 0.4rem 0.5rem;
+            border-radius: var(--radius);
+            border: 1px solid var(--input-border);
+            background: var(--input-bg);
+            color: var(--text-color);
+        }
+
+        /* ——— Сообщения с ограничением ширины текста ——— */
+        .messages-wrap {
+            flex: 1;
+            min-height: 200px;
+            overflow-y: auto;
+            padding: 1.25rem;
+        }
+
+        .messages-inner {
+            max-width: 52rem;
+            margin: 0 auto;
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+        }
+
+        .message {
+            display: flex;
+            gap: 0.75rem;
+            max-width: 95%;
+        }
+
+        .message.user { align-self: flex-end; flex-direction: row-reverse; }
+
+        .bubble {
+            position: relative;
+            padding: 0.85rem 1rem;
+            border-radius: 14px;
+            border: 1px solid var(--border-color);
+            background: var(--chat-bg);
+            font-size: 0.92rem;
+            line-height: 1.5;
+        }
+
+        .bubble:has(.bubble-copy) {
+            padding-right: 2.65rem;
+        }
+
+        .bubble__text {
+            display: block;
+            padding-right: 0.25rem;
+        }
+
+        .bubble-copy {
+            position: absolute;
+            top: 0.45rem;
+            right: 0.45rem;
+            width: 30px;
+            height: 30px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0;
+            border: 1px solid var(--copy-btn-border);
+            border-radius: 6px;
+            background: var(--copy-btn-bg);
+            color: var(--copy-btn-text);
+            cursor: pointer;
+            opacity: 0;
+            transition: opacity 0.2s ease, background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+        }
+
+        .bubble-copy svg {
+            width: 15px;
+            height: 15px;
+            pointer-events: none;
+        }
+
+        .bubble:hover .bubble-copy,
+        .bubble:focus-within .bubble-copy {
+            opacity: 1;
+        }
+
+        .bubble-copy:hover {
+            background: var(--copy-btn-hover);
+            border-color: var(--primary-color);
+            color: var(--primary-color);
+        }
+
+        .bubble-copy:active {
+            transform: scale(0.96);
+        }
+
+        .bubble-copy:focus-visible {
+            opacity: 1;
+            outline: 2px solid var(--primary-color);
+            outline-offset: 2px;
+        }
+
+        .message.user .bubble {
+            background: linear-gradient(135deg, #7c5a22, #5d4218);
+            color: #fff;
+            border: none;
+        }
+
+        .message.user .bubble-copy {
+            background: rgba(255, 255, 255, 0.18);
+            border-color: rgba(255, 255, 255, 0.35);
+            color: rgba(255, 255, 255, 0.95);
+        }
+
+        .message.user .bubble-copy:hover {
+            background: rgba(255, 255, 255, 0.28);
+            border-color: rgba(255, 255, 255, 0.55);
+            color: #fff;
+        }
+
+        .message.user .bubble-copy:focus-visible {
+            outline-color: rgba(255, 255, 255, 0.9);
+        }
+
+        .avatar {
+            width: 36px;
+            height: 36px;
+            border-radius: 10px;
+            background: var(--border-color);
+            flex-shrink: 0;
+        }
+
+        .input-area {
+            padding: 1rem 1.25rem 1.15rem;
+            border-top: 1px solid var(--border-color);
+            background: var(--header-bg);
+        }
+
+        .message-form {
+            max-width: 52rem;
+            margin: 0 auto;
+            display: flex;
+            gap: 0.6rem;
+        }
+
+        .message-input {
+            flex: 1;
+            min-height: 48px;
+            padding: 0 1rem;
+            border-radius: 12px;
+            border: 1px solid var(--input-border);
+            background: var(--input-bg);
+            color: var(--text-color);
+            font-size: 0.95rem;
+        }
+
+        .send-button {
+            width: 48px;
+            height: 48px;
+            border-radius: 12px;
+            border: none;
+            background: var(--primary-color);
+            color: #fff;
+            cursor: pointer;
+            display: grid;
+            place-items: center;
+        }
+
+        @media (max-width: 900px) {
+            .app-container { flex-direction: column; padding-top: 2.5rem; }
+            .workspace-sidebar {
+                width: 100%;
+                min-height: auto;
+                max-height: 220px;
+            }
+            .sidebar-top {
+                flex-wrap: wrap;
+            }
+            .sidebar-new-chat-btn {
+                flex: 1 1 auto;
+                min-width: 0;
+            }
+            .rag-actions { margin-left: 0; width: 100%; }
+            .rag-actions .btn { width: 100%; justify-content: center; }
+        }
+    </style>
+</head>
+<body>
+    <div class="proto-badge">Прототип компоновки · не продакшен</div>
+
+    <div class="app-container">
+        <aside class="workspace-sidebar">
+            <!-- Один вход «Новый чат»: рядом со списком диалогов (дубль в шапке убран). -->
+            <div class="sidebar-top">
+                <strong>Диалоги</strong>
+                <button type="button" class="sidebar-new-chat-btn" id="protoNewChat" title="Создать новый диалог">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+                        <line x1="12" y1="8" x2="12" y2="14"/>
+                        <line x1="9" y1="11" x2="15" y2="11"/>
+                    </svg>
+                    Новый чат
+                </button>
+            </div>
+            <input class="sidebar-search" type="search" placeholder="Поиск по истории" aria-label="Поиск по истории">
+            <span class="sidebar-section-label">Недавние</span>
+            <div class="chat-list">
+                <button type="button" class="chat-list-item active">
+                    Оформление отпуска
+                    <div class="meta">Сегодня, 14:02</div>
+                </button>
+                <button type="button" class="chat-list-item">
+                    Политика ИБ — пароли
+                    <div class="meta">Вчера</div>
+                </button>
+                <button type="button" class="chat-list-item">
+                    Без названия
+                    <div class="meta">3 мая</div>
+                </button>
+            </div>
+            <div class="sidebar-footer">
+                <button type="button" class="clear-chats-btn">Очистить все чаты…</button>
+            </div>
+        </aside>
+
+        <main class="chat-container">
+            <header class="chat-header">
+                <div class="header-row-primary">
+                    <div class="chat-brand" aria-label="БочкарИИ">
+                        <span class="logo-dot" aria-hidden="true"></span>
+                        БочкарИИ
+                    </div>
+                    <div class="header-utilities">
+                        <span class="status-pill" role="status">
+                            <span class="status-dot" aria-hidden="true"></span>
+                            <span class="status-pill__text">Онлайн</span>
+                        </span>
+                        <div class="proto-auth-inline" aria-label="Примеры: гость и сессия">
+                            <span class="auth-compact">Гость</span>
+                            <button type="button" class="btn">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                    <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/>
+                                    <polyline points="10 17 15 12 10 7"/>
+                                    <line x1="15" y1="12" x2="3" y2="12"/>
+                                </svg>
+                                Войти
+                            </button>
+                            <span class="auth-sep" aria-hidden="true">|</span>
+                            <span class="auth-compact" title="admin@example.com">admin · admin</span>
+                            <button type="button" class="btn">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                    <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+                                    <polyline points="16 17 21 12 16 7"/>
+                                    <line x1="21" y1="12" x2="9" y2="12"/>
+                                </svg>
+                                Выйти
+                            </button>
+                        </div>
+                        <button type="button" class="btn theme-toggle" id="themeToggle" title="Тема" aria-label="Переключить тему">◐</button>
+                    </div>
+                </div>
+                <nav class="header-row-nav" aria-label="Разделы">
+                    <button type="button" class="tab-btn active">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+                        </svg>
+                        <span>Чат</span>
+                    </button>
+                    <button type="button" class="tab-btn">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+                        </svg>
+                        <span>База знаний</span>
+                    </button>
+                    <button type="button" class="tab-btn">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+                        </svg>
+                        <span>Админка</span>
+                    </button>
+                </nav>
+            </header>
+
+            <div class="rag-toolbar">
+                <div class="rag-primary">
+                    <div class="field">
+                        <label for="answerMode">Стиль ответа</label>
+                        <select id="answerMode">
+                            <option>Обычный</option>
+                            <option>Кратко</option>
+                            <option>Подробно</option>
+                            <option>Только по источникам</option>
+                            <option>По шагам</option>
+                            <option>Инструкция для сотрудника</option>
+                        </select>
+                    </div>
+                    <div class="rag-actions">
+                        <button type="button" class="btn">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                                <polyline points="7 10 12 15 17 10"/>
+                                <line x1="12" y1="15" x2="12" y2="3"/>
+                            </svg>
+                            Скачать диалог
+                        </button>
+                    </div>
+                </div>
+                <button type="button" class="rag-advanced-toggle" id="ragToggle" aria-expanded="false" aria-controls="ragAdvanced">
+                    <span>Дополнительно: поиск по базе</span>
+                    <span class="chev" aria-hidden="true">▼</span>
+                </button>
+                <div class="rag-advanced" id="ragAdvanced">
+                    <div class="field-inline">
+                        <label for="topK">Источников (top K)</label>
+                        <input id="topK" type="number" min="1" max="10" value="5">
+                    </div>
+                    <div class="field-inline">
+                        <label for="minScore">Мин. релевантность</label>
+                        <input id="minScore" type="number" min="0" max="1" step="0.05" value="0">
+                    </div>
+                </div>
+            </div>
+
+            <div class="messages-wrap">
+                <div class="messages-inner">
+                    <div class="message">
+                        <div class="avatar" aria-hidden="true"></div>
+                        <div class="bubble" tabindex="-1">
+                            <div class="bubble__text">
+                                Привет! Я AI-ассистент по базе знаний. Задайте вопрос — отвечу по документации. Здесь колонка уже с <strong>ограничением ширины</strong>, чтобы длинные строки не растягивались на весь экран.
+                            </div>
+                            <button type="button" class="bubble-copy" aria-label="Копировать текст" title="Копировать">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+                                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+                                </svg>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="message user">
+                        <div class="avatar" aria-hidden="true"></div>
+                        <div class="bubble" tabindex="-1">
+                            <div class="bubble__text">Как оформить отпуск?</div>
+                            <button type="button" class="bubble-copy" aria-label="Копировать текст" title="Копировать">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+                                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+                                </svg>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="input-area">
+                <form class="message-form" onsubmit="event.preventDefault();">
+                    <input class="message-input" type="text" placeholder="Введите ваш вопрос…" autocomplete="off">
+                    <button type="submit" class="send-button" aria-label="Отправить">
+                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>
+                        </svg>
+                    </button>
+                </form>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        (function () {
+            var root = document.documentElement;
+            var key = 'wiki4-proto-theme';
+            var saved = localStorage.getItem(key);
+            if (saved === 'dark' || saved === 'light') {
+                root.setAttribute('data-theme', saved);
+            }
+            document.getElementById('themeToggle').addEventListener('click', function () {
+                var next = root.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+                root.setAttribute('data-theme', next);
+                localStorage.setItem(key, next);
+            });
+
+            var ragToggle = document.getElementById('ragToggle');
+            var ragPanel = document.getElementById('ragAdvanced');
+            ragToggle.addEventListener('click', function () {
+                var open = ragPanel.classList.toggle('open');
+                ragToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+            });
+
+            document.querySelectorAll('.bubble-copy').forEach(function (btn) {
+                btn.addEventListener('click', function (e) {
+                    e.stopPropagation();
+                    var bubble = btn.closest('.bubble');
+                    var textEl = bubble && bubble.querySelector('.bubble__text');
+                    var text = textEl ? textEl.innerText.replace(/\s+/g, ' ').trim() : '';
+                    if (!text) return;
+                    var done = function () {
+                        var prev = btn.getAttribute('aria-label');
+                        btn.setAttribute('aria-label', 'Скопировано');
+                        setTimeout(function () {
+                            btn.setAttribute('aria-label', prev || 'Копировать текст');
+                        }, 1600);
+                    };
+                    if (navigator.clipboard && navigator.clipboard.writeText) {
+                        navigator.clipboard.writeText(text).then(done).catch(function () {});
+                    }
+                });
+            });
+        })();
+    </script>
+</body>
+</html>

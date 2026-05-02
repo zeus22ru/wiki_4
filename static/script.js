@@ -14,8 +14,9 @@ const statusText = document.getElementById('statusText');
 const sourcesPanel = document.getElementById('sourcesPanel');
 const sourcesList = document.getElementById('sourcesList');
 const closeSources = document.getElementById('closeSources');
-const newChatBtn = document.getElementById('newChatBtn');
 const sidebarNewChatBtn = document.getElementById('sidebarNewChatBtn');
+const ragAdvancedToggle = document.getElementById('ragAdvancedToggle');
+const ragAdvancedPanel = document.getElementById('ragAdvancedPanel');
 const clearChatsBtn = document.getElementById('clearChatsBtn');
 const chatList = document.getElementById('chatList');
 const chatSearchInput = document.getElementById('chatSearchInput');
@@ -75,8 +76,16 @@ document.addEventListener('DOMContentLoaded', () => {
 
     messageForm.addEventListener('submit', handleSubmit);
     closeSources.addEventListener('click', closeSourcesPanel);
-    newChatBtn.addEventListener('click', startNewChat);
-    sidebarNewChatBtn.addEventListener('click', startNewChat);
+    if (sidebarNewChatBtn) {
+        sidebarNewChatBtn.addEventListener('click', startNewChat);
+    }
+    if (ragAdvancedToggle && ragAdvancedPanel) {
+        ragAdvancedToggle.addEventListener('click', () => {
+            const open = ragAdvancedPanel.hidden;
+            ragAdvancedPanel.hidden = !open;
+            ragAdvancedToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+        });
+    }
     clearChatsBtn.addEventListener('click', clearAllChats);
     chatSearchInput.addEventListener('input', debounce(() => loadChats(chatSearchInput.value.trim()), 250));
     exportChatBtn.addEventListener('click', exportCurrentChat);
@@ -93,7 +102,7 @@ document.addEventListener('DOMContentLoaded', () => {
     registerTabBtn.addEventListener('click', () => switchAuthForm('register'));
     loginForm.addEventListener('submit', login);
     registerForm.addEventListener('submit', register);
-    document.querySelectorAll('.tab-btn').forEach((btn) => {
+    document.querySelectorAll('.workspace-tabs .tab-btn').forEach((btn) => {
         btn.addEventListener('click', () => switchPanel(btn.dataset.panel));
     });
 
@@ -319,7 +328,7 @@ function switchPanel(panelId) {
         showInlineError('Этот раздел доступен только администратору');
         panelId = 'chatPanel';
     }
-    document.querySelectorAll('.tab-btn').forEach((btn) => {
+    document.querySelectorAll('.workspace-tabs .tab-btn').forEach((btn) => {
         btn.classList.toggle('active', btn.dataset.panel === panelId);
     });
     document.querySelectorAll('.workspace-panel').forEach((panel) => {
@@ -1200,13 +1209,15 @@ async function loadDocuments() {
             documentsList.innerHTML = '<div class="empty-state">Документы не найдены</div>';
             return;
         }
-        documentsList.innerHTML = docs.map((doc) => `
-            <div class="data-card">
+        documentsList.innerHTML = docs.map((doc) => {
+            const openUrl = `/api/documents/open?path=${encodeURIComponent(doc.path)}`;
+            return `
+            <a class="data-card data-card--link" href="${openUrl}" target="_blank" rel="noopener noreferrer" title="Открыть документ">
                 <strong>${escapeHtml(doc.filename)}</strong>
                 <span>${escapeHtml(doc.path)}</span>
                 <small>${escapeHtml(doc.file_type || '')} · ${formatBytes(doc.size_bytes)} · ${formatDate(doc.modified_at)}</small>
-            </div>
-        `).join('');
+            </a>`;
+        }).join('');
     } catch (error) {
         documentsList.innerHTML = `<div class="empty-state">${escapeHtml(error.message)}</div>`;
     }
