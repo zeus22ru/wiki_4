@@ -631,6 +631,30 @@ async function readStream(response) {
     let streamShell = null;
     let streamContent = null;
     let accumulated = '';
+    let streamRafId = null;
+
+    const cancelStreamMarkdownFrame = () => {
+        if (streamRafId != null) {
+            cancelAnimationFrame(streamRafId);
+            streamRafId = null;
+        }
+    };
+
+    const flushStreamMarkdown = () => {
+        streamRafId = null;
+        if (!streamContent) {
+            return;
+        }
+        streamContent.innerHTML = formatMessage(accumulated);
+        scrollToBottom();
+    };
+
+    const scheduleStreamMarkdown = () => {
+        if (streamRafId != null) {
+            return;
+        }
+        streamRafId = requestAnimationFrame(flushStreamMarkdown);
+    };
 
     const ensureStreamShell = () => {
         if (streamShell) {
@@ -666,8 +690,7 @@ async function readStream(response) {
             if (payload.type === 'delta') {
                 accumulated += payload.text || '';
                 ensureStreamShell();
-                streamContent.textContent = accumulated;
-                scrollToBottom();
+                scheduleStreamMarkdown();
             } else if (payload.type === 'status') {
                 if (!accumulated) {
                     ensureStreamShell();
@@ -675,6 +698,7 @@ async function readStream(response) {
                     scrollToBottom();
                 }
             } else if (payload.type === 'done') {
+                cancelStreamMarkdownFrame();
                 const finalText = payload.answer != null ? payload.answer : accumulated;
                 currentChatId = payload.chat_id || currentChatId;
                 ensureStreamShell();
@@ -695,6 +719,7 @@ async function readStream(response) {
                 loadRelatedDocuments(streamShell, payload.sources || []);
                 addFeedbackControls(streamShell, payload.message_id);
             } else if (payload.type === 'error') {
+                cancelStreamMarkdownFrame();
                 ensureStreamShell();
                 streamContent.textContent = payload.message || 'Ошибка потока';
                 streamContent.classList.remove('streaming-in-progress');
