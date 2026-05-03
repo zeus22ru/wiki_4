@@ -1,0 +1,611 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+    <title>БочкарИИ — корпоративный AI-ассистент</title>
+
+    <!-- Reveal.js core -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/reveal.min.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/theme/white.min.css" id="theme">
+
+    <!-- Highlight.js (тема mono-blue из репо reveal.js, заменяется на свою) -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/plugin/highlight/monokai.min.css">
+
+    <!-- Шрифты -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap">
+
+    <!-- Фирменная тема поверх white -->
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="reveal">
+    <div class="slides">
+
+        <!-- ====================================================== -->
+        <!-- 1. Титульный                                            -->
+        <!-- ====================================================== -->
+        <section data-background-color="transparent">
+            <div class="bk-slide bk-title-hero">
+                <img class="bk-logo" src="../images/logo.svg" alt="БочкарИИ">
+                <p class="bk-tagline">
+                    AI-ассистент по корпоративной базе знаний.<br>
+                    Один чат вместо десятка вкладок wiki.
+                </p>
+                <div class="bk-meta">
+                    <span><strong>Демо для команды</strong></span>
+                    <span>Май 2026</span>
+                    <span>Локальное развёртывание</span>
+                </div>
+            </div>
+            <aside class="notes">
+                Поприветствовать. Сказать, что покажу: что это, почему нужно, как выглядит, что под капотом.
+                Цель — за 15 минут дать понять, как и когда коллегам пользоваться этим в работе.
+            </aside>
+        </section>
+
+        <!-- ====================================================== -->
+        <!-- 2. Проблема                                             -->
+        <!-- ====================================================== -->
+        <section data-background-color="transparent">
+            <div class="bk-slide">
+                <span class="bk-eyebrow">Проблема</span>
+                <h2>Знание есть — найти трудно</h2>
+                <p class="bk-lead">
+                    Регламенты в XWiki, инструкции в DOCX, FAQ в чатах, скрипты в общих папках.
+                    Сотрудник тратит время на поиск ответа, который у нас уже задокументирован.
+                </p>
+
+                <div class="bk-stats">
+                    <div class="bk-stat">
+                        <div class="bk-stat__value">5+</div>
+                        <div class="bk-stat__label">источников документации<br>(wiki, диск, почта, чаты)</div>
+                    </div>
+                    <div class="bk-stat">
+                        <div class="bk-stat__value">15-30 мин</div>
+                        <div class="bk-stat__label">в среднем на поиск ответа<br>по типовому вопросу</div>
+                    </div>
+                    <div class="bk-stat">
+                        <div class="bk-stat__value">∞</div>
+                        <div class="bk-stat__label">повторных вопросов<br>в дежурные чаты поддержки</div>
+                    </div>
+                </div>
+            </div>
+            <aside class="notes">
+                Подчеркнуть: проблема не в недостатке документации, а в её фрагментарности и в том,
+                что искать вручную — дорого. Спросить аудиторию: у кого это болит ежедневно?
+            </aside>
+        </section>
+
+        <!-- ====================================================== -->
+        <!-- 3. Решение                                              -->
+        <!-- ====================================================== -->
+        <section data-background-color="transparent">
+            <div class="bk-slide">
+                <span class="bk-eyebrow">Решение</span>
+                <h2>БочкарИИ — один чат для всей базы знаний</h2>
+                <p class="bk-lead">
+                    Сотрудник задаёт вопрос человеческим языком — система находит документы,
+                    показывает цитаты с релевантностью и формирует ответ. Всё локально.
+                </p>
+
+                <div class="bk-pillars">
+                    <div class="bk-pillar">
+                        <div class="bk-pillar__icon">💬</div>
+                        <h3>Естественный язык</h3>
+                        <p>Спрашиваем как человека: «как добавить пользователя в 1С?» — без ключевых слов и фильтров.</p>
+                    </div>
+                    <div class="bk-pillar">
+                        <div class="bk-pillar__icon">📑</div>
+                        <h3>Ответы со ссылками</h3>
+                        <p>Каждый ответ — с источниками, цитатами и оценкой релевантности. Можно перейти прямо в документ.</p>
+                    </div>
+                    <div class="bk-pillar">
+                        <div class="bk-pillar__icon">🔒</div>
+                        <h3>Локально и безопасно</h3>
+                        <p>Векторная база, LLM, документы — всё на наших серверах. Ничего не уходит в облако.</p>
+                    </div>
+                </div>
+            </div>
+            <aside class="notes">
+                Особо подчеркнуть локальность — это часто первый вопрос безопасников.
+                LLM крутится через Ollama / LM Studio на нашем железе.
+            </aside>
+        </section>
+
+        <!-- ====================================================== -->
+        <!-- 4. Реальные вопросы                                     -->
+        <!-- ====================================================== -->
+        <section data-background-color="transparent">
+            <div class="bk-slide">
+                <span class="bk-eyebrow">Что спрашивают на практике</span>
+                <h2>Шесть запросов, которые ассистент закрывает каждый день</h2>
+
+                <div class="bk-questions">
+                    <div class="bk-question-card">
+                        Как сделать рассылку должникам?
+                        <span class="bk-question-card__domain">Маркетинг · CRM</span>
+                    </div>
+                    <div class="bk-question-card">
+                        Как настроить состояние сертификации?
+                        <span class="bk-question-card__domain">Качество · процессы</span>
+                    </div>
+                    <div class="bk-question-card">
+                        Инструкция по добавлению пользователя в 1С
+                        <span class="bk-question-card__domain">1С · администрирование</span>
+                    </div>
+                    <div class="bk-question-card">
+                        Как найти ошибку в журнале регистрации?
+                        <span class="bk-question-card__domain">Эксплуатация · 1С</span>
+                    </div>
+                    <div class="bk-question-card">
+                        Что делать с ошибкой «недостаточно прав для работы с таблицей»?
+                        <span class="bk-question-card__domain">1С · права доступа</span>
+                    </div>
+                    <div class="bk-question-card">
+                        Количество поэкземплярной продукции не соответствует количеству подобранного товара
+                        <span class="bk-question-card__domain">Склад · ТСД</span>
+                    </div>
+                </div>
+
+                <p class="bk-lead" style="margin-top: 0.5rem; font-size: 1.05rem;">
+                    Разные домены — 1С, склад, маркетинг, эксплуатация. Одна точка входа.
+                </p>
+            </div>
+            <aside class="notes">
+                Это самый «продающий» слайд — здесь коллеги узнают свои собственные вопросы.
+                Можно остановиться и спросить: «у кого хоть один из этих вопросов прилетал на этой неделе?».
+            </aside>
+        </section>
+
+        <!-- ====================================================== -->
+        <!-- 5. Архитектура                                          -->
+        <!-- ====================================================== -->
+        <section data-background-color="transparent">
+            <div class="bk-slide bk-slide--architecture">
+                <span class="bk-eyebrow">Архитектура одним взглядом</span>
+                <h2>Как вопрос превращается в ответ</h2>
+
+                <div class="bk-mermaid">
+                    <pre class="mermaid">
+flowchart LR
+    user["Сотрудник"] --> ui["Web UI<br/>Flask + JS"]
+    ui --> rag["RAG ядро<br/>core/rag.py"]
+    rag --> expand["Расширение запроса<br/>rewrite, HyDE, multi-query"]
+    expand --> hybrid["Гибридный поиск"]
+    hybrid --> dense["ChromaDB<br/>векторы"]
+    hybrid --> sparse["BM25<br/>лексика"]
+    dense --> rrf["RRF + cross-encoder"]
+    sparse --> rrf
+    rrf --> llm["LLM<br/>Ollama / LM Studio"]
+    llm --> ui
+    kb["База знаний<br/>XWiki, PDF, DOCX, XLSX, HTML"] -.индексация.-> dense
+    kb -.индексация.-> sparse
+                    </pre>
+                </div>
+
+                <div class="bk-flow-explain">
+                    <p class="bk-flow-explain__lead">
+                        Коротко: вы отправляете текст вопроса — дальше это уже не «разговор с интернетом».
+                        Система ищет ответы <em>в ваших документах</em>, собирает из них контекст и только затем
+                        просит языковую модель сформулировать ответ человеческим языком. Ниже — шаги по порядку.
+                    </p>
+                    <ol class="bk-flow-explain__steps">
+                        <li><strong>Вопрос из браузера.</strong> Вы набираете запрос в чате. Если это продолжение темы, вместе с вопросом учитывается недавняя переписка — чтобы «а для админа?» понималось в контексте прошлого сообщения.</li>
+                        <li><strong>Подготовка к поиску.</strong> Система может перефразировать вопрос в ясный поисковый запрос и добавить ещё одну-две формулировки: так проще найти нужный фрагмент, даже если в документе другие слова.</li>
+                        <li><strong>Два поиска и объединение.</strong> Параллельно ищем по смыслу (векторный поиск по ChromaDB — «похожие по смыслу куски») и по словам (BM25 — как поиск по точным терминам в тексте). Списки кандидатов склеивают в один рейтинг; при необходимости верхние варианты дополнительно упорядочивают (cross-encoder).</li>
+                        <li><strong>Фрагменты документов.</strong> В модель уходит не абы что, а конкретные отрывки из базы знаний — ровно те, что прошли отбор. Это и есть опора ответа: не «память модели из интернета», а ваши регламенты и инструкции.</li>
+                        <li><strong>Ответ модели.</strong> Локальная LLM (Ollama или LM Studio) получает вопрос и найденные отрывки и формулирует связный ответ: объяснение, шаги, списки — но опираясь на переданный материал.</li>
+                        <li><strong>Экран для пользователя.</strong> Вы видите текст ответа; можно открыть список источников и цитаты — проверить каждую мысль по исходному файлу или странице wiki.</li>
+                    </ol>
+                </div>
+            </div>
+            <aside class="notes">
+                Кратко: пользователь пишет вопрос, мы переписываем его в самодостаточный поисковый запрос,
+                ищем параллельно по векторам и BM25, объединяем через RRF, при необходимости переранжируем,
+                кладём контекст в промпт LLM, отдаём ответ обратно с источниками.
+            </aside>
+        </section>
+
+        <!-- ====================================================== -->
+        <!-- 6. Демо: вход                                           -->
+        <!-- ====================================================== -->
+        <section data-background-color="transparent">
+            <div class="bk-slide">
+                <span class="bk-eyebrow">Демо · 1 / 6</span>
+                <div class="bk-demo">
+                    <div class="bk-demo__shot">
+                        <img src="../images/01-login.png" alt="Экран входа в БочкарИИ">
+                    </div>
+                    <div class="bk-demo__body">
+                        <h2>Вход и роли</h2>
+                        <ul class="bk-demo__bullets">
+                            <li>Логин по email или username, пароль через корпоративную учётку.</li>
+                            <li>Две роли: <code>user</code> — чат и история, <code>admin</code> — плюс база знаний и диагностика.</li>
+                            <li>Гостевой режим работает только для чтения — в сайдбаре уже знакомые ранее чаты.</li>
+                            <li>Сессия сохраняется — переоткрыли вкладку, продолжили работу.</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ====================================================== -->
+        <!-- 7. Демо: новый чат                                      -->
+        <!-- ====================================================== -->
+        <section data-background-color="transparent">
+            <div class="bk-slide">
+                <span class="bk-eyebrow">Демо · 2 / 6</span>
+                <div class="bk-demo">
+                    <div class="bk-demo__shot">
+                        <img src="../images/02-new-chat.png" alt="Создание нового чата и ввод вопроса">
+                    </div>
+                    <div class="bk-demo__body">
+                        <h2>Новый чат и вопрос</h2>
+                        <ul class="bk-demo__bullets">
+                            <li>«Новый чат» создаётся в один клик — слева в сайдбаре.</li>
+                            <li>Пишем естественным языком: <em>«Инструкция по добавлению пользователя в 1С»</em>.</li>
+                            <li>В тулбаре — стиль ответа, сколько источников искать, минимальная релевантность.</li>
+                            <li>История переписывается, поэтому уточняющий вопрос «а как для роли админа?» работает.</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ====================================================== -->
+        <!-- 8. Демо: ответ с источниками                            -->
+        <!-- ====================================================== -->
+        <section data-background-color="transparent">
+            <div class="bk-slide">
+                <span class="bk-eyebrow">Демо · 3 / 6</span>
+                <div class="bk-demo">
+                    <div class="bk-demo__shot">
+                        <img src="../images/Screenshot_10.jpg" alt="Ответ ассистента с панелью источников (ЭЦП и сертификат)">
+                    </div>
+                    <div class="bk-demo__body">
+                        <h2>Ответ с источниками</h2>
+                        <ul class="bk-demo__bullets">
+                            <li>Под ответом — кнопка <code>Источники</code>: справа выезжает панель с цитатами.</li>
+                            <li>Видно релевантность каждого источника и точный путь до раздела документа.</li>
+                            <li>Кнопка <em>«Открыть»</em> ведёт прямо в исходный файл — проверить контекст.</li>
+                            <li>Оценка <em>«Полезно / Не полезно»</em> — мы видим, какие ответы стоит улучшать.</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+            <aside class="notes">
+                На примере «недостаточно прав на таблицу» — ассистент показывает регламент с 0.91 релевантности.
+                Подчеркнуть: ответы не «придуманы», всегда подкреплены документами.
+            </aside>
+        </section>
+
+        <!-- ====================================================== -->
+        <!-- 9. Демо: история чатов                                  -->
+        <!-- ====================================================== -->
+        <section data-background-color="transparent">
+            <div class="bk-slide">
+                <span class="bk-eyebrow">Демо · 4 / 6</span>
+                <div class="bk-demo">
+                    <div class="bk-demo__shot">
+                        <img src="../images/04-chat-list.png" alt="Сайдбар с историей чатов">
+                    </div>
+                    <div class="bk-demo__body">
+                        <h2>История диалогов</h2>
+                        <ul class="bk-demo__bullets">
+                            <li>Все чаты сохраняются автоматически с понятными заголовками.</li>
+                            <li>Поиск по истории — нашли «рассылку должникам» из прошлой недели за секунду.</li>
+                            <li>Переименование, удаление одного чата или очистка всей истории.</li>
+                            <li>Скачать диалог — кнопка <em>«Скачать диалог»</em> выгружает в текстовый файл.</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ====================================================== -->
+        <!-- 10. Демо: база знаний                                   -->
+        <!-- ====================================================== -->
+        <section data-background-color="transparent">
+            <div class="bk-slide">
+                <span class="bk-eyebrow">Демо · 5 / 6 · только admin</span>
+                <div class="bk-demo">
+                    <div class="bk-demo__shot">
+                        <img src="../images/Screenshot_11.jpg" alt="Раздел «База знаний»: загрузка документов и список файлов">
+                    </div>
+                    <div class="bk-demo__body">
+                        <h2>База знаний</h2>
+                        <ul class="bk-demo__bullets">
+                            <li>Загружаем PDF, DOCX, XLSX, PPTX, HTML — всё нарезается и индексируется.</li>
+                            <li><em>Предпросмотр</em> показывает, как документ будет разбит на чанки до индексации.</li>
+                            <li>Кнопка <em>Переиндексировать</em> запускает фоновую задачу — статус виден прямо в UI.</li>
+                            <li>Подходит для актуализации регламентов 1С/склада без участия разработки.</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ====================================================== -->
+        <!-- 11. Демо: админ-консоль                                 -->
+        <!-- ====================================================== -->
+        <section data-background-color="transparent">
+            <div class="bk-slide">
+                <span class="bk-eyebrow">Демо · 6 / 6 · только admin</span>
+                <div class="bk-demo">
+                    <div class="bk-demo__shot">
+                        <img src="../images/Screenshot_12.jpg" alt="Админ-консоль: диагностика Flask, Chroma, LLM">
+                    </div>
+                    <div class="bk-demo__body">
+                        <h2>Админ-консоль</h2>
+                        <ul class="bk-demo__bullets">
+                            <li>Статус LLM-сервера, размер коллекции ChromaDB, активные модели.</li>
+                            <li>Метрики использования: число диалогов, сообщений, оценок.</li>
+                            <li>Риски качества: устаревшие документы, дубли, ответы со слабой релевантностью.</li>
+                            <li>Никакого Grafana — нужное для дежурного админа на одной странице.</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ====================================================== -->
+        <!-- 12. Под капотом: гибридный поиск                        -->
+        <!-- ====================================================== -->
+        <section data-background-color="transparent">
+            <div class="bk-slide bk-slide--hybrid">
+                <div class="bk-hybrid-scroll">
+                    <span class="bk-eyebrow">Под капотом · 1 / 3</span>
+                    <div class="bk-tech bk-tech--stacked">
+                        <div class="bk-tech__intro">
+                            <h2>Гибридный поиск</h2>
+                            <p>
+                                <strong>Одной технологии поиска недостаточно:</strong> кто-то формулирует как в регламенте, кто-то — своими словами.
+                                Запрос идёт <em>двумя дорожками</em>, результаты склеиваются — так мы не теряем ни точное слово, ни близкий по смыслу абзац.
+                                Ниже — цепочка шагов, коротко «кто за что отвечает», примеры и итог для модели.
+                            </p>
+                        </div>
+                        <div class="bk-tech__body">
+                            <div class="bk-flow bk-flow--compact">
+                                <span class="bk-flow__step">Запрос</span>
+                                <span class="bk-flow__arrow">→</span>
+                                <span class="bk-flow__step">BM25</span>
+                                <span class="bk-flow__arrow">+</span>
+                                <span class="bk-flow__step">Dense</span>
+                                <span class="bk-flow__arrow">→</span>
+                                <span class="bk-flow__step">RRF</span>
+                                <span class="bk-flow__arrow">→</span>
+                                <span class="bk-flow__step">Rerank</span>
+                                <span class="bk-flow__arrow">→</span>
+                                <span class="bk-flow__step">Top-K</span>
+                            </div>
+
+                            <ul class="bk-tech__bullets-plain">
+                                <li><strong>По словам (BM25)</strong> — как умный Ctrl+F: «журнал регистрации», «ЭЦП», «ТСД», артикулы.</li>
+                                <li><strong>По смыслу (Chroma)</strong> — другие формулировки ведут к тому же регламенту («лог событий», «массовая рассылка должникам»).</li>
+                                <li><strong>RRF</strong> — два топа кандидатов объединяем в один рейтинг: не «или слова, или смысл», а оба учтены.</li>
+                                <li><strong>Rerank (опционально)</strong> — вторая модель пересортировывает кандидатов по релевантности к вопросу.</li>
+                            </ul>
+
+                            <div class="bk-tech-examples-grid">
+                                <div class="bk-tech__example">
+                                    <strong>Пример 1 — термины 1С</strong>
+                                    <p>
+                                        «Ошибка в <em>журнале регистрации</em>» — BM25 цепляет дословно; если в wiki «просмотр событий», помогает поиск по смыслу.
+                                    </p>
+                                </div>
+                                <div class="bk-tech__example">
+                                    <strong>Пример 2 — «живой» вопрос</strong>
+                                    <p>
+                                        «Рассылка должникам» vs «информирование о задолженности» в документе — смысл тянет нужный блок; BM25 подхватывает слова «должник», «рассылка», если они есть в тексте.
+                                    </p>
+                                </div>
+                                <div class="bk-tech__example bk-tech__example--full">
+                                    <strong>Итог для модели</strong>
+                                    <p>
+                                        В промпт попадают <em>лучшие отрывки из вашей базы</em> после слияния поисков и (если включено) rerank — не «интернет из головы», а ваши документы.
+                                    </p>
+                                </div>
+                            </div>
+
+                            <p class="bk-tech__fineprint">
+                                .env: <code>RETRIEVAL_MODE</code>, <code>RRF_K_CONSTANT</code>, <code>RERANK_ENABLED</code>, <code>RERANK_MODEL</code> · <code>core/retrieval.py</code>
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <aside class="notes">
+                Акцент для аудитории: гибрид — это про качество на реальных формулировках сотрудников.
+                Пример журнала регистрации — про BM25; пример рассылки должникам — про смысл + слова.
+            </aside>
+        </section>
+
+        <!-- ====================================================== -->
+        <!-- 13. Под капотом: чанкинг + contextual retrieval         -->
+        <!-- ====================================================== -->
+        <section data-background-color="transparent">
+            <div class="bk-slide">
+                <span class="bk-eyebrow">Под капотом · 2 / 3</span>
+                <div class="bk-tech">
+                    <div class="bk-tech__intro">
+                        <h2>Структурное чанкирование</h2>
+                        <p>Документ нарезаем не «через каждые 500 символов», а по структуре: заголовки, списки, таблицы. К каждому чанку добавляем контекст раздела.</p>
+                    </div>
+                    <div class="bk-tech__body">
+                        <ul class="bk-demo__bullets">
+                            <li>HTML — обход DOM по <code>h1</code>–<code>h6</code>, <code>ul</code>/<code>ol</code>, <code>table</code>.</li>
+                            <li>DOCX — стили <code>Heading*</code>, таблицы по строкам.</li>
+                            <li>В метаданных — <code>section_path</code>, <code>chunk_kind</code>, путь раздела видно в источниках.</li>
+                            <li><strong>Contextual Retrieval:</strong> LLM добавляет к чанку короткую аннотацию-префикс перед эмбеддингом — улучшает поиск по фрагментам без явного контекста.</li>
+                        </ul>
+
+                        <div class="bk-tech__example">
+                            <strong>Пример</strong>
+                            Регламент 1С на 40 страниц делится по разделам — ассистент находит именно пункт <em>«Раздача прав на конкретный документ»</em>, а не возвращает весь документ или невнятный кусок из середины.
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ====================================================== -->
+        <!-- 14. Под капотом: память диалога                         -->
+        <!-- ====================================================== -->
+        <section data-background-color="transparent">
+            <div class="bk-slide">
+                <span class="bk-eyebrow">Под капотом · 3 / 3</span>
+                <div class="bk-tech">
+                    <div class="bk-tech__intro">
+                        <h2>Память диалога</h2>
+                        <p>Уточняющие вопросы «а для админа?» работают, потому что мы переписываем запрос с учётом истории, добавляем альтернативные формулировки и гипотетический ответ (HyDE).</p>
+                    </div>
+                    <div class="bk-tech__body">
+                        <ul class="bk-demo__bullets">
+                            <li><strong>Rewrite</strong> — преобразуем уточнение в один самодостаточный запрос для поиска.</li>
+                            <li><strong>Multi-query</strong> — генерируем 2–3 альтернативные формулировки, объединяем результаты.</li>
+                            <li><strong>HyDE</strong> — короткий «гипотетический ответ» как дополнительный dense-запрос.</li>
+                            <li>Переписанный запрос сохраняется в SQLite (<code>retrieval_query_text</code>) — можно отлаживать.</li>
+                        </ul>
+
+                        <div class="bk-tech__example">
+                            <strong>Сценарий</strong>
+                            Пользователь: <em>«Как добавить пользователя в 1С?»</em> →<br>
+                            Ассистент отвечает →<br>
+                            Пользователь: <em>«А как для роли админа?»</em> →<br>
+                            Система переписывает: <em>«Как добавить пользователя 1С с ролью администратор»</em> и находит правильный раздел.
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ====================================================== -->
+        <!-- 15. Стек и интеграции                                   -->
+        <!-- ====================================================== -->
+        <section data-background-color="transparent">
+            <div class="bk-slide">
+                <span class="bk-eyebrow">Стек и интеграции</span>
+                <h2>Из чего собрано</h2>
+
+                <div class="bk-stack">
+                    <div class="bk-stack__group">
+                        <h4>Бэкенд</h4>
+                        <ul>
+                            <li>Python 3.10+</li>
+                            <li>Flask + Flask-Cors</li>
+                            <li>SQLite (история, пользователи)</li>
+                        </ul>
+                    </div>
+                    <div class="bk-stack__group">
+                        <h4>Поиск</h4>
+                        <ul>
+                            <li>ChromaDB (dense)</li>
+                            <li>rank-bm25 (sparse)</li>
+                            <li>sentence-transformers (rerank)</li>
+                        </ul>
+                    </div>
+                    <div class="bk-stack__group">
+                        <h4>LLM</h4>
+                        <ul>
+                            <li>Ollama (Docker / native)</li>
+                            <li>LM Studio</li>
+                            <li>bge-m3, qwen2.5</li>
+                        </ul>
+                    </div>
+                    <div class="bk-stack__group">
+                        <h4>Источники / каналы</h4>
+                        <ul>
+                            <li>Импорт XWiki</li>
+                            <li>PDF, DOCX, XLSX, PPTX, HTML</li>
+                        </ul>
+                    </div>
+                </div>
+
+                <p class="bk-lead" style="font-size: 1rem; color: var(--bk-muted); margin-top: 0.5rem;">
+                    Запуск — <code>python web_app.py</code> или <code>start.bat</code>. Документация: <code>README.md</code>, <code>docs/user_guide.md</code>, <code>docs/CHANGELOG_RAG_2026-05.md</code>.
+                </p>
+            </div>
+        </section>
+
+        <!-- ====================================================== -->
+        <!-- 16. Q&A                                                 -->
+        <!-- ====================================================== -->
+        <section data-background-color="transparent">
+            <div class="bk-slide bk-slide--center bk-slide--qa-closing">
+                <div class="bk-qa bk-qa--hero">
+                    <span class="bk-eyebrow">Спасибо</span>
+                    <p class="bk-qa__questions">Вопросы?</p>
+                    <p class="bk-qa__links">
+                        Попробовать — <code>http://localhost:5000</code><br>
+                        Инструкция пользователя — <code>docs/user_guide.md</code>
+                    </p>
+                    <p class="bk-qa__tagline">
+                        Один вопрос в чат — и ответ из <em>ваших же</em> регламентов и инструкций,
+                        а не полчаса поиска по папкам, wiki и переписке «кто-нибудь знает?».
+                        Попробуйте завтра на своём первом «типовом» вопросе — сэкономленное время останется вашим.
+                    </p>
+                </div>
+            </div>
+        </section>
+
+    </div>
+</div>
+
+<!-- Reveal.js + плагины -->
+<script src="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/reveal.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/plugin/highlight/highlight.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/plugin/notes/notes.min.js"></script>
+
+<!-- Mermaid (рендерим вручную после готовности Reveal) -->
+<script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.esm.min.mjs';
+
+    // Тема Mermaid под палитру презентации.
+    mermaid.initialize({
+        startOnLoad: false,
+        theme: 'base',
+        themeVariables: {
+            primaryColor: '#fffdf8',
+            primaryTextColor: '#25211d',
+            primaryBorderColor: '#a58250',
+            lineColor: '#7c5a22',
+            secondaryColor: '#f4f1eb',
+            tertiaryColor: '#faf6ed',
+            fontFamily: 'Inter, sans-serif',
+            fontSize: '18px',
+        },
+        flowchart: {
+            curve: 'basis',
+            padding: 10,
+            htmlLabels: true,
+            nodeSpacing: 28,
+            rankSpacing: 38,
+        },
+    });
+
+    Reveal.initialize({
+        hash: true,
+        controls: true,
+        progress: true,
+        slideNumber: 'c/t',
+        transition: 'fade',
+        backgroundTransition: 'fade',
+        center: false,
+        width: 1440,
+        height: 900,
+        margin: 0.04,
+        minScale: 0.4,
+        maxScale: 1.4,
+        plugins: [RevealHighlight, RevealNotes],
+    }).then(async () => {
+        const nodes = document.querySelectorAll('pre.mermaid');
+        if (nodes.length) {
+            await mermaid.run({ nodes });
+        }
+    });
+</script>
+</body>
+</html>

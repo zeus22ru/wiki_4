@@ -7,6 +7,7 @@
 Документация:
 
 - [Инструкция для конечных пользователей](docs/user_guide.md)
+- [Презентация для коллег (Reveal.js)](docs/presentation/index.html)
 - [Установка на Linux-сервер](docs/production_setup.md)
 - [Установка на Windows Server](docs/windows_server_setup.md)
 - [Настройка чат-бота Битрикс24](docs/bitrix24_bot_setup.md)

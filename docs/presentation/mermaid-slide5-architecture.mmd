@@ -1,0 +1,13 @@
+flowchart LR
+    user["Сотрудник"] --> ui["Web UI<br/>Flask + JS"]
+    ui --> rag["RAG ядро<br/>core/rag.py"]
+    rag --> expand["Расширение запроса<br/>rewrite, HyDE, multi-query"]
+    expand --> hybrid["Гибридный поиск"]
+    hybrid --> dense["ChromaDB<br/>векторы"]
+    hybrid --> sparse["BM25<br/>лексика"]
+    dense --> rrf["RRF + cross-encoder"]
+    sparse --> rrf
+    rrf --> llm["LLM<br/>Ollama / LM Studio"]
+    llm --> ui
+    kb["База знаний<br/>XWiki, PDF, DOCX, XLSX, HTML"] -.индексация.-> dense
+    kb -.индексация.-> sparse

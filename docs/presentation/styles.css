@@ -1,0 +1,869 @@
+/* ==========================================================================
+   Презентация БочкарИИ — фирменная тема поверх Reveal.js (white).
+   Палитра подобрана под логотип и UI приложения (см. static/css/theme.css,
+   prototypes/chat-layout-prototype.html).
+   ========================================================================== */
+
+:root {
+    --bk-primary: #7c5a22;
+    --bk-primary-soft: #a58250;
+    --bk-primary-deep: #5d4218;
+    --bk-bg: #f4f1eb;
+    --bk-surface: #fffdf8;
+    --bk-surface-soft: #faf6ed;
+    --bk-border: #d8cdb8;
+    --bk-border-soft: #ece4d3;
+    --bk-text: #25211d;
+    --bk-text-soft: #5e554a;
+    --bk-muted: #8a7e6c;
+    --bk-success: #3f8f58;
+    --bk-warn: #b87a18;
+    --bk-danger: #b84a3d;
+    --bk-shadow: 0 18px 40px rgba(72, 55, 35, 0.12);
+    --bk-shadow-sm: 0 6px 18px rgba(72, 55, 35, 0.08);
+    --bk-radius: 14px;
+    --bk-radius-sm: 8px;
+}
+
+/* ---------- базовые поверхности ---------- */
+
+.reveal {
+    font-family: "Inter", -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    color: var(--bk-text);
+    font-weight: 400;
+    letter-spacing: 0;
+}
+
+.reveal-viewport,
+body.reveal-viewport {
+    background:
+        radial-gradient(circle at 12% 10%, rgba(165, 130, 80, 0.18), transparent 38rem),
+        radial-gradient(circle at 90% 95%, rgba(124, 90, 34, 0.12), transparent 32rem),
+        linear-gradient(135deg, #fbf6e9, var(--bk-bg)) !important;
+}
+
+.reveal .slides {
+    text-align: left;
+}
+
+.reveal .slides > section,
+.reveal .slides > section > section {
+    padding: 0;
+}
+
+.reveal h1,
+.reveal h2,
+.reveal h3,
+.reveal h4 {
+    font-family: inherit;
+    font-weight: 700;
+    color: var(--bk-text);
+    line-height: 1.15;
+    letter-spacing: -0.01em;
+    text-transform: none;
+    margin: 0 0 0.5em 0;
+}
+
+.reveal h1 { font-size: 3.4rem; }
+.reveal h2 { font-size: 2.4rem; }
+.reveal h3 { font-size: 1.6rem; color: var(--bk-primary-deep); }
+.reveal h4 { font-size: 1.2rem; color: var(--bk-text-soft); font-weight: 600; }
+
+.reveal p,
+.reveal li {
+    color: var(--bk-text);
+    line-height: 1.55;
+    font-size: 1.15rem;
+}
+
+.reveal ul,
+.reveal ol {
+    margin-left: 0;
+    padding-left: 1.2em;
+}
+
+.reveal a {
+    color: var(--bk-primary-deep);
+    text-decoration: underline;
+    text-underline-offset: 3px;
+    text-decoration-thickness: 1.5px;
+}
+
+.reveal code {
+    font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+    background: var(--bk-surface-soft);
+    border: 1px solid var(--bk-border-soft);
+    border-radius: 4px;
+    padding: 0.05em 0.4em;
+    font-size: 0.92em;
+    color: var(--bk-primary-deep);
+}
+
+.reveal pre {
+    box-shadow: var(--bk-shadow-sm);
+    border-radius: var(--bk-radius-sm);
+    border: 1px solid var(--bk-border);
+}
+
+.reveal pre code {
+    background: var(--bk-surface);
+    border: 0;
+    color: var(--bk-text);
+}
+
+/* ---------- управление и прогресс ---------- */
+
+.reveal .controls { color: var(--bk-primary); }
+.reveal .progress { color: var(--bk-primary); height: 4px; }
+.reveal .slide-number {
+    background: rgba(255, 253, 248, 0.8);
+    color: var(--bk-text-soft);
+    border-radius: 999px;
+    padding: 0.15em 0.7em;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 0.65rem;
+    box-shadow: var(--bk-shadow-sm);
+}
+
+/* ==========================================================================
+   Утилиты лейаута
+   ========================================================================== */
+
+.bk-slide {
+    height: 100%;
+    width: 100%;
+    padding: 4rem 5rem;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 1.4rem;
+}
+
+.bk-slide--center {
+    align-items: center;
+    text-align: center;
+}
+
+.bk-eyebrow {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5em;
+    font-size: 0.85rem;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--bk-primary);
+    background: rgba(165, 130, 80, 0.14);
+    border: 1px solid rgba(165, 130, 80, 0.3);
+    border-radius: 999px;
+    padding: 0.35em 0.95em;
+    width: fit-content;
+}
+
+.bk-lead {
+    font-size: 1.4rem;
+    color: var(--bk-text-soft);
+    line-height: 1.45;
+    max-width: 50em;
+}
+
+.bk-meta {
+    display: flex;
+    gap: 1.5rem;
+    flex-wrap: wrap;
+    color: var(--bk-muted);
+    font-size: 0.95rem;
+}
+
+.bk-meta strong {
+    color: var(--bk-text);
+}
+
+/* ---------- titles ---------- */
+
+.bk-title-hero {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    gap: 1.5rem;
+}
+
+.bk-title-hero img.bk-logo {
+    width: 360px;
+    max-width: 60vw;
+    height: auto;
+    filter: drop-shadow(0 6px 14px rgba(124, 90, 34, 0.18));
+}
+
+.bk-title-hero .bk-tagline {
+    font-size: 1.4rem;
+    color: var(--bk-text-soft);
+    font-weight: 500;
+    max-width: 40em;
+}
+
+.bk-title-hero .bk-meta {
+    justify-content: center;
+}
+
+/* ==========================================================================
+   Демо-слайд: 2 колонки (скриншот + буллеты)
+   ========================================================================== */
+
+.bk-demo {
+    display: grid;
+    grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+    gap: 3rem;
+    align-items: center;
+    flex: 1;
+}
+
+.bk-demo__shot {
+    background: var(--bk-surface);
+    border: 1px solid var(--bk-border);
+    border-radius: var(--bk-radius);
+    box-shadow: var(--bk-shadow);
+    overflow: hidden;
+    width: 100%;
+    aspect-ratio: 1024 / 640;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.bk-demo__shot img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    object-position: top left;
+    display: block;
+    margin: 0;
+}
+
+.bk-demo__shot--placeholder {
+    background:
+        repeating-linear-gradient(45deg,
+            var(--bk-surface) 0 12px,
+            var(--bk-surface-soft) 12px 24px);
+    color: var(--bk-muted);
+    font-size: 1.05rem;
+    text-align: center;
+    padding: 2rem;
+}
+
+.bk-demo__body {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.bk-demo__body h2 {
+    font-size: 2rem;
+    margin: 0;
+}
+
+.bk-demo__bullets {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.7rem;
+}
+
+.bk-demo__bullets li {
+    position: relative;
+    padding-left: 1.7em;
+    font-size: 1.1rem;
+    line-height: 1.45;
+}
+
+.bk-demo__bullets li::before {
+    content: "";
+    position: absolute;
+    left: 0.2em;
+    top: 0.55em;
+    width: 0.55em;
+    height: 0.55em;
+    border-radius: 50%;
+    background: var(--bk-primary-soft);
+    box-shadow: 0 0 0 4px rgba(165, 130, 80, 0.18);
+}
+
+/* ==========================================================================
+   Карточки реальных вопросов (слайд 4)
+   ========================================================================== */
+
+.bk-questions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 1.2rem;
+    width: 100%;
+}
+
+.bk-question-card {
+    position: relative;
+    background: var(--bk-surface);
+    border: 1px solid var(--bk-border);
+    border-radius: var(--bk-radius);
+    padding: 1.3rem 1.5rem 1.3rem 3.2rem;
+    box-shadow: var(--bk-shadow-sm);
+    color: var(--bk-text);
+    font-size: 1.15rem;
+    line-height: 1.4;
+    font-weight: 500;
+}
+
+.bk-question-card::before {
+    content: "“";
+    position: absolute;
+    left: 0.8rem;
+    top: -0.3rem;
+    font-size: 3.4rem;
+    color: var(--bk-primary-soft);
+    font-family: Georgia, serif;
+    line-height: 1;
+}
+
+.bk-question-card__domain {
+    display: block;
+    margin-top: 0.5em;
+    font-size: 0.75rem;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--bk-primary);
+}
+
+/* ==========================================================================
+   Решение (3 колонки преимуществ)
+   ========================================================================== */
+
+.bk-pillars {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 1.6rem;
+    width: 100%;
+}
+
+.bk-pillar {
+    background: var(--bk-surface);
+    border: 1px solid var(--bk-border);
+    border-radius: var(--bk-radius);
+    padding: 1.6rem 1.5rem;
+    box-shadow: var(--bk-shadow-sm);
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.bk-pillar__icon {
+    font-size: 1.8rem;
+    line-height: 1;
+    margin-bottom: 0.3rem;
+}
+
+.bk-pillar h3 {
+    margin: 0;
+    font-size: 1.25rem;
+    color: var(--bk-text);
+}
+
+.bk-pillar p {
+    margin: 0;
+    color: var(--bk-text-soft);
+    font-size: 1rem;
+    line-height: 1.45;
+}
+
+/* ==========================================================================
+   Архитектура (Mermaid)
+   ========================================================================== */
+
+.bk-mermaid {
+    background: var(--bk-surface);
+    border: 1px solid var(--bk-border);
+    border-radius: var(--bk-radius);
+    padding: 2rem 2.5rem;
+    box-shadow: var(--bk-shadow);
+    width: 100%;
+    max-width: 1100px;
+    margin: 0 auto;
+    text-align: center;
+}
+
+.bk-mermaid svg {
+    max-width: 100% !important;
+    height: auto !important;
+    margin: 0 auto;
+}
+
+/* Слайд «Архитектура»: схема сверху, пояснение снизу */
+.bk-slide--architecture {
+    justify-content: flex-start;
+    align-items: stretch;
+    text-align: left;
+    gap: 0.5rem;
+    min-height: 0;
+    /* Весь слайд прокручивается целиком — без обрезки и без скролла внутри серого блока */
+    overflow-x: hidden;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    padding-top: 2.25rem;
+    padding-bottom: 2.25rem;
+}
+
+.bk-slide--architecture > .bk-eyebrow {
+    align-self: flex-start;
+    flex-shrink: 0;
+}
+
+.bk-slide--architecture > h2 {
+    align-self: flex-start;
+    margin-bottom: 0;
+    flex-shrink: 0;
+    font-size: clamp(1.5rem, 2.4vw, 1.95rem);
+    line-height: 1.2;
+}
+
+/*
+ * Белая карточка без внутреннего скролла: высота ограничивается через масштаб SVG,
+ * контейнер оборачивает уже уменьшенную схему (overflow не используем).
+ */
+.bk-slide--architecture .bk-mermaid {
+    flex: 0 1 auto;
+    align-self: center;
+    width: 100%;
+    max-width: 1100px;
+    min-height: 0;
+    overflow: visible;
+    padding: 0.65rem 1rem;
+    box-sizing: border-box;
+}
+
+.bk-slide--architecture .bk-mermaid svg {
+    display: block;
+    margin-left: auto;
+    margin-right: auto;
+    max-height: min(28vh, 260px);
+    width: auto !important;
+    max-width: 100% !important;
+    height: auto !important;
+}
+
+.bk-flow-explain {
+    width: 100%;
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 1.25rem 1.5rem;
+    background: var(--bk-surface-soft);
+    border: 1px solid var(--bk-border-soft);
+    border-radius: var(--bk-radius-sm);
+    box-shadow: var(--bk-shadow-sm);
+}
+
+.bk-slide--architecture .bk-flow-explain {
+    flex: 0 1 auto;
+    overflow: visible;
+    padding: 0.85rem 1.1rem;
+}
+
+/* Плотнее типографика только на этом слайде — чтобы влезало без внутреннего скролла */
+.bk-slide--architecture .bk-flow-explain__lead {
+    font-size: 0.95rem;
+    line-height: 1.4;
+    margin: 0 0 0.5rem 0;
+}
+
+.bk-slide--architecture .bk-flow-explain__steps li {
+    font-size: 0.82rem;
+    line-height: 1.36;
+    margin-bottom: 0.35em;
+}
+
+.bk-flow-explain__lead {
+    margin: 0 0 0.9rem 0;
+    font-size: 1.05rem;
+    color: var(--bk-text-soft);
+    line-height: 1.5;
+}
+
+.bk-flow-explain__steps {
+    margin: 0;
+    padding-left: 1.35em;
+    color: var(--bk-text);
+}
+
+.bk-flow-explain__steps li {
+    margin-bottom: 0.55em;
+    font-size: 1rem;
+    line-height: 1.45;
+}
+
+.bk-flow-explain__steps li:last-child {
+    margin-bottom: 0;
+}
+
+.bk-flow-explain__steps strong {
+    color: var(--bk-primary-deep);
+    font-weight: 600;
+}
+
+/* ==========================================================================
+   Тех-слайды: левая колонка с заголовком, правая — контент
+   ========================================================================== */
+
+.bk-tech {
+    display: grid;
+    grid-template-columns: minmax(280px, 1fr) minmax(0, 1.6fr);
+    gap: 3rem;
+    align-items: start;
+    flex: 1;
+}
+
+.bk-tech__intro h2 {
+    font-size: 2rem;
+    margin: 0.5rem 0 1rem 0;
+}
+
+.bk-tech__intro p {
+    color: var(--bk-text-soft);
+    font-size: 1.1rem;
+    line-height: 1.45;
+}
+
+.bk-tech__body {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.bk-tech__example {
+    background: var(--bk-surface);
+    border-left: 4px solid var(--bk-primary-soft);
+    border-radius: var(--bk-radius-sm);
+    padding: 1rem 1.3rem;
+    box-shadow: var(--bk-shadow-sm);
+    color: var(--bk-text-soft);
+    font-size: 1rem;
+    line-height: 1.45;
+}
+
+.bk-tech__example strong {
+    display: block;
+    color: var(--bk-text);
+    margin-bottom: 0.3em;
+}
+
+.bk-tech__example p {
+    margin: 0.45em 0 0 0;
+    color: var(--bk-text-soft);
+}
+
+.bk-tech__bullets-plain {
+    margin: 0;
+    padding-left: 1.25em;
+    color: var(--bk-text);
+    font-size: 0.98rem;
+    line-height: 1.45;
+}
+
+.bk-tech__bullets-plain li {
+    margin-bottom: 0.5em;
+}
+
+.bk-tech__bullets-plain li:last-child {
+    margin-bottom: 0;
+}
+
+.bk-tech__bullets-plain strong {
+    color: var(--bk-primary-deep);
+    font-weight: 600;
+}
+
+.bk-flow {
+    display: flex;
+    align-items: center;
+    gap: 0.7rem;
+    flex-wrap: wrap;
+    font-size: 0.95rem;
+}
+
+.bk-flow__step {
+    background: var(--bk-surface);
+    border: 1px solid var(--bk-border);
+    border-radius: 999px;
+    padding: 0.45em 0.95em;
+    color: var(--bk-text);
+    box-shadow: var(--bk-shadow-sm);
+}
+
+.bk-flow__arrow {
+    color: var(--bk-primary-soft);
+    font-weight: bold;
+}
+
+/* Слайд «Гибридный поиск» (12): не выходит за высоту экрана */
+.bk-slide--hybrid {
+    justify-content: flex-start;
+    align-items: stretch;
+    padding: 1.75rem 3.25rem 1.25rem;
+    min-height: 0;
+    height: 100%;
+    max-height: 100%;
+    box-sizing: border-box;
+}
+
+.bk-hybrid-scroll {
+    flex: 1 1 auto;
+    min-height: 0;
+    max-height: 100%;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding-right: 0.35rem;
+    scrollbar-gutter: stable;
+}
+
+.bk-hybrid-scroll::-webkit-scrollbar {
+    width: 6px;
+}
+
+.bk-hybrid-scroll::-webkit-scrollbar-thumb {
+    background: var(--bk-border);
+    border-radius: 4px;
+}
+
+.bk-tech--stacked {
+    grid-template-columns: 1fr !important;
+    gap: 0.65rem !important;
+}
+
+.bk-slide--hybrid .bk-tech__intro h2 {
+    font-size: 1.65rem;
+    margin: 0.35rem 0 0.4rem 0;
+}
+
+.bk-slide--hybrid .bk-tech__intro p {
+    font-size: 0.92rem;
+    line-height: 1.42;
+    margin: 0;
+}
+
+.bk-slide--hybrid .bk-tech__body {
+    gap: 0.55rem;
+}
+
+.bk-slide--hybrid .bk-tech__bullets-plain {
+    font-size: 0.82rem;
+    line-height: 1.38;
+}
+
+.bk-slide--hybrid .bk-tech__bullets-plain li {
+    margin-bottom: 0.35em;
+}
+
+.bk-flow--compact {
+    font-size: 0.78rem;
+    gap: 0.45rem;
+}
+
+.bk-flow--compact .bk-flow__step {
+    padding: 0.32em 0.65em;
+}
+
+.bk-tech-examples-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.45rem 0.6rem;
+    align-items: stretch;
+}
+
+.bk-tech__example--full {
+    grid-column: 1 / -1;
+}
+
+.bk-slide--hybrid .bk-tech__example {
+    padding: 0.55rem 0.75rem;
+    font-size: 0.82rem;
+    line-height: 1.38;
+}
+
+.bk-slide--hybrid .bk-tech__example strong {
+    margin-bottom: 0.2em;
+    font-size: 0.88rem;
+}
+
+.bk-slide--hybrid .bk-tech__example p {
+    margin: 0.3em 0 0 0;
+}
+
+.bk-tech__fineprint {
+    margin: 0.15rem 0 0 0;
+    color: var(--bk-muted);
+    font-size: 0.72rem;
+    line-height: 1.35;
+}
+
+@media (max-width: 1100px), (max-height: 780px) {
+    .bk-tech-examples-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+/* ==========================================================================
+   Стек (последний слайд)
+   ========================================================================== */
+
+.bk-stack {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 1rem;
+    width: 100%;
+}
+
+.bk-stack__group {
+    background: var(--bk-surface);
+    border: 1px solid var(--bk-border);
+    border-radius: var(--bk-radius);
+    padding: 1.2rem 1.3rem;
+    box-shadow: var(--bk-shadow-sm);
+}
+
+.bk-stack__group h4 {
+    margin: 0 0 0.6em 0;
+    color: var(--bk-primary);
+    font-size: 0.85rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+
+.bk-stack__group ul {
+    margin: 0;
+    padding-left: 1.2em;
+    color: var(--bk-text);
+}
+
+.bk-stack__group li {
+    font-size: 1rem;
+    line-height: 1.45;
+}
+
+/* ==========================================================================
+   Метрики (для слайда «Проблема»)
+   ========================================================================== */
+
+.bk-stats {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 1.5rem;
+    width: 100%;
+    margin-top: 0.8rem;
+}
+
+.bk-stat {
+    background: var(--bk-surface);
+    border: 1px solid var(--bk-border);
+    border-radius: var(--bk-radius);
+    padding: 1.5rem;
+    box-shadow: var(--bk-shadow-sm);
+    text-align: center;
+}
+
+.bk-stat__value {
+    font-size: 2.6rem;
+    font-weight: 800;
+    color: var(--bk-primary-deep);
+    line-height: 1;
+    margin-bottom: 0.3rem;
+}
+
+.bk-stat__label {
+    color: var(--bk-text-soft);
+    font-size: 1rem;
+    line-height: 1.35;
+}
+
+/* ==========================================================================
+   Q&A (последний слайд)
+   ========================================================================== */
+
+.bk-slide--qa-closing {
+    justify-content: center;
+}
+
+.bk-qa {
+    text-align: center;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1rem;
+}
+
+.bk-qa--hero {
+    justify-content: center;
+    gap: 1.75rem;
+    width: 100%;
+    max-width: 58rem;
+    margin: 0 auto;
+}
+
+/*
+ * Важно: `.reveal p { font-size: 1.15rem }` сильнее селектора `.bk-qa__tagline` (один класс).
+ * Обязательно указываем `p.bk-qa__tagline` внутри `.reveal`, иначе размер слогана не меняется.
+ */
+.reveal p.bk-qa__tagline {
+    /* длинный текст: крупнее ссылок, слабее заголовка «Вопросы?» — иначе не влезает в слайд */
+    font-size: clamp(1.2rem, 2.1vw, 1.5rem);
+    font-weight: 700;
+    line-height: 1.4;
+    color: var(--bk-text);
+    max-width: 42rem;
+    margin: 0.35rem 0 0 0;
+    letter-spacing: -0.02em;
+}
+
+.reveal p.bk-qa__tagline em {
+    color: var(--bk-primary-deep);
+    font-style: normal;
+    font-weight: 800;
+}
+
+.reveal p.bk-qa__questions {
+    font-size: clamp(1.65rem, 3.2vw, 2.35rem);
+    font-weight: 700;
+    margin: 0;
+    color: var(--bk-primary-deep);
+    line-height: 1.2;
+    letter-spacing: -0.02em;
+}
+
+.reveal p.bk-qa__links {
+    font-size: 1.15rem;
+    color: var(--bk-text-soft);
+    margin: 0;
+    line-height: 1.55;
+}
+
+/* ==========================================================================
+   Адаптация для мелких экранов (4:3 проекторы)
+   ========================================================================== */
+
+@media (max-aspect-ratio: 5/4) {
+    .bk-slide { padding: 3rem 4rem; }
+    .bk-slide--architecture .bk-mermaid svg { max-height: min(24vh, 200px); }
+    .bk-slide--architecture > h2 { font-size: clamp(1.35rem, 2.2vw, 1.75rem); }
+    .bk-slide--architecture .bk-flow-explain__steps li { font-size: 0.78rem; }
+    .bk-slide--architecture .bk-flow-explain__lead { font-size: 0.9rem; }
+    .reveal p.bk-qa__tagline { font-size: clamp(1.1rem, 2.4vw, 1.35rem); max-width: 95%; line-height: 1.42; }
+    .bk-flow-explain__steps li { font-size: 0.95rem; }
+    .bk-flow-explain__lead { font-size: 1rem; }
+    .reveal h1 { font-size: 2.8rem; }
+    .reveal h2 { font-size: 2rem; }
+    .bk-questions { grid-template-columns: 1fr; }
+    .bk-pillars { grid-template-columns: 1fr; }
+    .bk-stack { grid-template-columns: repeat(2, 1fr); }
+    .bk-demo { grid-template-columns: 1fr; }
+    .bk-tech { grid-template-columns: 1fr; }
+}
