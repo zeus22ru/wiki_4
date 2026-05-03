@@ -1148,6 +1148,7 @@ function openSourcesPanel(options = {}) {
         const chunkLabel = Number.isInteger(source.chunk_index) && source.total_chunks
             ? `Чанк ${source.chunk_index + 1} из ${source.total_chunks}`
             : '';
+        const sectionPath = source.section_path || '';
         const relevance = source.relevance || citation.score || 'n/a';
         const snippet = citation.text || source.text || '';
         const sourceItem = document.createElement('div');
@@ -1160,6 +1161,7 @@ function openSourcesPanel(options = {}) {
                 <div>
                     <div class="source-title">${escapeHtml(title)}</div>
                     <div class="source-path">${escapeHtml(path)}</div>
+                    ${sectionPath ? `<div class="source-section-path">${escapeHtml(sectionPath)}</div>` : ''}
                 </div>
             </div>
             <div class="source-meta-row">
@@ -1167,6 +1169,7 @@ function openSourcesPanel(options = {}) {
                 <span class="source-relevance">Релевантность: ${escapeHtml(String(relevance))}</span>
                 ${fileType ? `<span class="source-badge">${escapeHtml(fileType)}</span>` : ''}
                 ${chunkLabel ? `<span class="source-badge">${escapeHtml(chunkLabel)}</span>` : ''}
+                ${source.chunk_kind ? `<span class="source-badge">${escapeHtml(source.chunk_kind)}</span>` : ''}
             </div>
             <p class="source-snippet">${escapeHtml(snippet)}</p>
         `;

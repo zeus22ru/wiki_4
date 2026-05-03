@@ -45,6 +45,8 @@ def _rag_result_to_api_dict(rag_result: RAGResult) -> dict:
             "file_type": s.get("file_type", ""),
             "chunk_index": s.get("chunk_index"),
             "total_chunks": s.get("total_chunks"),
+            "section_path": s.get("section_path", ""),
+            "chunk_kind": s.get("chunk_kind", ""),
         })
     citations = []
     for citation in rag_result.citations:
@@ -349,6 +351,7 @@ def chat():
 
     payload = _rag_result_to_api_dict(rag_result)
     payload["chat_id"] = chat_id
+    expansion = (payload.get("diagnostics") or {}).get("expansion") or {}
     assistant_message = chat_history.add_message(
         session_id=chat_id,
         role="assistant",
@@ -365,6 +368,7 @@ def chat():
             "latency_ms": latency_ms,
             "diagnostics": payload.get("diagnostics", {}),
         },
+        retrieval_query_text=expansion.get("rewritten"),
     )
     _maybe_update_chat_title(chat_history, chat_id, query)
     payload["message_id"] = assistant_message.id
@@ -424,8 +428,10 @@ def chat_stream():
         yield _sse_event({"type": "status", "message": "Ищу релевантные документы..."})
         started = time.time()
         try:
-            retrieval_query = rag.build_retrieval_query(query, conversation_history)
-            documents, retrieve_error = rag.retrieve_documents(retrieval_query, options["top_k"], options["min_score"])
+            documents, retrieve_error, expansion, retrieve_diag = rag.retrieve_documents(
+                query, options["top_k"], options["min_score"], conversation_history
+            )
+            retrieval_query = expansion.get("rewritten") or query
 
             if retrieve_error == "embedding_unavailable":
                 rr = RAGResult(
@@ -495,6 +501,15 @@ def chat_stream():
                         yield _sse_event({"type": "error", "message": "Пустой результат RAG"})
                         return
                     payload = _rag_result_to_api_dict(rag_result)
+                    diag = dict(payload.get("diagnostics") or {})
+                    diag["retrieval"] = retrieve_diag
+                    diag["expansion"] = {
+                        "rewritten": expansion.get("rewritten"),
+                        "dense_queries": expansion.get("dense_queries"),
+                        "hyde_used": bool(expansion.get("hyde_snippet")),
+                        "multi_variants": expansion.get("multi_variants"),
+                    }
+                    payload["diagnostics"] = diag
                     assistant_message = chat_history.add_message(
                         session_id=chat_id,
                         role="assistant",
@@ -511,6 +526,7 @@ def chat_stream():
                             "latency_ms": int((time.time() - started) * 1000),
                             "diagnostics": payload.get("diagnostics", {}),
                         },
+                        retrieval_query_text=expansion.get("rewritten"),
                     )
                     _maybe_update_chat_title(chat_history, chat_id, query)
                     yield _sse_event({

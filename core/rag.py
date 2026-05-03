@@ -5,7 +5,6 @@ RAG (Retrieval-Augmented Generation) с поддержкой цитирован�
 """
 
 import chromadb
-from chromadb.errors import NotFoundError
 from chromadb.config import Settings
 from typing import List, Dict, Optional, Tuple, Any, Iterator
 import re
@@ -19,6 +18,7 @@ import requests
 
 from config import settings, get_logger
 from utils.embeddings import get_embedding, chat_completion, chat_completion_stream
+from core.retrieval import hybrid_retrieve, load_bm25_okapi
 
 logger = get_logger(__name__)
 
@@ -172,7 +172,8 @@ class RAGSystem:
         rag_logger.debug("Клиент ChromaDB создан")
         
         self.collection = self._load_collection()
-        
+        self._bm25_bundle = None
+
         elapsed = time.time() - start_time
         rag_logger.info(f"RAG система инициализирована за {elapsed:.3f} сек. Коллекция: {self.collection_name}")
         rag_logger.debug(f"Свойства коллекции: {self.collection.count()} документов")
@@ -190,101 +191,190 @@ class RAGSystem:
         rag_logger.warning("Обновление подключения к коллекции ChromaDB после переиндексации")
         self.collection = self._load_collection()
         return self.collection
-    
+
+    def _get_bm25_bundle(self):
+        """Ленивая загрузка BM25 (после переиндексации сбрасывается сбросом процесса)."""
+        mode = (settings.RETRIEVAL_MODE or "hybrid").lower()
+        if mode not in ("hybrid", "sparse"):
+            return None
+        if self._bm25_bundle is None:
+            self._bm25_bundle = load_bm25_okapi()
+        return self._bm25_bundle
+
+    def _llm_standalone_search_query(self, history_block: str, question: str) -> str:
+        prompt = f"""История диалога:
+{history_block}
+
+Текущая реплика пользователя:
+{question}
+
+Сформулируй один самодостаточный поисковый запрос к корпоративной базе знаний на русском языке.
+Только текст запроса, без пояснений и без кавычек."""
+        text = (chat_completion(prompt, timeout=90) or "").strip()
+        return re.sub(r"^[\"']|[\"']$", "", text).strip()
+
+    def _llm_multi_query_variants(self, core_query: str, original: str) -> List[str]:
+        prompt = f"""Базовый поисковый запрос: {core_query}
+Исходная реплика пользователя: {original}
+
+Сгенерируй 2–3 коротких альтернативных запроса к базе знаний (другие формулировки, синонимы).
+Верни только JSON-массив строк на русском."""
+        raw = chat_completion(prompt, timeout=90) or ""
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            match = re.search(r"\[.*\]", raw, flags=re.DOTALL)
+            if not match:
+                return []
+            try:
+                parsed = json.loads(match.group(0))
+            except json.JSONDecodeError:
+                return []
+        if not isinstance(parsed, list):
+            return []
+        out: List[str] = []
+        for item in parsed:
+            s = re.sub(r"\s+", " ", str(item)).strip()
+            if s and s not in out and len(s) > 2:
+                out.append(s[:500])
+        return out[:4]
+
+    def _llm_hyde_passage(self, question: str) -> str:
+        prompt = f"""Вопрос пользователя: {question}
+
+Напиши 2–3 предложения гипотетического ответа так, как будто они взяты из внутренней документации компании.
+Только связный текст, без заголовков и без «в документации сказано»."""
+        return (chat_completion(prompt, timeout=90) or "").strip()
+
+    def expand_retrieval_queries(
+        self,
+        user_query: str,
+        conversation_history: Optional[List[Dict[str, str]]],
+    ) -> Dict[str, Any]:
+        """Переписывание, multi-query и HyDE — списки запросов для dense/BM25."""
+        history_block = _format_conversation_history(
+            conversation_history,
+            max_messages=settings.RAG_QUERY_EXPANSION_MAX_MESSAGES,
+            max_chars_per_message=400,
+        )
+        meta: Dict[str, Any] = {
+            "rewritten": user_query.strip(),
+            "hyde_snippet": None,
+            "multi_variants": [],
+            "dense_queries": [user_query.strip()],
+            "sparse_queries": [user_query.strip()],
+        }
+        base = user_query.strip()
+        if settings.CONVERSATIONAL_REWRITE_ENABLED and history_block:
+            rewritten = self._llm_standalone_search_query(history_block, user_query)
+            if rewritten and len(rewritten) > 3:
+                meta["rewritten"] = rewritten
+                base = rewritten
+                meta["dense_queries"] = [rewritten]
+                meta["sparse_queries"] = [rewritten]
+
+        if settings.RAG_MULTI_QUERY_ENABLED:
+            variants = self._llm_multi_query_variants(base, user_query.strip())
+            meta["multi_variants"] = variants
+            for v in variants:
+                if v:
+                    meta["dense_queries"].append(v)
+                    meta["sparse_queries"].append(v)
+
+        if settings.RAG_HYDE_ENABLED:
+            hyde = self._llm_hyde_passage(base)
+            meta["hyde_snippet"] = hyde
+            if hyde:
+                meta["dense_queries"].append(hyde)
+
+        def _dedupe(seq: List[str]) -> List[str]:
+            seen = set()
+            out: List[str] = []
+            for x in seq:
+                x = (x or "").strip()
+                if not x or x in seen:
+                    continue
+                seen.add(x)
+                out.append(x)
+            return out
+
+        meta["dense_queries"] = _dedupe(meta["dense_queries"])
+        meta["sparse_queries"] = _dedupe(meta["sparse_queries"])
+        if not meta["dense_queries"]:
+            meta["dense_queries"] = [user_query.strip()]
+        if not meta["sparse_queries"]:
+            meta["sparse_queries"] = [user_query.strip()]
+        return meta
+
+    def _retrieve_documents_inner(
+        self,
+        expansion: Dict[str, Any],
+        top_k: int,
+        min_score: float,
+    ) -> Tuple[List[Dict], Optional[str], Dict[str, Any]]:
+        mode = (settings.RETRIEVAL_MODE or "hybrid").lower()
+        bm25_bundle = self._get_bm25_bundle() if mode in ("hybrid", "sparse") else None
+        if mode in ("hybrid", "sparse") and bm25_bundle is None:
+            rag_logger.debug("BM25-индекс не найден — используем только векторный поиск")
+        try:
+            documents, err, diag = hybrid_retrieve(
+                self.collection,
+                expansion.get("dense_queries") or [expansion.get("rewritten", "")],
+                expansion.get("sparse_queries") or [expansion.get("rewritten", "")],
+                get_embedding,
+                top_k,
+                min_score,
+                self._reload_collection,
+                bm25_bundle=bm25_bundle,
+            )
+        except Exception as e:
+            rag_logger.error("Ошибка гибридного поиска: %s", e, exc_info=True)
+            return [], "search_error", {"error": str(e)}
+        slim = {
+            "retrieval_mode": diag.get("retrieval_mode"),
+            "stage": diag.get("stage"),
+            "rewritten": expansion.get("rewritten"),
+            "hyde_used": bool(expansion.get("hyde_snippet")),
+            "multi_variants": expansion.get("multi_variants") or [],
+            "dense_queries": expansion.get("dense_queries") or [],
+        }
+        diag["expansion"] = slim
+        return documents, err, diag
+
     def retrieve_documents(
         self,
-        query: str,
+        user_query: str,
         top_k: Optional[int] = None,
-        min_score: Optional[float] = None
-    ) -> Tuple[List[Dict], Optional[str]]:
+        min_score: Optional[float] = None,
+        conversation_history: Optional[List[Dict[str, str]]] = None,
+    ) -> Tuple[List[Dict], Optional[str], Dict[str, Any], Dict[str, Any]]:
         """
-        Поиск релевантных документов
-        
-        Args:
-            query: Поисковый запрос
-            top_k: Количество документов для возврата (по умолчанию из settings.RAG_TOP_K)
-            min_score: Минимальный порог релевантности (по умолчанию из settings.RAG_MIN_SCORE)
-            
+        Поиск релевантных документов (гибридный RRF + опциональный rerank).
+
         Returns:
-            (документы, код_ошибки). Код: None при успехе, \"embedding_unavailable\" если не получен
-            эмбеддинг запроса, \"search_error\" при сбое Chroma/сети.
+            (документы, код_ошибки, expansion_meta, diagnostics)
         """
-        rag_logger.info(f"--- Поиск документов ---")
-        rag_logger.debug(f"Запрос: '{query}'")
-        
-        # Используем значения из настроек по умолчанию
+        rag_logger.info("--- Поиск документов ---")
+        rag_logger.debug("Исходный вопрос: '%s'", user_query)
+
         top_k = top_k if top_k is not None else settings.RAG_TOP_K
         min_score = min_score if min_score is not None else settings.RAG_MIN_SCORE
-        
-        rag_logger.debug(f"Параметры: top_k={top_k}, min_score={min_score}")
-        
+        rag_logger.debug("Параметры: top_k=%s, min_score=%s", top_k, min_score)
+
         start_time = time.time()
-        try:
-            # Генерируем эмбеддинг запроса через Ollama API с dimensions=1024
-            rag_logger.debug("Генерация эмбеддинга запроса (сервис из .env: OLLAMA_URL / EMBEDDING_API_MODE)...")
-            query_embedding = get_embedding(query)
-            
-            if not query_embedding:
-                rag_logger.error("Не удалось получить эмбеддинг запроса")
-                return [], "embedding_unavailable"
-            
-            rag_logger.debug(f"Эмбеддинг получен. Размер: {len(query_embedding)}")
-            
-            # Используем query_embeddings вместо query_texts
-            rag_logger.debug(f"Выполнение запроса к ChromaDB (n_results={top_k})")
-            try:
-                results = self.collection.query(
-                    query_embeddings=[query_embedding],
-                    n_results=top_k
-                )
-            except NotFoundError:
-                rag_logger.warning("Коллекция ChromaDB устарела, повторяем запрос после переподключения")
-                results = self._reload_collection().query(
-                    query_embeddings=[query_embedding],
-                    n_results=top_k
-                )
-            
-            rag_logger.debug(f"Результаты от ChromaDB получены")
-            
-            documents = []
-            if results['documents'] and results['documents'][0]:
-                rag_logger.debug(f"Обработка {len(results['documents'][0])} найденных документов")
-                for i, doc in enumerate(results['documents'][0]):
-                    score = results['distances'][0][i] if results['distances'] else 0.0
-                    # Преобразуем косинусное расстояние в оценку релевантности
-                    # Для косинусного расстояния: 0 = идентичные векторы, 1 = противоположные
-                    # Ограничиваем диапазон [0, 1]
-                    relevance_score = max(0.0, min(1.0, 1.0 - score))
-                    
-                    rag_logger.debug(f"Документ {i+1}: score={score:.4f}, relevance={relevance_score:.4f}")
-                    
-                    if relevance_score >= min_score:
-                        metadata = results['metadatas'][0][i] if results['metadatas'] else {}
-                        chunk_id = results['ids'][0][i] if results['ids'] else f"chunk_{i}"
-                        source = _source_from_metadata(metadata)
-                        
-                        rag_logger.debug(f"Документ {i+1} принят (source={source}, chunk_id={chunk_id})")
-                        documents.append({
-                            'text': doc,
-                            'score': relevance_score,
-                            'metadata': metadata,
-                            'chunk_id': chunk_id
-                        })
-            
-            # Сортируем документы по релевантности (от высокого к низкому)
-            documents.sort(key=lambda x: x['score'], reverse=True)
-            rag_logger.debug(f"Документы отсортированы по релевантности")
-            
-            elapsed = time.time() - start_time
-            rag_logger.info(f"Поиск завершен за {elapsed:.3f} сек. Найдено документов: {len(documents)}")
-            rag_logger.debug(f"Топ документы: {[d['metadata'].get('source', 'N/A') for d in documents]}")
-            
-            return documents, None
-            
-        except Exception as e:
-            elapsed = time.time() - start_time
-            rag_logger.error(f"Ошибка при поиске документов за {elapsed:.3f} сек: {e}", exc_info=True)
-            return [], "search_error"
+        expansion = self.expand_retrieval_queries(user_query, conversation_history)
+        rag_logger.debug("Переписанный/расширенный поиск: dense=%s", expansion.get("dense_queries"))
+
+        documents, err, diag = self._retrieve_documents_inner(expansion, top_k, min_score)
+        diag = dict(diag or {})
+        diag["latency_retrieve_ms"] = int((time.time() - start_time) * 1000)
+        rag_logger.info(
+            "Поиск завершён за %.3f с, документов: %s, код ошибки: %s",
+            time.time() - start_time,
+            len(documents),
+            err,
+        )
+        return documents, err, expansion, diag
     
     def extract_citations(
         self,
@@ -758,8 +848,10 @@ class RAGSystem:
         
         # 1. Поиск релевантных документов
         rag_logger.debug("Шаг 1: Поиск релевантных документов")
-        retrieval_query = self.build_retrieval_query(query, conversation_history)
-        documents, retrieve_error = self.retrieve_documents(retrieval_query, top_k, min_score)
+        documents, retrieve_error, expansion, retrieve_diag = self.retrieve_documents(
+            query, top_k, min_score, conversation_history
+        )
+        retrieval_query = expansion.get("rewritten") or query
         
         if retrieve_error == "embedding_unavailable":
             elapsed = time.time() - start_time
@@ -773,7 +865,12 @@ class RAGSystem:
                 citations=[],
                 sources=[],
                 retrieve_error="embedding_unavailable",
-                diagnostics={"retrieval_status": "embedding_unavailable", "latency_ms": int(elapsed * 1000)},
+                diagnostics={
+                    "retrieval_status": "embedding_unavailable",
+                    "latency_ms": int(elapsed * 1000),
+                    "retrieval": retrieve_diag,
+                    "expansion": expansion,
+                },
             )
         
         if retrieve_error == "search_error":
@@ -784,7 +881,12 @@ class RAGSystem:
                 citations=[],
                 sources=[],
                 retrieve_error="search_error",
-                diagnostics={"retrieval_status": "search_error", "latency_ms": int(elapsed * 1000)},
+                diagnostics={
+                    "retrieval_status": "search_error",
+                    "latency_ms": int(elapsed * 1000),
+                    "retrieval": retrieve_diag,
+                    "expansion": expansion,
+                },
             )
         
         if not documents:
@@ -794,7 +896,12 @@ class RAGSystem:
                 answer="К сожалению, я не нашёл релевантной информации для ответа на ваш вопрос.",
                 citations=[],
                 sources=[],
-                diagnostics={"retrieval_status": "no_documents", "latency_ms": int(elapsed * 1000)},
+                diagnostics={
+                    "retrieval_status": "no_documents",
+                    "latency_ms": int(elapsed * 1000),
+                    "retrieval": retrieve_diag,
+                    "expansion": expansion,
+                },
             )
         
         rag_logger.debug(f"Найдено {len(documents)} релевантных документов")
@@ -827,6 +934,13 @@ class RAGSystem:
             "answer_mode": answer_mode,
             "conversation_messages": len(conversation_history or []),
             "latency_ms": int(elapsed * 1000),
+            "retrieval": retrieve_diag,
+            "expansion": {
+                "rewritten": expansion.get("rewritten"),
+                "dense_queries": expansion.get("dense_queries"),
+                "hyde_used": bool(expansion.get("hyde_snippet")),
+                "multi_variants": expansion.get("multi_variants"),
+            },
         }
         rag_logger.info(f"RAG запрос завершен за {elapsed:.3f} сек")
         rag_logger.debug(f"Результат: {len(documents)} документов, {len(rag_result.citations)} цитат")
@@ -915,6 +1029,7 @@ class RAGSystem:
             title = meta.get('title') or _source_from_metadata(meta)
             path = meta.get('path', 'N/A')
             score = float(doc['score'])
+            section_path = meta.get('section_path') or ''
             sources.append({
                 'source': _source_from_metadata(meta),
                 'chunk_id': doc['chunk_id'],
@@ -926,6 +1041,8 @@ class RAGSystem:
                 'chunk_index': meta.get('chunk_index'),
                 'total_chunks': meta.get('total_chunks'),
                 'relevance': round(score, 2),
+                'section_path': section_path,
+                'chunk_kind': meta.get('chunk_kind', ''),
             })
         
         elapsed = time.time() - start_time

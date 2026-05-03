@@ -146,8 +146,9 @@ def test_api_chat_stream_success(mock_reachable, mock_init, client):
     rag.retrieve_documents.return_value = (
         [{"text": "x", "score": 1.0, "metadata": {}, "chunk_id": "c1"}],
         None,
+        {"rewritten": "привет мир", "dense_queries": ["привет мир"], "sparse_queries": ["привет мир"]},
+        {},
     )
-    rag.build_retrieval_query.return_value = "привет мир"
     rag.stream_rag_answer.side_effect = lambda *a, **kw: iter(
         [
             {"type": "delta", "text": "Часть"},
@@ -178,7 +179,6 @@ def test_api_chat_stream_success(mock_reachable, mock_init, client):
     assert "Документы найдены" in text
     assert "Часть" in text
     assert "Полный ответ" in text
-    rag.build_retrieval_query.assert_called_once()
     rag.retrieve_documents.assert_called_once()
     assert rag.retrieve_documents.call_args[0][0] == "привет мир"
     rag.stream_rag_answer.assert_called_once()
@@ -191,12 +191,10 @@ def test_api_chat_stream_search_error(mock_reachable, mock_init, client):
     mock_reachable.return_value = True
     rag = MagicMock()
     mock_init.return_value = (MagicMock(), rag)
-    rag.build_retrieval_query.return_value = "вопрос тут"
-    rag.retrieve_documents.return_value = ([], "search_error")
+    rag.retrieve_documents.return_value = ([], "search_error", {}, {})
     rv = client.post("/api/chat/stream", json={"message": "вопрос тут"})
     assert rv.status_code == 200
     assert "Ошибка поиска" in rv.get_data(as_text=True)
-    rag.build_retrieval_query.assert_called_once()
     rag.stream_rag_answer.assert_not_called()
 
 

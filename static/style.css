@@ -971,6 +971,14 @@ body {
     word-break: break-all;
 }
 
+.source-section-path {
+    font-size: 0.78rem;
+    color: var(--secondary-text);
+    opacity: 0.9;
+    margin-bottom: 0.35rem;
+    line-height: 1.35;
+}
+
 .source-relevance {
     display: inline-block;
     padding: 0.25rem 0.5rem;

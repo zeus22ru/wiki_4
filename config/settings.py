@@ -101,6 +101,39 @@ class Settings:
     RAG_MIN_SCORE: float = float(os.getenv("RAG_MIN_SCORE", "0.0"))
     RAG_MAX_CONTEXT_LENGTH: int = int(os.getenv("RAG_MAX_CONTEXT_LENGTH", "3000"))
 
+    # Гибридный поиск (dense + BM25 + RRF + cross-encoder)
+    # hybrid | dense | sparse
+    RETRIEVAL_MODE: str = os.getenv("RETRIEVAL_MODE", "hybrid")
+    BM25_INDEX_FILENAME: str = os.getenv("BM25_INDEX_FILENAME", "bm25_corpus.pkl")
+    RAG_FUSION_CANDIDATES: int = int(os.getenv("RAG_FUSION_CANDIDATES", "24"))
+    RRF_K_CONSTANT: int = int(os.getenv("RRF_K_CONSTANT", "60"))
+    # Делитель для отображения RRF-скора как «релевантности» до rerank
+    RRF_SCORE_NORMALIZER: float = float(os.getenv("RRF_SCORE_NORMALIZER", "0.15"))
+    RERANK_ENABLED: bool = os.getenv("RERANK_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    RERANK_MODEL: str = os.getenv("RERANK_MODEL", "cross-encoder/ms-marco-MiniLM-L-6-v2")
+    RERANK_TOP_N: int = int(os.getenv("RERANK_TOP_N", "20"))
+
+    # Структурные чанки и Contextual Retrieval (при индексации)
+    STRUCTURAL_CHUNKING_ENABLED: bool = os.getenv("STRUCTURAL_CHUNKING_ENABLED", "true").lower() in (
+        "1", "true", "yes", "on",
+    )
+    STRUCTURAL_CHUNK_MAX_CHARS: int = int(os.getenv("STRUCTURAL_CHUNK_MAX_CHARS", "1200"))
+    STRUCTURAL_CHUNK_MIN_CHARS: int = int(os.getenv("STRUCTURAL_CHUNK_MIN_CHARS", "80"))
+    CONTEXTUAL_RETRIEVAL_ENABLED: bool = os.getenv("CONTEXTUAL_RETRIEVAL_ENABLED", "false").lower() in (
+        "1", "true", "yes", "on",
+    )
+    CONTEXTUAL_RETRIEVAL_MAX_CHUNKS: int = int(os.getenv("CONTEXTUAL_RETRIEVAL_MAX_CHUNKS", "80"))
+
+    # Память диалога: переписывание запроса, HyDE, multi-query
+    CONVERSATIONAL_REWRITE_ENABLED: bool = os.getenv("CONVERSATIONAL_REWRITE_ENABLED", "true").lower() in (
+        "1", "true", "yes", "on",
+    )
+    RAG_MULTI_QUERY_ENABLED: bool = os.getenv("RAG_MULTI_QUERY_ENABLED", "false").lower() in (
+        "1", "true", "yes", "on",
+    )
+    RAG_HYDE_ENABLED: bool = os.getenv("RAG_HYDE_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    RAG_QUERY_EXPANSION_MAX_MESSAGES: int = int(os.getenv("RAG_QUERY_EXPANSION_MAX_MESSAGES", "6"))
+
     # Logging настройки
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
     LOG_DIR: str = os.getenv("LOG_DIR", "./logs")

@@ -124,7 +124,8 @@ class Message:
         sources: Optional[List[Dict[str, Any]]] = None,
         citations: Optional[List[Dict[str, Any]]] = None,
         metadata: Optional[Dict[str, Any]] = None,
-        created_at: Optional[datetime] = None
+        created_at: Optional[datetime] = None,
+        retrieval_query_text: Optional[str] = None,
     ):
         self.id = id
         self.session_id = session_id
@@ -134,10 +135,11 @@ class Message:
         self.citations = citations or []
         self.metadata = metadata or {}
         self.created_at = created_at or datetime.now()
+        self.retrieval_query_text = retrieval_query_text
     
     def to_dict(self) -> Dict[str, Any]:
         """Преобразовать в словарь"""
-        return {
+        d: Dict[str, Any] = {
             'id': self.id,
             'session_id': self.session_id,
             'role': self.role,
@@ -147,6 +149,9 @@ class Message:
             'metadata': self.metadata,
             'created_at': self.created_at.isoformat() if self.created_at else None
         }
+        if self.retrieval_query_text:
+            d['retrieval_query_text'] = self.retrieval_query_text
+        return d
     
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'Message':
@@ -159,7 +164,8 @@ class Message:
             sources=data.get('sources', []),
             citations=data.get('citations', []),
             metadata=data.get('metadata', {}),
-            created_at=datetime.fromisoformat(data['created_at']) if data.get('created_at') else None
+            created_at=datetime.fromisoformat(data['created_at']) if data.get('created_at') else None,
+            retrieval_query_text=data.get('retrieval_query_text'),
         )
     
     @classmethod
@@ -183,7 +189,13 @@ class Message:
                 metadata = json.loads(row[7])
             except json.JSONDecodeError:
                 pass
-        
+
+        retrieval_q = None
+        if hasattr(row, "keys") and "retrieval_query_text" in row.keys():
+            retrieval_q = row["retrieval_query_text"]
+        elif len(row) > 8:
+            retrieval_q = row[8]
+
         return cls(
             id=row[0],
             session_id=row[1],
@@ -192,5 +204,6 @@ class Message:
             sources=sources,
             citations=citations,
             metadata=metadata,
-            created_at=datetime.fromisoformat(row[5]) if row[5] else None
+            created_at=datetime.fromisoformat(row[5]) if row[5] else None,
+            retrieval_query_text=retrieval_q,
         )

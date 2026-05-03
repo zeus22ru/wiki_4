@@ -22,7 +22,10 @@ import hashlib
 from config import settings, get_logger, inference_server_reachable, fetch_remote_model_ids
 
 # Импорт общих функций для работы с эмбеддингами
-from utils.embeddings import get_embedding, get_embeddings_batch, invalidate_embedding_cache
+from utils.embeddings import get_embedding, get_embeddings_batch, invalidate_embedding_cache, chat_completion
+
+from core.chunking import build_chunks_for_file, chunk_text_fixed_size
+from core.retrieval import save_bm25_index
 
 # Получаем логгер для этого модуля
 logger = get_logger(__name__)
@@ -382,34 +385,30 @@ def extract_text_from_doc(doc_path: Path) -> Optional[Dict[str, str]]:
 
 
 def chunk_text(text: str, chunk_size: int = None, overlap: int = None) -> List[str]:
-    """Разбить текст на чанки"""
-    if chunk_size is None:
-        chunk_size = settings.CHUNK_SIZE
-    if overlap is None:
-        overlap = settings.CHUNK_OVERLAP
-    chunks = []
-    start = 0
-    text_len = len(text)
-    
-    while start < text_len:
-        end = start + chunk_size
-        chunk = text[start:end]
-        
-        # Пытаемся разбить по границе предложения
-        if end < text_len:
-            last_period = chunk.rfind('.')
-            last_question = chunk.rfind('?')
-            last_exclamation = chunk.rfind('!')
-            last_boundary = max(last_period, last_question, last_exclamation)
-            
-            if last_boundary > chunk_size // 2:
-                chunk = text[start:start + last_boundary + 1]
-                end = start + last_boundary + 1
-        
-        chunks.append(chunk.strip())
-        start = end - overlap
-    
-    return [c for c in chunks if len(c) > 50]
+    """Разбить текст на чанки (совместимость: фиксированный размер)."""
+    return chunk_text_fixed_size(text, chunk_size=chunk_size, overlap=overlap)
+
+
+def _contextual_prefix_for_chunk(doc_title: str, section_path: str, chunk_body: str) -> str:
+    """Короткая аннотация для Contextual Retrieval (только для индексации)."""
+    body = re.sub(r"\s+", " ", chunk_body or "").strip()
+    if len(body) < 40:
+        return ""
+    clip = body[:900]
+    prompt = f"""Документ: {doc_title or "без названия"}
+Раздел: {section_path or "не указан"}
+
+Фрагмент:
+{clip}
+
+Задача: одно-два коротких предложения на русском: о чём этот фрагмент и зачем он полезен при поиске. Без вводных слов, без Markdown, только суть."""
+    try:
+        raw = (chat_completion(prompt, timeout=90) or "").strip()
+        raw = raw.split("\n")[0].strip()
+        return raw[:500] if raw else ""
+    except Exception as e:
+        logger.warning("Contextual retrieval: %s", e)
+        return ""
 
 
 def get_file_handlers() -> Dict[str, Callable[[Path], Optional[Dict[str, str]]]]:
@@ -436,20 +435,42 @@ def process_file(file_path: Path, extract_func: Callable[[Path], Optional[Dict[s
         logger.warning(f"  Пропуск: не удалось извлечь текст из {file_path.name}")
         return []
 
-    chunks = chunk_text(doc_data["content"])
+    chunk_items = build_chunks_for_file(file_path, doc_data, extract_func)
     documents = []
 
-    for j, chunk in enumerate(chunks):
+    for j, ch in enumerate(chunk_items):
+        body = (ch.get("text") or "").strip()
+        if not body:
+            continue
+        section_path = ch.get("section_path") or ""
+        chunk_kind = ch.get("chunk_kind") or "text"
+        headings = ch.get("parent_headings") or []
+        try:
+            headings_json = json.dumps(headings, ensure_ascii=False)
+        except (TypeError, ValueError):
+            headings_json = "[]"
+
+        prefix = ""
+        if settings.CONTEXTUAL_RETRIEVAL_ENABLED and j < settings.CONTEXTUAL_RETRIEVAL_MAX_CHUNKS:
+            prefix = _contextual_prefix_for_chunk(doc_data.get("title") or "", section_path, body)
+
+        embed_text = f"{prefix}\n\n{body}".strip() if prefix else body
+
         documents.append({
             "id": f"{hashlib.md5(f'{doc_data['path']}_{j}'.encode()).hexdigest()}",
-            "text": chunk,
+            "text": body,
+            "embed_text": embed_text,
             "metadata": {
                 "title": doc_data["title"],
                 "source": doc_data["title"] or doc_data["path"],
                 "path": doc_data["path"],
                 "file_type": ext,
                 "chunk_index": j,
-                "total_chunks": len(chunks)
+                "total_chunks": len(chunk_items),
+                "section_path": section_path,
+                "chunk_kind": chunk_kind,
+                "parent_headings_json": headings_json,
+                "contextual_prefix": prefix,
             }
         })
 
@@ -458,7 +479,7 @@ def process_file(file_path: Path, extract_func: Callable[[Path], Optional[Dict[s
 
 def embed_documents_batch(batch_docs: List[Dict]) -> List[Dict]:
     """Получить эмбеддинги для пачки документов."""
-    batch_texts = [doc["text"] for doc in batch_docs]
+    batch_texts = [doc.get("embed_text") or doc["text"] for doc in batch_docs]
     batch_embeddings = get_embeddings_batch(batch_texts)
     embedded_documents = []
 
@@ -467,6 +488,7 @@ def embed_documents_batch(batch_docs: List[Dict]) -> List[Dict]:
             embedded_documents.append({
                 "id": doc["id"],
                 "text": doc["text"],
+                "embed_text": doc.get("embed_text") or doc["text"],
                 "metadata": doc["metadata"],
                 "embedding": embedding,
             })
@@ -474,11 +496,12 @@ def embed_documents_batch(batch_docs: List[Dict]) -> List[Dict]:
 
     logger.warning("Пакетная обработка эмбеддингов не удалась, пробуем по одному...")
     for doc in batch_docs:
-        embedding = get_embedding(doc["text"])
+        embedding = get_embedding(doc.get("embed_text") or doc["text"])
         if embedding:
             embedded_documents.append({
                 "id": doc["id"],
                 "text": doc["text"],
+                "embed_text": doc.get("embed_text") or doc["text"],
                 "metadata": doc["metadata"],
                 "embedding": embedding,
             })
@@ -530,7 +553,10 @@ def preview_document(file_path: Path, duplicate_exists: bool = False) -> Dict:
         }
 
     content = doc_data["content"]
-    chunks = chunk_text(content)
+    chunk_objs = build_chunks_for_file(path, doc_data, handlers[ext])
+    chunks = [c.get("text", "").strip() for c in chunk_objs if (c.get("text") or "").strip()]
+    if not chunks:
+        chunks = chunk_text(content)
     if len(content) < 200:
         warnings.append("В документе мало извлеченного текста")
     if not chunks:
@@ -764,6 +790,13 @@ def create_vector_db(documents: List[Dict], progress_callback: Optional[Callable
     report_progress(99, "cache", "Очистка кэша эмбеддингов")
     invalidate_embedding_cache()
     logger.info("Кэш эмбеддингов очищен")
+
+    bm25_texts = [d.get("embed_text") or d["text"] for d in documents]
+    try:
+        save_bm25_index(ids, bm25_texts)
+        report_progress(100, "bm25", "Сохранён BM25-корпус для гибридного поиска")
+    except Exception as e:
+        logger.warning("BM25-индекс не сохранён: %s", e)
 
 
 def main():

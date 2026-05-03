@@ -89,6 +89,7 @@ class ChatHistoryManager:
 
             self._ensure_column(cursor, 'messages', 'citations_json', 'TEXT')
             self._ensure_column(cursor, 'messages', 'metadata_json', 'TEXT')
+            self._ensure_column(cursor, 'messages', 'retrieval_query_text', 'TEXT')
             
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS feedback (
@@ -369,7 +370,8 @@ class ChatHistoryManager:
         content: str,
         sources: Optional[List[dict]] = None,
         citations: Optional[List[dict]] = None,
-        metadata: Optional[dict] = None
+        metadata: Optional[dict] = None,
+        retrieval_query_text: Optional[str] = None,
     ) -> Message:
         """Добавить сообщение в сессию"""
         now = datetime.now().isoformat()
@@ -381,10 +383,15 @@ class ChatHistoryManager:
             cursor = conn.cursor()
             cursor.execute('''
                 INSERT INTO messages (
-                    session_id, role, content, sources_json, citations_json, metadata_json, created_at
+                    session_id, role, content, sources_json, citations_json, metadata_json,
+                    retrieval_query_text, created_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            ''', (session_id, role, content, sources_json, citations_json, metadata_json, now))
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                session_id, role, content, sources_json, citations_json, metadata_json,
+                retrieval_query_text,
+                now,
+            ))
             
             message_id = cursor.lastrowid
             conn.commit()
@@ -402,7 +409,8 @@ class ChatHistoryManager:
                 sources=sources or [],
                 citations=citations or [],
                 metadata=metadata or {},
-                created_at=datetime.fromisoformat(now)
+                created_at=datetime.fromisoformat(now),
+                retrieval_query_text=retrieval_query_text,
             )
     
     def get_messages(self, session_id: int) -> List[Message]:
@@ -410,7 +418,8 @@ class ChatHistoryManager:
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute('''
-                SELECT id, session_id, role, content, sources_json, created_at, citations_json, metadata_json
+                SELECT id, session_id, role, content, sources_json, created_at, citations_json, metadata_json,
+                       retrieval_query_text
                 FROM messages
                 WHERE session_id = ?
                 ORDER BY created_at ASC
@@ -423,7 +432,8 @@ class ChatHistoryManager:
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute('''
-                SELECT id, session_id, role, content, sources_json, created_at, citations_json, metadata_json
+                SELECT id, session_id, role, content, sources_json, created_at, citations_json, metadata_json,
+                       retrieval_query_text
                 FROM messages
                 WHERE session_id = ?
                 ORDER BY created_at DESC
@@ -649,7 +659,8 @@ class ChatHistoryManager:
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute('''
-                SELECT id, session_id, role, content, sources_json, created_at, citations_json, metadata_json
+                SELECT id, session_id, role, content, sources_json, created_at, citations_json, metadata_json,
+                       retrieval_query_text
                 FROM messages
                 ORDER BY created_at ASC
             ''')
