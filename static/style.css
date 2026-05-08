@@ -20,6 +20,39 @@
     cursor: default;
 }
 
+.mermaid-placeholder {
+    width: 100%;
+    max-width: 100%;
+    padding: 0.85rem 0.95rem;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    background: color-mix(in srgb, var(--surface-muted) 82%, transparent);
+    color: var(--secondary-text);
+    display: flex;
+    align-items: center;
+    gap: 0.65rem;
+    user-select: none;
+}
+
+.mermaid-placeholder__spinner {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    border: 2px solid color-mix(in srgb, var(--secondary-text) 35%, transparent);
+    border-top-color: var(--primary-color);
+    animation: mermaid-placeholder-spin 0.9s linear infinite;
+    flex: 0 0 auto;
+}
+
+.mermaid-placeholder__text {
+    font-size: 0.9rem;
+    line-height: 1.35;
+}
+
+@keyframes mermaid-placeholder-spin {
+    to { transform: rotate(360deg); }
+}
+
 .mermaid-error__pre {
     margin: 0;
     width: 100%;
@@ -89,6 +122,46 @@ body.mermaid-lightbox-open {
     background: color-mix(in srgb, var(--surface-muted) 82%, transparent);
 }
 
+.mermaid-lightbox__header-left {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    min-width: 0;
+}
+
+.mermaid-lightbox__toolbar {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    flex-wrap: wrap;
+}
+
+.mermaid-lightbox__toolbtn {
+    height: 30px;
+    padding: 0 10px;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border-color);
+    background: var(--surface-muted);
+    color: var(--secondary-text);
+    cursor: pointer;
+    font-size: 0.82rem;
+    line-height: 1;
+}
+
+.mermaid-lightbox__toolbtn:hover {
+    border-color: var(--primary-color);
+    color: var(--primary-color);
+    background: var(--primary-soft);
+}
+
+.mermaid-lightbox__zoomlabel {
+    font-size: 0.82rem;
+    color: var(--secondary-text);
+    padding: 0 6px;
+    user-select: none;
+    white-space: nowrap;
+}
+
 .mermaid-lightbox__title {
     color: var(--secondary-text);
     font-size: 0.85rem;
@@ -118,18 +191,36 @@ body.mermaid-lightbox-open {
 .mermaid-lightbox__body {
     flex: 1;
     min-height: 0;
-    overflow: auto;
-    padding: 0.75rem;
-    display: grid;
-    place-items: center;
+    overflow: hidden;
+    padding: 0;
+    display: block;
+    position: relative;
 }
 
-.mermaid-lightbox__body svg {
-    width: 100% !important;
-    height: auto !important;
-    max-height: calc(100vh - 140px);
-    max-width: 100%;
-    cursor: zoom-out;
+.mermaid-lightbox__viewport {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+    cursor: grab;
+    background: var(--surface-elevated);
+}
+
+.mermaid-lightbox__viewport.is-dragging {
+    cursor: grabbing;
+}
+
+.mermaid-lightbox__content {
+    position: absolute;
+    top: 0;
+    left: 0;
+    transform-origin: 0 0;
+    will-change: transform;
+}
+
+.mermaid-lightbox__content svg {
+    display: block;
+    max-width: none;
+    max-height: none;
 }
 
 body {

@@ -15,6 +15,7 @@ from pathlib import Path
 import logging
 import logging.handlers
 import requests
+import uuid
 
 from config import settings, get_logger
 from utils.embeddings import get_embedding, chat_completion, chat_completion_stream
@@ -69,6 +70,53 @@ if not any(
     for h in deep_retrieval_logger.handlers
 ):
     deep_retrieval_logger.addHandler(deep_retrieval_file_handler)
+
+# Отдельный логгер: обмен "вопрос ↔ LLM" (JSONL) для анализа качества
+llm_log_dir = Path(settings.LOG_DIR) / "llm"
+llm_log_dir.mkdir(parents=True, exist_ok=True)
+llm_exchange_log_file = llm_log_dir / "llm_exchange.jsonl"
+
+llm_exchange_file_handler = logging.handlers.RotatingFileHandler(
+    llm_exchange_log_file,
+    maxBytes=20 * 1024 * 1024,  # 20 MB
+    backupCount=10,
+    encoding="utf-8",
+)
+llm_exchange_file_handler.setLevel(logging.INFO)
+llm_exchange_file_handler.setFormatter(logging.Formatter("%(message)s"))
+
+llm_exchange_logger = logging.getLogger("llm_exchange")
+llm_exchange_logger.setLevel(logging.INFO)
+if not any(
+    isinstance(h, logging.handlers.RotatingFileHandler)
+    and getattr(h, "baseFilename", None) == str(llm_exchange_log_file)
+    for h in llm_exchange_logger.handlers
+):
+    llm_exchange_logger.addHandler(llm_exchange_file_handler)
+
+
+def _clip_for_llm_log(value: str, limit: Optional[int] = None) -> str:
+    limit = int(limit or getattr(settings, "LLM_EXCHANGE_LOG_MAX_CHARS", 20000) or 20000)
+    text = str(value or "")
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 3)] + "..."
+
+
+def _safe_json_log(payload: Dict[str, Any]) -> None:
+    """Записать одну JSONL-строку в llm_exchange, без падений основного потока."""
+    if not bool(getattr(settings, "LLM_EXCHANGE_LOG_ENABLED", True)):
+        return
+    try:
+        llm_exchange_logger.info(json.dumps(payload, ensure_ascii=False, default=str))
+        for h in llm_exchange_logger.handlers:
+            try:
+                h.flush()
+            except Exception:
+                pass
+    except Exception:
+        # Логирование не должно ломать ответы пользователю.
+        pass
 
 
 @dataclass
@@ -959,15 +1007,16 @@ class RAGSystem:
 {query}
 
 ИНСТРУКЦИИ:
-1. Ответь на вопрос, используя информацию из контекста.
-2. Если в контексте нет информации для ответа, честно скажи об этом.
-3. Ссылайся на источники в ответе, используя формат [Источник: название].
-4. Не выдумывай информацию, которой нет в контексте.
-5. Форматируй ответ с использованием Markdown для лучшей читаемости.
-6. Режим ответа: {extra_instruction}
-7. Используй историю диалога только для понимания уточнений и местоимений; факты бери из контекста источников.
-8. Если история диалога противоречит найденному контексту, опирайся на контекст источников.
-9. Если пользователь просит изобразить что-то графически (например: "схема", "диаграмма", "граф", "визуализируй", "изобрази графически"), вместо отказа дай результат в формате Mermaid внутри блока Markdown ```mermaid ... ```. Выбирай подходящий тип диаграммы Mermaid (flowchart/graph, sequenceDiagram, classDiagram) и следи за корректным синтаксисом.
+1. Всегда отвечай на русском языке. Если вопрос или часть контекста на другом языке — переведи и изложи ответ по-русски (термины/названия/цитаты сохраняй как в источнике при необходимости).
+2. Ответь на вопрос, используя информацию из контекста.
+3. Если в контексте нет информации для ответа, честно скажи об этом.
+4. Ссылайся на источники в ответе, используя формат [Источник: название].
+5. Не выдумывай информацию, которой нет в контексте.
+6. Форматируй ответ с использованием Markdown для лучшей читаемости.
+7. Режим ответа: {extra_instruction}
+8. Используй историю диалога только для понимания уточнений и местоимений; факты бери из контекста источников.
+9. Если история диалога противоречит найденному контексту, опирайся на контекст источников.
+10. Если пользователь просит изобразить что-то графически (например: "схема", "диаграмма", "граф", "визуализируй", "изобрази графически"), вместо отказа дай результат в формате Mermaid внутри блока Markdown ```mermaid ... ```. Выбирай подходящий тип диаграммы Mermaid (flowchart/graph, sequenceDiagram, classDiagram) и следи за корректным синтаксисом.
 
 ОТВЕТ:"""
         
@@ -986,6 +1035,70 @@ class RAGSystem:
         answer = chat_completion(prompt, timeout=120)
         rag_logger.debug(f"Ответ сгенерирован, длина: {len(answer)} символов")
         return answer
+
+    def _autofix_mermaid_blocks(self, answer: str) -> str:
+        """
+        Попытаться исключить ошибки Mermaid, перепроверив и (при необходимости) исправив
+        Mermaid-код внутри ```mermaid ... ``` блоков.
+
+        Это выполняется отдельным LLM-вызовом только для блоков диаграммы (не для всего ответа),
+        чтобы минимально влиять на стиль/текст ответа.
+        """
+        enabled = getattr(settings, "MERMAID_AUTOFIX_ENABLED", True)
+        if not enabled:
+            return answer
+
+        text = (answer or "")
+        if "```mermaid" not in text:
+            return answer
+
+        pattern = re.compile(r"```mermaid\s*([\s\S]*?)\s*```", flags=re.IGNORECASE)
+        blocks = list(pattern.finditer(text))
+        if not blocks:
+            return answer
+
+        fixed = text
+        replaced = 0
+        for m in reversed(blocks):
+            raw = (m.group(1) or "").strip()
+            if not raw:
+                continue
+            raw_clip = _clip_text(raw, 6000)
+            fix_prompt = f"""Ты валидируешь и исправляешь синтаксис Mermaid (совместимость Mermaid 10.x).
+
+Вход: Mermaid-код диаграммы.
+Задача:
+- исправь ошибки синтаксиса (некорректные идентификаторы, кавычки, скобки, стрелки, лишние символы);
+- сохрани смысл и структуру диаграммы;
+- НЕ добавляй объяснений и НЕ оборачивай в Markdown;
+- верни ТОЛЬКО исправленный Mermaid-код (без ```).
+
+MERMAID:
+{raw_clip}
+"""
+            try:
+                candidate = (chat_completion(fix_prompt, timeout=60) or "").strip()
+            except Exception:
+                candidate = ""
+
+            if not candidate:
+                continue
+
+            # Иногда модель возвращает код в ```; аккуратно извлечём содержимое.
+            fence_match = re.search(r"```(?:mermaid)?\s*([\s\S]*?)\s*```", candidate, flags=re.IGNORECASE)
+            if fence_match:
+                candidate = (fence_match.group(1) or "").strip()
+
+            # Минимальная sanity-проверка: должен начинаться с известного типа диаграммы.
+            if not looks_like_mermaid(candidate):
+                continue
+
+            fixed = fixed[: m.start(1)] + candidate + fixed[m.end(1) :]
+            replaced += 1
+
+        if replaced:
+            rag_logger.info("Mermaid autofix: исправлено блоков=%s", replaced)
+        return fixed
 
     def build_retrieval_query(
         self,
@@ -1172,6 +1285,9 @@ class RAGSystem:
         """
         rag_logger.info(f"=== Выполнение RAG запроса ===")
         rag_logger.debug(f"Запрос: '{query}'")
+
+        exchange_id = uuid.uuid4().hex
+        exchange_started = time.time()
         
         # Используем значения из настроек по умолчанию
         top_k = top_k if top_k is not None else settings.RAG_TOP_K
@@ -1188,6 +1304,39 @@ class RAGSystem:
             query, top_k, min_score, conversation_history
         )
         retrieval_query = expansion.get("rewritten") or query
+
+        _safe_json_log(
+            {
+                "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "exchange_id": exchange_id,
+                "stage": "retrieve",
+                "question": _clip_for_llm_log(query, 4000),
+                "retrieval_query": _clip_for_llm_log(retrieval_query, 4000),
+                "answer_mode": str(answer_mode or "default"),
+                "top_k": int(top_k),
+                "min_score": float(min_score),
+                "conversation_messages": len(conversation_history or []),
+                "retrieve_error": retrieve_error,
+                "document_count": len(documents or []),
+                "top_docs": [
+                    {
+                        "label": _slim_doc_label(d),
+                        "chunk_id": str(d.get("chunk_id", ""))[:120],
+                        "score": float(d.get("score") or 0.0),
+                        "source": _source_from_metadata((d or {}).get("metadata")),
+                    }
+                    for d in (documents or [])[: min(10, int(top_k or 5))]
+                ],
+                "expansion": {
+                    "rewritten": _clip_for_llm_log(expansion.get("rewritten") or "", 2000),
+                    "hyde_used": bool(expansion.get("hyde_snippet")),
+                    "multi_variants": (expansion.get("multi_variants") or [])[:6],
+                    "dense_queries": (expansion.get("dense_queries") or [])[:10],
+                    "sparse_queries": (expansion.get("sparse_queries") or [])[:10],
+                },
+                "retrieve_diag": retrieve_diag or {},
+            }
+        )
         
         if retrieve_error == "embedding_unavailable":
             elapsed = time.time() - start_time
@@ -1251,14 +1400,51 @@ class RAGSystem:
             conversation_history=conversation_history,
             retrieval_query=retrieval_query,
         )
+
+        _safe_json_log(
+            {
+                "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "exchange_id": exchange_id,
+                "stage": "prompt",
+                "prompt_chars": len(prompt or ""),
+                "prompt": _clip_for_llm_log(prompt),
+            }
+        )
         
         # 3. Генерация ответа через Ollama
         rag_logger.debug("Шаг 3: Генерация ответа через Ollama")
+        gen_started = time.time()
         answer = self._generate_answer(prompt)
+        gen_ms = int((time.time() - gen_started) * 1000)
+        answer = self._autofix_mermaid_blocks(answer)
+
+        _safe_json_log(
+            {
+                "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "exchange_id": exchange_id,
+                "stage": "answer",
+                "chat_api_mode": str(getattr(settings, "CHAT_API_MODE", "") or ""),
+                "model": str(getattr(settings, "OLLAMA_CHAT_MODEL", "") or ""),
+                "latency_llm_ms": gen_ms,
+                "answer_chars": len(answer or ""),
+                "answer": _clip_for_llm_log(answer),
+            }
+        )
         
         # 4. Обогащение ответа цитатами
         rag_logger.debug("Шаг 4: Обогащение ответа цитатами")
         rag_result = self.enrich_answer_with_citations(answer, documents, max_citations)
+
+        _safe_json_log(
+            {
+                "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "exchange_id": exchange_id,
+                "stage": "final",
+                "citations_count": len(rag_result.citations or []),
+                "sources_count": len(rag_result.sources or []),
+                "latency_total_ms": int((time.time() - exchange_started) * 1000),
+            }
+        )
         
         elapsed = time.time() - start_time
         rag_result.diagnostics = {
@@ -1301,6 +1487,32 @@ class RAGSystem:
         """
         max_citations = max_citations if max_citations is not None else settings.RAG_MAX_CITATIONS
         rag_logger.info("Потоковая генерация RAG-ответа (%s документов)", len(documents))
+
+        exchange_id = uuid.uuid4().hex
+        exchange_started = time.time()
+        _safe_json_log(
+            {
+                "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "exchange_id": exchange_id,
+                "stage": "retrieve",
+                "stream": True,
+                "question": _clip_for_llm_log(query, 4000),
+                "retrieval_query": _clip_for_llm_log((retrieval_query or query), 4000),
+                "answer_mode": str(answer_mode or "default"),
+                "conversation_messages": len(conversation_history or []),
+                "document_count": len(documents or []),
+                "top_docs": [
+                    {
+                        "label": _slim_doc_label(d),
+                        "chunk_id": str(d.get("chunk_id", ""))[:120],
+                        "score": float(d.get("score") or 0.0),
+                        "source": _source_from_metadata((d or {}).get("metadata")),
+                    }
+                    for d in (documents or [])[: min(10, int(settings.RAG_TOP_K or 5))]
+                ],
+            }
+        )
+
         prompt = self.generate_rag_prompt(
             query,
             documents,
@@ -1308,11 +1520,41 @@ class RAGSystem:
             conversation_history=conversation_history,
             retrieval_query=retrieval_query,
         )
+
+        _safe_json_log(
+            {
+                "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "exchange_id": exchange_id,
+                "stage": "prompt",
+                "stream": True,
+                "prompt_chars": len(prompt or ""),
+                "prompt": _clip_for_llm_log(prompt),
+            }
+        )
+
         parts: List[str] = []
+        gen_started = time.time()
         for fragment in chat_completion_stream(prompt, timeout=120):
             parts.append(fragment)
             yield {"type": "delta", "text": fragment}
         answer = "".join(parts)
+        gen_ms = int((time.time() - gen_started) * 1000)
+        answer = self._autofix_mermaid_blocks(answer)
+
+        _safe_json_log(
+            {
+                "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "exchange_id": exchange_id,
+                "stage": "answer",
+                "stream": True,
+                "chat_api_mode": str(getattr(settings, "CHAT_API_MODE", "") or ""),
+                "model": str(getattr(settings, "OLLAMA_CHAT_MODEL", "") or ""),
+                "latency_llm_ms": gen_ms,
+                "answer_chars": len(answer or ""),
+                "answer": _clip_for_llm_log(answer),
+            }
+        )
+
         rag_result = self.enrich_answer_with_citations(answer, documents, max_citations)
         rag_result.diagnostics = {
             "retrieval_status": "ok",
@@ -1321,6 +1563,19 @@ class RAGSystem:
             "answer_mode": answer_mode,
             "conversation_messages": len(conversation_history or []),
         }
+
+        _safe_json_log(
+            {
+                "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "exchange_id": exchange_id,
+                "stage": "final",
+                "stream": True,
+                "citations_count": len(rag_result.citations or []),
+                "sources_count": len(rag_result.sources or []),
+                "latency_total_ms": int((time.time() - exchange_started) * 1000),
+            }
+        )
+
         yield {"type": "done", "rag_result": rag_result}
     
     def enrich_answer_with_citations(
@@ -1439,3 +1694,24 @@ def highlight_citations_in_text(text: str, citations: List[Citation]) -> str:
     
     rag_logger.debug(f"Выполнено замен: {replacement_count}")
     return highlighted_text
+
+
+def looks_like_mermaid(code_text: str) -> bool:
+    """Грубая проверка: похоже ли содержимое на Mermaid-диаграмму."""
+    text = str(code_text or "").strip()
+    if not text:
+        return False
+    return (
+        text.startswith("graph ")
+        or text.startswith("flowchart ")
+        or text.startswith("sequenceDiagram")
+        or text.startswith("classDiagram")
+        or text.startswith("stateDiagram")
+        or text.startswith("erDiagram")
+        or text.startswith("journey")
+        or text.startswith("gantt")
+        or text.startswith("mindmap")
+        or text.startswith("timeline")
+        or text.startswith("quadrantChart")
+        or text.startswith("sankey-beta")
+    )

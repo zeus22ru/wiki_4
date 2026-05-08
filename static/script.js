@@ -6,6 +6,7 @@ let currentAuth = {authenticated: false, role: 'guest', user: null};
 const SOURCE_REFERENCE_PATTERN = /\[Источник:\s*([^\]]+)\]/g;
 let _mermaidInitialized = false;
 let _mermaidLightbox = null;
+let _mermaidLightboxCurrentSvg = null;
 
 const messagesContainer = document.getElementById('messages');
 const messageForm = document.getElementById('messageForm');
@@ -90,6 +91,8 @@ function ensureMermaidInitialized() {
         mermaid.initialize({
             startOnLoad: false,
             securityLevel: 'strict',
+            // Не даём Mermaid рисовать "бомбу" при ошибках синтаксиса — покажем fallback сами.
+            suppressErrorRendering: true,
             theme,
         });
         _mermaidInitialized = true;
@@ -116,6 +119,26 @@ function looksLikeMermaid(codeText) {
         text.startsWith('quadrantChart') ||
         text.startsWith('sankey-beta')
     );
+}
+
+function replaceMermaidBlocksWithPlaceholder(container) {
+    if (!container) return;
+    const blocks = container.querySelectorAll('pre > code');
+    blocks.forEach((codeEl) => {
+        if (!(codeEl instanceof HTMLElement)) return;
+        const pre = codeEl.parentElement;
+        if (!pre || pre.tagName.toLowerCase() !== 'pre') return;
+
+        const className = (codeEl.className || '').toLowerCase();
+        const codeText = codeEl.textContent || '';
+        const isMermaidBlock = className.includes('language-mermaid') || className.includes('lang-mermaid') || looksLikeMermaid(codeText);
+        if (!isMermaidBlock) return;
+
+        const ph = document.createElement('div');
+        ph.className = 'mermaid-placeholder';
+        ph.innerHTML = '<span class="mermaid-placeholder__spinner" aria-hidden="true"></span><span class="mermaid-placeholder__text">Формирование диаграммы…</span>';
+        pre.replaceWith(ph);
+    });
 }
 
 function renderMermaidIn(container) {
@@ -151,19 +174,45 @@ function renderMermaidIn(container) {
         return;
     }
 
-    // Рендерим каждый блок отдельно: чтобы синтаксическая ошибка в одном графе
-    // не ломала остальные и не превращала весь ответ в "Syntax error in text".
-    nodesToRender.forEach((node) => {
+    // Рендерим каждый блок отдельно и перехватываем ошибки сами.
+    // Важно: mermaid.run/init иногда НЕ бросают исключение и рисуют "error diagram" в DOM.
+    // Поэтому по возможности используем mermaid.render(...) и управляем результатом вручную.
+    nodesToRender.forEach((node, idx) => {
+        const raw = nodesRawText.get(node) || node.textContent || '';
+        const renderId = `mmd-${Date.now()}-${Math.random().toString(16).slice(2)}-${idx}`;
+
+        const fallback = () => {
+            node.classList.add('mermaid-error');
+            node.innerHTML = `<pre class="mermaid-error__pre"><code>${escapeHtml(raw)}</code></pre>`;
+        };
+
         try {
+            if (typeof mermaid.render === 'function') {
+                const maybe = mermaid.render(renderId, raw);
+                Promise.resolve(maybe)
+                    .then((res) => {
+                        const svg = res && (res.svg || res);
+                        if (typeof svg !== 'string' || !svg.trim().startsWith('<svg')) {
+                            fallback();
+                            return;
+                        }
+                        node.classList.remove('mermaid-error');
+                        node.innerHTML = svg;
+                    })
+                    .catch(() => fallback());
+                return;
+            }
+
+            // Fallback для старых API: всё равно оборачиваем в try/catch + suppressErrorRendering.
             if (typeof mermaid.run === 'function') {
                 mermaid.run({nodes: [node]});
             } else if (typeof mermaid.init === 'function') {
                 mermaid.init(undefined, [node]);
+            } else {
+                fallback();
             }
         } catch (_) {
-            const raw = nodesRawText.get(node) || node.textContent || '';
-            node.classList.add('mermaid-error');
-            node.innerHTML = `<pre class="mermaid-error__pre"><code>${escapeHtml(raw)}</code></pre>`;
+            fallback();
         }
     });
 }
@@ -180,7 +229,17 @@ function ensureMermaidLightbox() {
         <div class="mermaid-lightbox__backdrop" data-mermaid-lightbox-close="1"></div>
         <div class="mermaid-lightbox__dialog" role="dialog" aria-modal="true" aria-label="Диаграмма Mermaid">
             <div class="mermaid-lightbox__header">
-                <div class="mermaid-lightbox__title">Mermaid diagram</div>
+                <div class="mermaid-lightbox__header-left">
+                    <div class="mermaid-lightbox__title">Mermaid diagram</div>
+                    <div class="mermaid-lightbox__toolbar" role="toolbar" aria-label="Инструменты диаграммы">
+                        <button class="mermaid-lightbox__toolbtn" type="button" data-mermaid-zoom="in">+</button>
+                        <button class="mermaid-lightbox__toolbtn" type="button" data-mermaid-zoom="out">−</button>
+                        <button class="mermaid-lightbox__toolbtn" type="button" data-mermaid-zoom="reset">Сброс</button>
+                        <span class="mermaid-lightbox__zoomlabel" data-mermaid-zoom-label="1">100%</span>
+                        <button class="mermaid-lightbox__toolbtn" type="button" data-mermaid-fullscreen="toggle">На весь экран</button>
+                        <button class="mermaid-lightbox__toolbtn" type="button" data-mermaid-download="svg">Скачать SVG</button>
+                    </div>
+                </div>
                 <button class="mermaid-lightbox__close" type="button" aria-label="Закрыть" data-mermaid-lightbox-close="1">×</button>
             </div>
             <div class="mermaid-lightbox__body" id="mermaidLightboxBody"></div>
@@ -195,6 +254,48 @@ function ensureMermaidLightbox() {
         }
     });
 
+    // Делегируем клики тулбара здесь, чтобы обработчики не терялись между открытиями.
+    root.addEventListener('click', async (evt) => {
+        const t = evt.target;
+        if (!(t instanceof HTMLElement)) return;
+
+        if (t.getAttribute('data-mermaid-fullscreen') === 'toggle') {
+            const dialog = root.querySelector('.mermaid-lightbox__dialog');
+            if (dialog instanceof HTMLElement) {
+                try {
+                    if (document.fullscreenElement) {
+                        await document.exitFullscreen();
+                    } else if (typeof dialog.requestFullscreen === 'function') {
+                        await dialog.requestFullscreen();
+                    }
+                } catch (e) {
+                    console.error('Fullscreen toggle failed', e);
+                }
+            }
+            return;
+        }
+
+        const downloadKind = t.getAttribute('data-mermaid-download');
+        if (downloadKind !== 'svg') return;
+
+        const btn = t;
+        const svg = _mermaidLightboxCurrentSvg;
+        if (!(svg instanceof SVGSVGElement)) return;
+
+        const prevText = btn.textContent;
+        btn.setAttribute('disabled', 'disabled');
+        btn.textContent = 'Готовлю…';
+        try {
+            downloadSvg(svg, 'mermaid-diagram');
+        } catch (e) {
+            console.error('Mermaid download failed', e);
+            alert('Не удалось сохранить файл. Откройте DevTools → Console и пришлите ошибку.');
+        } finally {
+            btn.removeAttribute('disabled');
+            btn.textContent = prevText || 'Скачать SVG';
+        }
+    });
+
     document.addEventListener('keydown', (evt) => {
         if (evt.key === 'Escape') {
             closeMermaidLightbox();
@@ -204,6 +305,122 @@ function ensureMermaidLightbox() {
     document.body.appendChild(root);
     _mermaidLightbox = root;
     return root;
+}
+
+function setupMermaidLightboxInteractions(root, viewport, content) {
+    if (!root || !viewport || !content) return;
+
+    let scale = 1;
+    let panX = 0;
+    let panY = 0;
+    let dragging = false;
+    let startX = 0;
+    let startY = 0;
+    let startPanX = 0;
+    let startPanY = 0;
+
+    const zoomLabel = root.querySelector('[data-mermaid-zoom-label]');
+
+    const apply = () => {
+        content.style.transform = `translate(${panX}px, ${panY}px) scale(${scale})`;
+        if (zoomLabel) {
+            zoomLabel.textContent = `${Math.round(scale * 100)}%`;
+        }
+    };
+
+    const clamp = (v, min, max) => Math.min(max, Math.max(min, v));
+    const setScale = (next, anchorClientX, anchorClientY) => {
+        const prev = scale;
+        scale = clamp(next, 0.2, 6);
+        if (scale === prev) return;
+
+        const rect = viewport.getBoundingClientRect();
+        const ax = anchorClientX != null ? anchorClientX - rect.left : rect.width / 2;
+        const ay = anchorClientY != null ? anchorClientY - rect.top : rect.height / 2;
+
+        // Сохраняем точку под курсором при зуме.
+        panX = ax - (ax - panX) * (scale / prev);
+        panY = ay - (ay - panY) * (scale / prev);
+        apply();
+    };
+
+    const reset = () => {
+        scale = 1;
+        panX = 0;
+        panY = 0;
+        apply();
+    };
+
+    const fitToViewport = (contentWidth, contentHeight) => {
+        const rect = viewport.getBoundingClientRect();
+        const vw = rect.width || 1;
+        const vh = rect.height || 1;
+        const cw = Math.max(1, Number(contentWidth) || 1);
+        const ch = Math.max(1, Number(contentHeight) || 1);
+        const nextScale = clamp(Math.min(vw / cw, vh / ch) * 0.96, 0.2, 6);
+        scale = nextScale;
+        panX = (vw - cw * scale) / 2;
+        panY = (vh - ch * scale) / 2;
+        apply();
+    };
+
+    // Drag to pan
+    viewport.addEventListener('mousedown', (evt) => {
+        if (evt.button !== 0) return;
+        dragging = true;
+        viewport.classList.add('is-dragging');
+        startX = evt.clientX;
+        startY = evt.clientY;
+        startPanX = panX;
+        startPanY = panY;
+        evt.preventDefault();
+    });
+    document.addEventListener('mousemove', (evt) => {
+        if (!dragging) return;
+        panX = startPanX + (evt.clientX - startX);
+        panY = startPanY + (evt.clientY - startY);
+        apply();
+    });
+    document.addEventListener('mouseup', () => {
+        if (!dragging) return;
+        dragging = false;
+        viewport.classList.remove('is-dragging');
+    });
+
+    // Wheel zoom (Ctrl optional not required)
+    viewport.addEventListener('wheel', (evt) => {
+        evt.preventDefault();
+        const delta = evt.deltaY;
+        const factor = delta > 0 ? 0.9 : 1.1;
+        setScale(scale * factor, evt.clientX, evt.clientY);
+    }, {passive: false});
+
+    // Toolbar buttons
+    root.addEventListener('click', (evt) => {
+        const t = evt.target;
+        if (!(t instanceof HTMLElement)) return;
+        const z = t.getAttribute('data-mermaid-zoom');
+        if (z === 'in') setScale(scale * 1.2);
+        if (z === 'out') setScale(scale / 1.2);
+        if (z === 'reset') reset();
+    });
+
+    apply();
+    return {reset, apply, fitToViewport, getState: () => ({scale, panX, panY})};
+}
+
+function downloadSvg(svgEl, filenameBase = 'diagram') {
+    if (!(svgEl instanceof SVGSVGElement)) return;
+    const svgText = new XMLSerializer().serializeToString(svgEl);
+    const blob = new Blob([svgText], {type: 'image/svg+xml;charset=utf-8'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${filenameBase}.svg`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
 function openMermaidLightboxFromSvg(svg) {
@@ -217,16 +434,54 @@ function openMermaidLightboxFromSvg(svg) {
     }
 
     body.innerHTML = '';
+    const viewport = document.createElement('div');
+    viewport.className = 'mermaid-lightbox__viewport';
+    const content = document.createElement('div');
+    content.className = 'mermaid-lightbox__content';
+    viewport.appendChild(content);
+    body.appendChild(viewport);
+
     const clone = svg.cloneNode(true);
     if (clone instanceof SVGSVGElement) {
-        clone.removeAttribute('width');
-        clone.removeAttribute('height');
-        clone.style.width = '100%';
-        clone.style.height = 'auto';
-        clone.style.maxWidth = '100%';
-        clone.style.maxHeight = '100%';
+        // Гарантируем корректные размеры/viewport, иначе SVG может "схлопнуться" в lightbox.
+        let vb = clone.viewBox?.baseVal;
+        if (!vb || !vb.width || !vb.height) {
+            const srcVb = svg.viewBox?.baseVal;
+            if (srcVb && srcVb.width && srcVb.height) {
+                clone.setAttribute('viewBox', `${srcVb.x} ${srcVb.y} ${srcVb.width} ${srcVb.height}`);
+            } else {
+                try {
+                    const box = svg.getBBox();
+                    const w = Math.max(1, Math.round(box.width));
+                    const h = Math.max(1, Math.round(box.height));
+                    clone.setAttribute('viewBox', `0 0 ${w} ${h}`);
+                } catch (_) {
+                    // fallback: стандартный размер
+                    clone.setAttribute('viewBox', '0 0 1200 800');
+                }
+            }
+        }
+        vb = clone.viewBox.baseVal;
+        clone.setAttribute('width', String(Math.max(1, Math.round(vb.width))));
+        clone.setAttribute('height', String(Math.max(1, Math.round(vb.height))));
     }
-    body.appendChild(clone);
+    content.appendChild(clone);
+    _mermaidLightboxCurrentSvg = clone instanceof SVGSVGElement ? clone : null;
+
+    // Зум/панорамирование
+    const controller = setupMermaidLightboxInteractions(root, viewport, content);
+    // Авто-fit после вставки в DOM (нужны реальные размеры viewport).
+    requestAnimationFrame(() => {
+        if (!controller) return;
+        const svgInside = content.querySelector('svg');
+        if (!(svgInside instanceof SVGSVGElement)) return;
+        const vb = svgInside.viewBox?.baseVal;
+        const w = vb && vb.width ? vb.width : svgInside.getBoundingClientRect().width;
+        const h = vb && vb.height ? vb.height : svgInside.getBoundingClientRect().height;
+        controller.fitToViewport(w, h);
+    });
+
+    // Скачивание JPG обрабатывается делегированием в ensureMermaidLightbox().
 
     root.hidden = false;
     document.body.classList.add('mermaid-lightbox-open');
@@ -243,6 +498,7 @@ function closeMermaidLightbox() {
     if (body) {
         body.innerHTML = '';
     }
+    _mermaidLightboxCurrentSvg = null;
 }
 
 function initMermaidLightboxClicks() {
@@ -857,7 +1113,11 @@ async function readStream(response) {
             return;
         }
         streamContent.innerHTML = formatMessage(accumulated);
-        renderMermaidIn(streamContent);
+        // Mermaid рендерим только после завершения стрима (payload.type === 'done'):
+        // во время стрима Markdown/код-блоки могут быть незавершенными, и Mermaid
+        // периодически падает с "Syntax error in text", после чего блок помечается как обработанный.
+        // Вместо рендера показываем анимированную заглушку.
+        replaceMermaidBlocksWithPlaceholder(streamContent);
         scrollToBottom();
     };
 

@@ -151,6 +151,12 @@ class Settings:
     # Logging настройки
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
     LOG_DIR: str = os.getenv("LOG_DIR", "./logs")
+    # Отдельный лог обмена с LLM (вопрос/контекст/ответ/метрики) для калибровки
+    LLM_EXCHANGE_LOG_ENABLED: bool = os.getenv("LLM_EXCHANGE_LOG_ENABLED", "true").lower() in (
+        "1", "true", "yes", "on",
+    )
+    # Обрезка крупных полей в логе (промпт/ответ/контекст)
+    LLM_EXCHANGE_LOG_MAX_CHARS: int = int(os.getenv("LLM_EXCHANGE_LOG_MAX_CHARS", "20000"))
 
     # Security настройки
     SECRET_KEY: str = os.getenv("SECRET_KEY", "your-secret-key-here-change-in-production")
