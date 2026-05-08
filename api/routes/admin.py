@@ -7,6 +7,7 @@ from pathlib import Path
 from collections import Counter
 
 from flask import Blueprint, jsonify
+from flask import request
 import chromadb
 
 from api.middleware.auth import require_admin_access
@@ -204,3 +205,83 @@ def overview():
 def public_settings():
     """Безопасная выдача runtime-настроек для UI."""
     return jsonify({"settings": _public_settings()})
+
+
+@admin_bp.route("/settings/schema", methods=["GET"])
+def settings_schema():
+    """Каталог настроек для админки: группы, расшифровки, допустимые значения."""
+    from config.settings_catalog import build_admin_settings_payload
+
+    return jsonify(build_admin_settings_payload())
+
+
+def _coerce_value(type_name: str, value):
+    if type_name == "bool":
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return bool(value)
+        s = str(value).strip().lower()
+        if s in ("1", "true", "yes", "on"):
+            return True
+        if s in ("0", "false", "no", "off", ""):
+            return False
+        raise ValueError("Некорректное булево значение")
+    if type_name == "int":
+        if value is None or value == "":
+            raise ValueError("Пустое значение")
+        return int(value)
+    if type_name == "float":
+        if value is None or value == "":
+            raise ValueError("Пустое значение")
+        return float(value)
+    if type_name == "list":
+        if value is None:
+            return []
+        if isinstance(value, list):
+            return [str(x).strip() for x in value if str(x).strip()]
+        s = str(value)
+        return [part.strip() for part in s.split(",") if part.strip()]
+    return "" if value is None else str(value)
+
+
+@admin_bp.route("/settings", methods=["POST"])
+def update_setting():
+    """Обновить одну настройку через overrides JSON и применить в runtime."""
+    from config.settings_catalog import SPECS
+    from config.runtime_overrides import load_overrides, save_overrides, apply_overrides
+
+    payload = request.get_json(silent=True) or {}
+    key = str(payload.get("key") or "").strip()
+    value = payload.get("value")
+    action = str(payload.get("action") or "set").strip().lower()  # set | clear
+
+    spec = next((s for s in SPECS if s.key == key), None)
+    if not spec:
+        return jsonify({"error": "Неизвестная настройка"}), 400
+
+    overrides = load_overrides()
+    if action == "clear":
+        overrides.pop(key, None)
+        save_overrides(overrides)
+        apply_overrides(settings, overrides)
+        return jsonify({"ok": True, "key": key, "action": "clear"})
+
+    try:
+        coerced = _coerce_value(spec.type, value)
+    except Exception as exc:
+        return jsonify({"error": f"Некорректное значение: {exc}"}), 400
+
+    ui = spec.ui or {}
+    if spec.type in ("int", "float") and ui.get("kind") == "slider":
+        min_v = ui.get("min")
+        max_v = ui.get("max")
+        if min_v is not None and coerced < min_v:
+            return jsonify({"error": f"Значение меньше минимума ({min_v})"}), 400
+        if max_v is not None and coerced > max_v:
+            return jsonify({"error": f"Значение больше максимума ({max_v})"}), 400
+
+    overrides[key] = coerced
+    save_overrides(overrides)
+    apply_overrides(settings, overrides)
+    return jsonify({"ok": True, "key": key, "value": ("••••••••" if spec.secret else coerced), "overridden": True})

@@ -26,6 +26,7 @@ logger = get_logger(__name__)
 rag_log_dir = Path(settings.LOG_DIR) / "rag"
 rag_log_dir.mkdir(parents=True, exist_ok=True)
 rag_log_file = rag_log_dir / "rag_detailed.log"
+deep_retrieval_log_file = rag_log_dir / "deep_retrieval.log"
 
 rag_file_handler = logging.handlers.RotatingFileHandler(
     rag_log_file,
@@ -43,7 +44,31 @@ rag_file_handler.setFormatter(rag_file_formatter)
 # Добавляем файловый обработчик к RAG логгеру
 rag_logger = logging.getLogger('rag')
 rag_logger.setLevel(logging.DEBUG)
-rag_logger.addHandler(rag_file_handler)
+if not any(
+    isinstance(h, logging.handlers.RotatingFileHandler)
+    and getattr(h, "baseFilename", None) == str(rag_log_file)
+    for h in rag_logger.handlers
+):
+    rag_logger.addHandler(rag_file_handler)
+
+# Отдельный логгер для deep retrieval (в отдельный файл)
+deep_retrieval_file_handler = logging.handlers.RotatingFileHandler(
+    deep_retrieval_log_file,
+    maxBytes=10 * 1024 * 1024,  # 10 MB
+    backupCount=5,
+    encoding='utf-8',
+)
+deep_retrieval_file_handler.setLevel(logging.DEBUG)
+deep_retrieval_file_handler.setFormatter(rag_file_formatter)
+
+deep_retrieval_logger = logging.getLogger("deep_retrieval")
+deep_retrieval_logger.setLevel(logging.DEBUG)
+if not any(
+    isinstance(h, logging.handlers.RotatingFileHandler)
+    and getattr(h, "baseFilename", None) == str(deep_retrieval_log_file)
+    for h in deep_retrieval_logger.handlers
+):
+    deep_retrieval_logger.addHandler(deep_retrieval_file_handler)
 
 
 @dataclass
@@ -150,6 +175,55 @@ def _format_conversation_history(
     return "\n".join(lines)
 
 
+def _best_score(documents: List[Dict[str, Any]]) -> float:
+    scores = []
+    for d in documents or []:
+        s = d.get("score")
+        if isinstance(s, (int, float)):
+            scores.append(float(s))
+    return max(scores) if scores else 0.0
+
+
+def _slim_doc_label(doc: Dict[str, Any]) -> str:
+    """Короткая подпись для LLM: title / section_path / path."""
+    meta = (doc or {}).get("metadata") or {}
+    title = str(meta.get("title") or meta.get("source") or meta.get("path") or "Без названия").strip()
+    section_path = str(meta.get("section_path") or "").strip()
+    path = str(meta.get("path") or "").strip()
+    parts = [title]
+    if section_path:
+        parts.append(section_path)
+    if path and path != title:
+        parts.append(path)
+    return " | ".join([p for p in parts if p])[:220]
+
+
+def _parse_json_array_of_strings(value: str) -> List[str]:
+    value = (value or "").strip()
+    if not value:
+        return []
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        match = re.search(r"\[.*\]", value, flags=re.DOTALL)
+        if not match:
+            return []
+        try:
+            parsed = json.loads(match.group(0))
+        except json.JSONDecodeError:
+            return []
+    if not isinstance(parsed, list):
+        return []
+    out: List[str] = []
+    for item in parsed:
+        s = re.sub(r"\s+", " ", str(item)).strip()
+        if not s or len(s) < 3:
+            continue
+        if s not in out:
+            out.append(s[:500])
+    return out
+
+
 class RAGSystem:
     """Система RAG с поддержкой цитирования"""
     
@@ -246,6 +320,50 @@ class RAGSystem:
 Только связный текст, без заголовков и без «в документации сказано»."""
         return (chat_completion(prompt, timeout=90) or "").strip()
 
+    def _llm_deep_next_queries(
+        self,
+        question: str,
+        conversation_history: Optional[List[Dict[str, str]]],
+        previous_queries: List[str],
+        top_documents: List[Dict[str, Any]],
+        reason: str,
+        limit: int,
+    ) -> List[str]:
+        """Сгенерировать уточняющие/альтернативные поисковые запросы для deep retrieval."""
+        history_block = _format_conversation_history(
+            conversation_history,
+            max_messages=min(settings.RAG_QUERY_EXPANSION_MAX_MESSAGES, 6),
+            max_chars_per_message=300,
+        )
+        doc_hints = []
+        for doc in (top_documents or [])[:8]:
+            doc_hints.append(_slim_doc_label(doc))
+        prompt = f"""Ты помогаешь улучшить поиск по корпоративной базе знаний.
+
+Исходный вопрос пользователя:
+{_clip_text(question, 800)}
+
+Причина, почему нужно уточнить поиск:
+{reason}
+
+Уже использованные поисковые запросы (не повторяй их):
+{json.dumps(previous_queries[:30], ensure_ascii=False)}
+
+Самые релевантные найденные документы (ориентиры по терминам/разделам):
+{chr(10).join([f"- {x}" for x in doc_hints]) or "- (пока нет релевантных документов)"}
+
+Короткая история диалога (если есть):
+{history_block or "Нет"}
+
+Задача:
+- предложи {limit} коротких поисковых запросов на русском, чтобы повысить шанс найти нужную статью;
+- используй синонимы, сокращения, варианты терминов, названия модулей/ролей/форм из ориентиров;
+- не добавляй пояснений.
+
+Верни только JSON-массив строк."""
+        raw = chat_completion(prompt, timeout=90) or ""
+        return _parse_json_array_of_strings(raw)[:limit]
+
     def expand_retrieval_queries(
         self,
         user_query: str,
@@ -305,6 +423,223 @@ class RAGSystem:
         if not meta["sparse_queries"]:
             meta["sparse_queries"] = [user_query.strip()]
         return meta
+
+    def retrieve_documents_deep(
+        self,
+        user_query: str,
+        top_k: Optional[int] = None,
+        min_score: Optional[float] = None,
+        conversation_history: Optional[List[Dict[str, str]]] = None,
+    ) -> Tuple[List[Dict], Optional[str], Dict[str, Any], Dict[str, Any]]:
+        """
+        Deep retrieval: несколько итераций поиска с дозапросами, дедупом кандидатов и диагностикой.
+
+        Returns:
+            (документы, код_ошибки, expansion_meta, diagnostics)
+        """
+        deep_retrieval_logger.info("--- Deep retrieval: старт ---")
+        deep_retrieval_logger.info("Deep retrieval: query='%s'", _clip_text(user_query, 400))
+        top_k = top_k if top_k is not None else settings.RAG_TOP_K
+        min_score = min_score if min_score is not None else settings.RAG_MIN_SCORE
+
+        max_iters = max(1, int(getattr(settings, "DEEP_RETRIEVAL_MAX_ITERS", 3) or 3))
+        new_per_iter = max(0, int(getattr(settings, "DEEP_RETRIEVAL_NEW_QUERIES_PER_ITER", 3) or 3))
+        stop_best = float(getattr(settings, "DEEP_RETRIEVAL_MIN_BEST_SCORE", 0.55) or 0.55)
+        max_candidates = max(1, int(getattr(settings, "DEEP_RETRIEVAL_MAX_CANDIDATES", 60) or 60))
+
+        started = time.time()
+        expansion = self.expand_retrieval_queries(user_query, conversation_history)
+        deep_retrieval_logger.debug(
+            "Deep retrieval: params top_k=%s, min_score=%s, max_iters=%s, new_per_iter=%s, stop_best=%.3f, max_candidates=%s",
+            top_k,
+            min_score,
+            max_iters,
+            new_per_iter,
+            float(stop_best),
+            max_candidates,
+        )
+        deep_retrieval_logger.debug(
+            "Deep retrieval: initial queries dense=%s, sparse=%s",
+            (expansion.get("dense_queries") or [])[:20],
+            (expansion.get("sparse_queries") or [])[:20],
+        )
+
+        deep_diag: Dict[str, Any] = {
+            "enabled": True,
+            "max_iters": max_iters,
+            "new_queries_per_iter": new_per_iter,
+            "stop_min_best_score": stop_best,
+            "max_candidates": max_candidates,
+            "iters": [],
+        }
+
+        # Пул кандидатов: chunk_id -> doc (+ происхождение)
+        pool: Dict[str, Dict[str, Any]] = {}
+        origins: Dict[str, List[str]] = {}
+
+        seen_queries: List[str] = []
+        for q in (expansion.get("dense_queries") or []) + (expansion.get("sparse_queries") or []):
+            q = (q or "").strip()
+            if q and q not in seen_queries:
+                seen_queries.append(q)
+
+        last_err: Optional[str] = None
+        last_retrieve_diag: Dict[str, Any] = {}
+
+        for iter_idx in range(max_iters):
+            iter_started = time.time()
+            documents, err, diag = self._retrieve_documents_inner(expansion, top_k=top_k, min_score=min_score)
+            last_err = err
+            last_retrieve_diag = dict(diag or {})
+            iter_best = _best_score(documents)
+            deep_retrieval_logger.info(
+                "Deep retrieval итерация %s/%s: документов=%s, best_score=%.3f, ошибка=%s",
+                iter_idx + 1,
+                max_iters,
+                len(documents or []),
+                float(iter_best),
+                err,
+            )
+
+            # Мерджим кандидатов
+            added = 0
+            for doc in documents or []:
+                cid = str(doc.get("chunk_id") or "")
+                if not cid:
+                    continue
+                prev = pool.get(cid)
+                if prev is None or float(doc.get("score") or 0.0) > float(prev.get("score") or 0.0):
+                    pool[cid] = doc
+                if cid not in origins:
+                    origins[cid] = []
+                # origin: первый dense query (или rewritten)
+                origin_label = (expansion.get("rewritten") or user_query).strip()
+                if origin_label and origin_label not in origins[cid]:
+                    origins[cid].append(origin_label)
+                added += 1
+
+            # Ограничиваем пул кандидатов по текущим score
+            if len(pool) > max_candidates:
+                ordered_ids = sorted(pool.keys(), key=lambda x: float(pool[x].get("score") or 0.0), reverse=True)
+                for drop_id in ordered_ids[max_candidates:]:
+                    pool.pop(drop_id, None)
+                    origins.pop(drop_id, None)
+
+            iter_info: Dict[str, Any] = {
+                "iter": iter_idx + 1,
+                "latency_ms": int((time.time() - iter_started) * 1000),
+                "error": err,
+                "doc_count": len(documents or []),
+                "best_score": round(float(iter_best), 4),
+                "pool_size": len(pool),
+                "added_candidates": added,
+                "added_queries": [],
+                "stop_reason": None,
+            }
+
+            # Ошибки, при которых нет смысла продолжать
+            if err in {"embedding_unavailable", "search_error"}:
+                iter_info["stop_reason"] = f"error:{err}"
+                deep_diag["iters"].append(iter_info)
+                deep_retrieval_logger.warning("Deep retrieval остановлен из-за ошибки: %s", err)
+                break
+
+            # Достаточно хороший результат — стоп
+            if iter_best >= stop_best and documents:
+                iter_info["stop_reason"] = "good_enough"
+                deep_diag["iters"].append(iter_info)
+                deep_retrieval_logger.info("Deep retrieval остановлен: good_enough (best_score=%.3f)", float(iter_best))
+                break
+
+            # Нет дозапросов или лимит итераций
+            if iter_idx >= max_iters - 1 or new_per_iter <= 0:
+                iter_info["stop_reason"] = "max_iters" if iter_idx >= max_iters - 1 else "no_budget_for_queries"
+                deep_diag["iters"].append(iter_info)
+                deep_retrieval_logger.info("Deep retrieval остановлен: %s", iter_info["stop_reason"])
+                break
+
+            # Сгенерировать новые запросы
+            reason = "нет релевантных документов" if not documents else "низкая релевантность/покрытие"
+            proposed = self._llm_deep_next_queries(
+                user_query,
+                conversation_history,
+                previous_queries=seen_queries,
+                top_documents=documents,
+                reason=reason,
+                limit=new_per_iter,
+            )
+            proposed = [q for q in proposed if q and q not in seen_queries]
+
+            if not proposed:
+                iter_info["stop_reason"] = "no_new_queries"
+                deep_diag["iters"].append(iter_info)
+                deep_retrieval_logger.info("Deep retrieval: новые запросы не предложены, останавливаемся")
+                break
+
+            # Добавляем запросы в expansion (и dense, и sparse) для следующей итерации.
+            for q in proposed:
+                seen_queries.append(q)
+                (expansion.setdefault("dense_queries", [])).append(q)
+                (expansion.setdefault("sparse_queries", [])).append(q)
+            iter_info["added_queries"] = proposed
+            deep_diag["iters"].append(iter_info)
+            deep_retrieval_logger.info("Deep retrieval: добавлены дозапросы: %s", proposed)
+
+        # Финальный список документов
+        final_docs = sorted(pool.values(), key=lambda x: float(x.get("score") or 0.0), reverse=True)
+        final_docs = [d for d in final_docs if float(d.get("score") or 0.0) >= float(min_score)]
+        final_docs = final_docs[:top_k]
+
+        deep_diag["latency_total_ms"] = int((time.time() - started) * 1000)
+        deep_diag["final_count"] = len(final_docs)
+        deep_diag["final_best_score"] = round(float(_best_score(final_docs)), 4)
+        deep_diag["query_count"] = len(seen_queries)
+        deep_retrieval_logger.info(
+            "Deep retrieval завершён: iters=%s, final_docs=%s, best_score=%.3f, queries=%s, latency_ms=%s",
+            len(deep_diag["iters"]),
+            len(final_docs),
+            float(deep_diag["final_best_score"]),
+            len(seen_queries),
+            deep_diag["latency_total_ms"],
+        )
+
+        # В diagnostics подмешаем последний diag retrieval, но deep положим отдельно.
+        diagnostics = dict(last_retrieve_diag or {})
+        diagnostics["deep"] = deep_diag
+
+        # В expansion_meta добавим накопленные запросы (dedupe)
+        def _dedupe(seq: List[str]) -> List[str]:
+            seen = set()
+            out: List[str] = []
+            for x in seq:
+                x = (x or "").strip()
+                if not x or x in seen:
+                    continue
+                seen.add(x)
+                out.append(x)
+            return out
+
+        expansion["dense_queries"] = _dedupe(expansion.get("dense_queries") or [])
+        expansion["sparse_queries"] = _dedupe(expansion.get("sparse_queries") or [])
+        return final_docs, last_err, expansion, diagnostics
+
+    def retrieve_documents_auto(
+        self,
+        user_query: str,
+        top_k: Optional[int] = None,
+        min_score: Optional[float] = None,
+        conversation_history: Optional[List[Dict[str, str]]] = None,
+        deep_override: Optional[bool] = None,
+    ) -> Tuple[List[Dict], Optional[str], Dict[str, Any], Dict[str, Any]]:
+        """Выбрать обычный или deep retrieval (по настройке или override)."""
+        enabled = (
+            bool(deep_override)
+            if deep_override is not None
+            else bool(getattr(settings, "DEEP_RETRIEVAL_ENABLED", False))
+        )
+        if enabled:
+            return self.retrieve_documents_deep(user_query, top_k, min_score, conversation_history)
+        return self.retrieve_documents(user_query, top_k, min_score, conversation_history)
 
     def _retrieve_documents_inner(
         self,
@@ -632,6 +967,7 @@ class RAGSystem:
 6. Режим ответа: {extra_instruction}
 7. Используй историю диалога только для понимания уточнений и местоимений; факты бери из контекста источников.
 8. Если история диалога противоречит найденному контексту, опирайся на контекст источников.
+9. Если пользователь просит изобразить что-то графически (например: "схема", "диаграмма", "граф", "визуализируй", "изобрази графически"), вместо отказа дай результат в формате Mermaid внутри блока Markdown ```mermaid ... ```. Выбирай подходящий тип диаграммы Mermaid (flowchart/graph, sequenceDiagram, classDiagram) и следи за корректным синтаксисом.
 
 ОТВЕТ:"""
         
@@ -848,7 +1184,7 @@ class RAGSystem:
         
         # 1. Поиск релевантных документов
         rag_logger.debug("Шаг 1: Поиск релевантных документов")
-        documents, retrieve_error, expansion, retrieve_diag = self.retrieve_documents(
+        documents, retrieve_error, expansion, retrieve_diag = self.retrieve_documents_auto(
             query, top_k, min_score, conversation_history
         )
         retrieval_query = expansion.get("rewritten") or query

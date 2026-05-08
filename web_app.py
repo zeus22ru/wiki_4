@@ -428,7 +428,7 @@ def chat_stream():
         yield _sse_event({"type": "status", "message": "Ищу релевантные документы..."})
         started = time.time()
         try:
-            documents, retrieve_error, expansion, retrieve_diag = rag.retrieve_documents(
+            documents, retrieve_error, expansion, retrieve_diag = rag.retrieve_documents_auto(
                 query, options["top_k"], options["min_score"], conversation_history
             )
             retrieval_query = expansion.get("rewritten") or query
@@ -502,6 +502,7 @@ def chat_stream():
                         return
                     payload = _rag_result_to_api_dict(rag_result)
                     diag = dict(payload.get("diagnostics") or {})
+                    # retrieve_diag уже содержит deep-диагностику при включенном DEEP_RETRIEVAL_ENABLED
                     diag["retrieval"] = retrieve_diag
                     diag["expansion"] = {
                         "rewritten": expansion.get("rewritten"),
@@ -673,7 +674,7 @@ if __name__ == '__main__':
     logger.info(f"INFERENCE_BACKEND: {backend}")
     logger.info(
         f"API: эмбеддинги={settings.EMBEDDING_API_MODE}, чат={settings.CHAT_API_MODE} "
-        f"(openai → /v1/embeddings + /v1/chat/completions; ollama → /api/embed + /api/generate)"
+        f"(openai -> /v1/embeddings + /v1/chat/completions; ollama -> /api/embed + /api/generate)"
     )
     logger.info(f"Модель эмбеддингов: {settings.OLLAMA_EMBEDDING_MODEL}")
     logger.info(f"Модель чата: {settings.OLLAMA_CHAT_MODEL}")

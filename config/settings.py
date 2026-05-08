@@ -99,7 +99,7 @@ class Settings:
     RAG_MAX_CITATIONS: int = int(os.getenv("RAG_MAX_CITATIONS", "5"))
     # Порог по формуле 1 - distance; 0.5 отсекает типичные попадания (~0.35–0.45)
     RAG_MIN_SCORE: float = float(os.getenv("RAG_MIN_SCORE", "0.0"))
-    RAG_MAX_CONTEXT_LENGTH: int = int(os.getenv("RAG_MAX_CONTEXT_LENGTH", "3000"))
+    RAG_MAX_CONTEXT_LENGTH: int = int(os.getenv("RAG_MAX_CONTEXT_LENGTH", "90000"))
 
     # Гибридный поиск (dense + BM25 + RRF + cross-encoder)
     # hybrid | dense | sparse
@@ -133,6 +133,20 @@ class Settings:
     )
     RAG_HYDE_ENABLED: bool = os.getenv("RAG_HYDE_ENABLED", "false").lower() in ("1", "true", "yes", "on")
     RAG_QUERY_EXPANSION_MAX_MESSAGES: int = int(os.getenv("RAG_QUERY_EXPANSION_MAX_MESSAGES", "6"))
+
+    # Deep retrieval (DeepResearch-подобный многошаговый поиск)
+    # Если включено, retrieval может делать несколько итераций поиска с дозапросами.
+    DEEP_RETRIEVAL_ENABLED: bool = os.getenv("DEEP_RETRIEVAL_ENABLED", "false").lower() in (
+        "1", "true", "yes", "on",
+    )
+    # Максимум итераций поиска (включая первичную).
+    DEEP_RETRIEVAL_MAX_ITERS: int = int(os.getenv("DEEP_RETRIEVAL_MAX_ITERS", "3"))
+    # Сколько новых запросов добавлять на каждой итерации (кроме первой).
+    DEEP_RETRIEVAL_NEW_QUERIES_PER_ITER: int = int(os.getenv("DEEP_RETRIEVAL_NEW_QUERIES_PER_ITER", "3"))
+    # Порог «достаточно хорошо»: если лучший score >= порога, deep-поиск останавливается.
+    DEEP_RETRIEVAL_MIN_BEST_SCORE: float = float(os.getenv("DEEP_RETRIEVAL_MIN_BEST_SCORE", "0.55"))
+    # Максимум кандидатов в пуле до финального top_k (после дедупликации).
+    DEEP_RETRIEVAL_MAX_CANDIDATES: int = int(os.getenv("DEEP_RETRIEVAL_MAX_CANDIDATES", "60"))
 
     # Logging настройки
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
@@ -219,6 +233,15 @@ class Settings:
 
 # Глобальный экземпляр настроек
 settings = Settings()
+
+# Применяем runtime-override (админка) поверх env-настроек.
+try:
+    from .runtime_overrides import load_overrides, apply_overrides
+
+    apply_overrides(settings, load_overrides())
+except Exception:
+    # Overrides не должны ломать старт приложения.
+    pass
 
 
 def uses_openai_compatible_api() -> bool:

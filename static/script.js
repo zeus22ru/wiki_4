@@ -4,6 +4,8 @@ let currentChatId = null;
 let isProcessing = false;
 let currentAuth = {authenticated: false, role: 'guest', user: null};
 const SOURCE_REFERENCE_PATTERN = /\[Источник:\s*([^\]]+)\]/g;
+let _mermaidInitialized = false;
+let _mermaidLightbox = null;
 
 const messagesContainer = document.getElementById('messages');
 const messageForm = document.getElementById('messageForm');
@@ -34,6 +36,14 @@ const jobStatus = document.getElementById('jobStatus');
 const indexPreview = document.getElementById('indexPreview');
 const refreshAdminBtn = document.getElementById('refreshAdminBtn');
 const adminOverview = document.getElementById('adminOverview');
+const adminSettings = document.getElementById('adminSettings');
+const adminSettingsSearch = document.getElementById('adminSettingsSearch');
+const refreshAdminSettingsBtn = document.getElementById('refreshAdminSettingsBtn');
+const saveAdminSettingsDraftBtn = document.getElementById('saveAdminSettingsDraftBtn');
+const resetAdminSettingsDraftBtn = document.getElementById('resetAdminSettingsDraftBtn');
+const adminSettingsDraftInfo = document.getElementById('adminSettingsDraftInfo');
+const adminOverviewTab = document.getElementById('adminOverviewTab');
+const adminSettingsTab = document.getElementById('adminSettingsTab');
 const authStatus = document.getElementById('authStatus');
 const authOpenBtn = document.getElementById('authOpenBtn');
 const logoutBtn = document.getElementById('logoutBtn');
@@ -68,6 +78,192 @@ function createMessageAvatar(type) {
     return avatar;
 }
 
+function ensureMermaidInitialized() {
+    if (typeof mermaid === 'undefined') {
+        return false;
+    }
+    if (_mermaidInitialized) {
+        return true;
+    }
+    const theme = document.documentElement?.getAttribute('data-theme') === 'dark' ? 'dark' : 'default';
+    try {
+        mermaid.initialize({
+            startOnLoad: false,
+            securityLevel: 'strict',
+            theme,
+        });
+        _mermaidInitialized = true;
+        return true;
+    } catch (_) {
+        return false;
+    }
+}
+
+function looksLikeMermaid(codeText) {
+    const text = String(codeText || '').trim();
+    if (!text) return false;
+    return (
+        text.startsWith('graph ') ||
+        text.startsWith('flowchart ') ||
+        text.startsWith('sequenceDiagram') ||
+        text.startsWith('classDiagram') ||
+        text.startsWith('stateDiagram') ||
+        text.startsWith('erDiagram') ||
+        text.startsWith('journey') ||
+        text.startsWith('gantt') ||
+        text.startsWith('mindmap') ||
+        text.startsWith('timeline') ||
+        text.startsWith('quadrantChart') ||
+        text.startsWith('sankey-beta')
+    );
+}
+
+function renderMermaidIn(container) {
+    if (!container || !ensureMermaidInitialized()) {
+        return;
+    }
+    const blocks = container.querySelectorAll('pre > code');
+    const nodesToRender = [];
+    const nodesRawText = new Map();
+
+    blocks.forEach((codeEl) => {
+        if (!(codeEl instanceof HTMLElement)) return;
+        const pre = codeEl.parentElement;
+        if (!pre || pre.tagName.toLowerCase() !== 'pre') return;
+        if (pre.getAttribute('data-mermaid-processed') === '1') return;
+
+        const className = (codeEl.className || '').toLowerCase();
+        const codeText = codeEl.textContent || '';
+        const isMermaidBlock = className.includes('language-mermaid') || className.includes('lang-mermaid') || looksLikeMermaid(codeText);
+        if (!isMermaidBlock) return;
+
+        const mermaidDiv = document.createElement('div');
+        mermaidDiv.className = 'mermaid';
+        const raw = codeText.trim();
+        mermaidDiv.textContent = raw;
+        pre.replaceWith(mermaidDiv);
+        pre.setAttribute('data-mermaid-processed', '1');
+        nodesToRender.push(mermaidDiv);
+        nodesRawText.set(mermaidDiv, raw);
+    });
+
+    if (!nodesToRender.length) {
+        return;
+    }
+
+    // Рендерим каждый блок отдельно: чтобы синтаксическая ошибка в одном графе
+    // не ломала остальные и не превращала весь ответ в "Syntax error in text".
+    nodesToRender.forEach((node) => {
+        try {
+            if (typeof mermaid.run === 'function') {
+                mermaid.run({nodes: [node]});
+            } else if (typeof mermaid.init === 'function') {
+                mermaid.init(undefined, [node]);
+            }
+        } catch (_) {
+            const raw = nodesRawText.get(node) || node.textContent || '';
+            node.classList.add('mermaid-error');
+            node.innerHTML = `<pre class="mermaid-error__pre"><code>${escapeHtml(raw)}</code></pre>`;
+        }
+    });
+}
+
+function ensureMermaidLightbox() {
+    if (_mermaidLightbox) {
+        return _mermaidLightbox;
+    }
+
+    const root = document.createElement('div');
+    root.className = 'mermaid-lightbox';
+    root.hidden = true;
+    root.innerHTML = `
+        <div class="mermaid-lightbox__backdrop" data-mermaid-lightbox-close="1"></div>
+        <div class="mermaid-lightbox__dialog" role="dialog" aria-modal="true" aria-label="Диаграмма Mermaid">
+            <div class="mermaid-lightbox__header">
+                <div class="mermaid-lightbox__title">Mermaid diagram</div>
+                <button class="mermaid-lightbox__close" type="button" aria-label="Закрыть" data-mermaid-lightbox-close="1">×</button>
+            </div>
+            <div class="mermaid-lightbox__body" id="mermaidLightboxBody"></div>
+        </div>
+    `;
+
+    root.addEventListener('click', (evt) => {
+        const t = evt.target;
+        if (!(t instanceof HTMLElement)) return;
+        if (t.getAttribute('data-mermaid-lightbox-close') === '1') {
+            closeMermaidLightbox();
+        }
+    });
+
+    document.addEventListener('keydown', (evt) => {
+        if (evt.key === 'Escape') {
+            closeMermaidLightbox();
+        }
+    });
+
+    document.body.appendChild(root);
+    _mermaidLightbox = root;
+    return root;
+}
+
+function openMermaidLightboxFromSvg(svg) {
+    if (!(svg instanceof SVGSVGElement)) {
+        return;
+    }
+    const root = ensureMermaidLightbox();
+    const body = root.querySelector('#mermaidLightboxBody');
+    if (!body) {
+        return;
+    }
+
+    body.innerHTML = '';
+    const clone = svg.cloneNode(true);
+    if (clone instanceof SVGSVGElement) {
+        clone.removeAttribute('width');
+        clone.removeAttribute('height');
+        clone.style.width = '100%';
+        clone.style.height = 'auto';
+        clone.style.maxWidth = '100%';
+        clone.style.maxHeight = '100%';
+    }
+    body.appendChild(clone);
+
+    root.hidden = false;
+    document.body.classList.add('mermaid-lightbox-open');
+}
+
+function closeMermaidLightbox() {
+    const root = _mermaidLightbox;
+    if (!root || root.hidden) {
+        return;
+    }
+    root.hidden = true;
+    document.body.classList.remove('mermaid-lightbox-open');
+    const body = root.querySelector('#mermaidLightboxBody');
+    if (body) {
+        body.innerHTML = '';
+    }
+}
+
+function initMermaidLightboxClicks() {
+    document.addEventListener('click', (evt) => {
+        const target = evt.target;
+        if (!(target instanceof Element)) return;
+
+        // Ищем клик по SVG, который находится внутри div.mermaid (рендер Mermaid)
+        const svg = target.closest?.('.mermaid svg');
+        if (!(svg instanceof SVGSVGElement)) return;
+
+        // Не мешаем, если пользователь кликает по ссылке внутри сообщения (на всякий случай)
+        const link = target.closest?.('a');
+        if (link) return;
+
+        evt.preventDefault();
+        evt.stopPropagation();
+        openMermaidLightboxFromSvg(svg);
+    });
+}
+
 document.addEventListener('DOMContentLoaded', () => {
     initializeAuth();
     checkHealth();
@@ -94,6 +290,15 @@ document.addEventListener('DOMContentLoaded', () => {
     reindexBtn.addEventListener('click', startReindex);
     uploadForm.addEventListener('submit', uploadDocument);
     refreshAdminBtn.addEventListener('click', loadAdminOverview);
+    if (refreshAdminSettingsBtn) {
+        refreshAdminSettingsBtn.addEventListener('click', loadAdminSettings);
+    }
+    if (saveAdminSettingsDraftBtn) {
+        saveAdminSettingsDraftBtn.addEventListener('click', saveAdminSettingsDraft);
+    }
+    if (resetAdminSettingsDraftBtn) {
+        resetAdminSettingsDraftBtn.addEventListener('click', resetAdminSettingsDraft);
+    }
     authOpenBtn.addEventListener('click', () => openAuthModal('login'));
     logoutBtn.addEventListener('click', logout);
     authBackdrop.addEventListener('click', closeAuthModal);
@@ -105,6 +310,11 @@ document.addEventListener('DOMContentLoaded', () => {
     document.querySelectorAll('.workspace-tabs .tab-btn').forEach((btn) => {
         btn.addEventListener('click', () => switchPanel(btn.dataset.panel));
     });
+
+    initAdminSubtabs();
+    initAdminSettingsSearch();
+    initTooltips();
+    initMermaidLightboxClicks();
 
     messageInput.addEventListener('keydown', (e) => {
         if (e.key === 'Enter' && !e.shiftKey) {
@@ -632,6 +842,7 @@ async function readStream(response) {
     let streamContent = null;
     let accumulated = '';
     let streamRafId = null;
+    let doneReceived = false;
 
     const cancelStreamMarkdownFrame = () => {
         if (streamRafId != null) {
@@ -646,6 +857,7 @@ async function readStream(response) {
             return;
         }
         streamContent.innerHTML = formatMessage(accumulated);
+        renderMermaidIn(streamContent);
         scrollToBottom();
     };
 
@@ -675,6 +887,9 @@ async function readStream(response) {
     scrollToBottom();
 
     const processSseBlock = (block) => {
+        if (doneReceived) {
+            return;
+        }
         const lines = block.split('\n').map((line) => line.replace(/\r$/, ''));
         lines.forEach((line) => {
             if (!line.startsWith('data:')) {
@@ -703,6 +918,7 @@ async function readStream(response) {
                 currentChatId = payload.chat_id || currentChatId;
                 ensureStreamShell();
                 streamContent.innerHTML = formatMessage(finalText);
+                renderMermaidIn(streamContent);
                 streamContent.classList.remove('streaming-in-progress');
                 linkifySourceReferences(streamShell, payload.sources || [], payload.citations || []);
                 addSourcesButton(streamShell, payload.sources || [], payload.citations || []);
@@ -718,15 +934,18 @@ async function readStream(response) {
                 });
                 loadRelatedDocuments(streamShell, payload.sources || []);
                 addFeedbackControls(streamShell, payload.message_id);
+                doneReceived = true;
             } else if (payload.type === 'error') {
                 cancelStreamMarkdownFrame();
                 ensureStreamShell();
                 streamContent.textContent = payload.message || 'Ошибка потока';
                 streamContent.classList.remove('streaming-in-progress');
+                doneReceived = true;
             }
         });
     };
 
+    let processedBlocksSinceYield = 0;
     while (true) {
         const {done, value} = await reader.read();
         if (done) {
@@ -738,7 +957,16 @@ async function readStream(response) {
         for (const part of chunks) {
             if (part.trim()) {
                 processSseBlock(part);
-                await new Promise((resolve) => requestAnimationFrame(resolve));
+                processedBlocksSinceYield += 1;
+                if (doneReceived) {
+                    try { await reader.cancel(); } catch (_) { /* ignore */ }
+                    return;
+                }
+                // Даём браузеру шанс обработать ввод/скролл, но не тормозим на каждом блоке.
+                if (processedBlocksSinceYield >= 50) {
+                    processedBlocksSinceYield = 0;
+                    await new Promise((resolve) => setTimeout(resolve, 0));
+                }
             }
         }
     }
@@ -760,6 +988,7 @@ function addMessage(text, type, details = {}) {
     content.className = 'message-content';
     if (type === 'bot') {
         content.innerHTML = formatMessage(text);
+        renderMermaidIn(content);
     } else {
         content.textContent = text;
     }
@@ -1396,6 +1625,553 @@ async function loadAdminOverview() {
     } catch (error) {
         adminOverview.innerHTML = `<div class="empty-state">${escapeHtml(error.message)}</div>`;
     }
+}
+
+function initAdminSubtabs() {
+    const buttons = document.querySelectorAll('[data-admin-panel]');
+    if (!buttons.length) {
+        return;
+    }
+    buttons.forEach((btn) => {
+        btn.addEventListener('click', () => {
+            const panelId = btn.getAttribute('data-admin-panel');
+            buttons.forEach((b) => b.classList.toggle('active', b === btn));
+            document.querySelectorAll('.admin-subpanel').forEach((panel) => {
+                panel.classList.toggle('active', panel.id === panelId);
+            });
+            if (panelId === 'adminSettingsPanel') {
+                loadAdminSettings();
+            }
+        });
+    });
+}
+
+let _adminSettingsCache = null;
+let _adminSettingsBaseByKey = {};
+let _adminSettingsDraft = {};
+let _adminSettingsDirty = new Set();
+
+async function loadAdminSettings() {
+    if (!adminSettings) {
+        return;
+    }
+    if (currentAuth.role !== 'admin') {
+        adminSettings.innerHTML = '<div class="empty-state">Раздел доступен только администратору</div>';
+        _adminSettingsCache = null;
+        return;
+    }
+    adminSettings.innerHTML = '<div class="empty-state">Загрузка настроек...</div>';
+    try {
+        const data = await apiJson('/api/admin/settings/schema');
+        _adminSettingsCache = data;
+        _adminSettingsBaseByKey = indexAdminSettingsByKey(data);
+        renderAdminSettings(data, (adminSettingsSearch?.value || '').trim());
+        initAdminSettingsEditorEvents();
+        updateAdminSettingsDraftToolbar();
+    } catch (error) {
+        adminSettings.innerHTML = `<div class="empty-state">${escapeHtml(error.message)}</div>`;
+        _adminSettingsCache = null;
+    }
+}
+
+function indexAdminSettingsByKey(payload) {
+    const result = {};
+    const groups = payload?.groups || [];
+    for (const g of groups) {
+        for (const item of (g.items || [])) {
+            if (item?.key) {
+                result[item.key] = item;
+            }
+        }
+    }
+    return result;
+}
+
+function initAdminSettingsSearch() {
+    if (!adminSettingsSearch) {
+        return;
+    }
+    adminSettingsSearch.addEventListener('input', () => {
+        if (!_adminSettingsCache) {
+            return;
+        }
+        renderAdminSettings(_adminSettingsCache, adminSettingsSearch.value);
+    });
+}
+
+function renderAdminSettings(payload, query) {
+    const groups = payload?.groups || [];
+    const q = String(query || '').toLowerCase();
+    const collapsed = loadAdminSettingsCollapsed();
+    const filtered = groups.map((g) => {
+        const items = (g.items || []).filter((item) => {
+            if (!q) return true;
+            const hay = [
+                item.key,
+                item.env,
+                item.description,
+                item.allowed,
+                item.type,
+                item.secret ? 'секрет' : '',
+            ].join(' ').toLowerCase();
+            return hay.includes(q);
+        });
+        return {...g, items};
+    }).filter((g) => (g.items || []).length);
+
+    if (!filtered.length) {
+        adminSettings.innerHTML = '<div class="empty-state">Ничего не найдено</div>';
+        return;
+    }
+
+    adminSettings.innerHTML = filtered.map((group) => {
+        const items = group.items || [];
+        const groupId = String(group.title || '').toLowerCase();
+        const isCollapsed = !q && !!collapsed[groupId];
+        return `
+            <section class="admin-settings-group ${isCollapsed ? 'is-collapsed' : ''}" data-settings-group="${escapeHtml(groupId)}">
+                <button class="admin-settings-group__header" type="button" aria-expanded="${isCollapsed ? 'false' : 'true'}">
+                    <span class="admin-settings-group__chev" aria-hidden="true">▾</span>
+                    <h3>${escapeHtml(group.title || '')}</h3>
+                    <span>${items.length} шт.</span>
+                    <span class="admin-settings-group__hint">Нажмите, чтобы свернуть</span>
+                </button>
+                <div class="admin-settings-group__list">
+                    ${items.map(renderAdminSettingItem).join('')}
+                </div>
+            </section>
+        `;
+    }).join('');
+}
+
+function renderAdminSettingItem(item) {
+    const value = item.secret ? (item.masked ? item.masked : '—') : (item.value || '—');
+    const desc = item.description || '';
+    const allowed = item.allowed || '';
+    const label = item.label || '';
+    const ui = item.ui || {};
+    const isOverridden = !!item.is_overridden;
+    const restartRequired = !!item.restart_required;
+    const restartHint = item.restart_hint || '';
+    const dirty = _adminSettingsDirty.has(item.key);
+    const input = renderSettingInput(item, ui);
+    return `
+        <div class="setting-item ${dirty ? 'is-dirty' : ''} ${restartRequired ? 'is-restart' : ''}" data-setting-row="${escapeHtml(item.key || '')}">
+            <div class="setting-item__main">
+                <div class="setting-item__title">
+                    <strong>${escapeHtml(item.key || '')}</strong>
+                    ${label ? `<span class="setting-item__label">${escapeHtml(label)}</span>` : ''}
+                    <button
+                        class="help-icon"
+                        type="button"
+                        aria-label="Справка по настройке"
+                        data-setting-key="${escapeHtml(item.key || '')}"
+                        data-setting-env="${escapeHtml(item.env || '')}"
+                        data-setting-type="${escapeHtml(item.type || '')}"
+                        data-setting-description="${escapeHtml(desc)}"
+                        data-setting-allowed="${escapeHtml(allowed)}"
+                        data-setting-secret="${item.secret ? '1' : '0'}"
+                        data-setting-restart="${restartRequired ? '1' : '0'}"
+                        data-setting-restart-hint="${escapeHtml(restartHint)}"
+                    >?</button>
+                </div>
+                <div class="setting-item__meta">
+                    <span class="setting-meta-chip" title="Переменная окружения">${escapeHtml(item.env || '')}</span>
+                    <span class="setting-meta-chip" title="Тип">${escapeHtml(item.type || '')}</span>
+                    ${item.secret ? '<span class="setting-meta-chip setting-meta-chip--secret">секрет</span>' : ''}
+                    ${isOverridden ? '<span class="setting-meta-chip setting-meta-chip--override">override</span>' : ''}
+                    ${restartRequired ? '<span class="setting-meta-chip setting-meta-chip--restart">нужен перезапуск</span>' : ''}
+                    ${dirty ? '<span class="setting-meta-chip setting-meta-chip--dirty">изменено</span>' : ''}
+                </div>
+                <div class="setting-item__control">
+                    ${input}
+                    <div class="setting-item__actions">
+                        ${isOverridden ? `<button class="secondary-btn setting-clear-btn" type="button" data-setting-clear="${escapeHtml(item.key || '')}">Сбросить</button>` : ''}
+                        <span class="setting-item__status" data-setting-status="${escapeHtml(item.key || '')}"></span>
+                    </div>
+                </div>
+            </div>
+            <div class="setting-item__value" title="Текущее значение">${escapeHtml(value)}</div>
+        </div>
+    `;
+}
+
+function renderSettingInput(item, ui) {
+    const key = item.key || '';
+    const type = item.type || 'str';
+    const draft = Object.prototype.hasOwnProperty.call(_adminSettingsDraft, key) ? _adminSettingsDraft[key] : undefined;
+    const baseValue = item.secret ? '' : (item.value || '');
+    const value = draft !== undefined ? String(draft) : baseValue;
+
+    if (type === 'bool') {
+        const raw = draft !== undefined ? draft : (item.value || '');
+        const checked = raw === true || String(raw).toLowerCase() === 'true';
+        return `<label class="setting-bool"><input type="checkbox" data-setting-input="${escapeHtml(key)}" ${checked ? 'checked' : ''}> <span>Включено</span></label>`;
+    }
+
+    if (type === 'int' && (ui.kind === 'slider')) {
+        const min = Number(ui.min ?? 0);
+        const max = Number(ui.max ?? 100);
+        const step = Number(ui.step ?? 1);
+        const v = Number(draft !== undefined ? draft : (item.value ?? min));
+        return `
+            <div class="setting-slider" data-setting-slider="${escapeHtml(key)}">
+                <input type="range" min="${min}" max="${max}" step="${step}" value="${Number.isFinite(v) ? v : min}" data-setting-range="${escapeHtml(key)}">
+                <input type="number" min="${min}" max="${max}" step="${step}" value="${Number.isFinite(v) ? v : min}" data-setting-input="${escapeHtml(key)}">
+            </div>
+        `;
+    }
+
+    if (type === 'int') {
+        return `<input class="setting-text" type="number" data-setting-input="${escapeHtml(key)}" value="${escapeHtml(value)}">`;
+    }
+    if (type === 'float') {
+        return `<input class="setting-text" type="number" step="0.01" data-setting-input="${escapeHtml(key)}" value="${escapeHtml(value)}">`;
+    }
+    if (type === 'list') {
+        return `<textarea class="setting-textarea" rows="2" data-setting-input="${escapeHtml(key)}">${escapeHtml(value)}</textarea>`;
+    }
+    if (item.secret) {
+        // Для секрета не показываем текущее значение. Draft храним только если пользователь ввёл что-то.
+        return `<input class="setting-text" type="password" placeholder="Введите новое значение" data-setting-input="${escapeHtml(key)}" value="${escapeHtml(draft !== undefined ? String(draft) : '')}">`;
+    }
+    return `<input class="setting-text" type="text" data-setting-input="${escapeHtml(key)}" value="${escapeHtml(value)}">`;
+}
+
+function initAdminSettingsEditorEvents() {
+    if (!adminSettings) return;
+
+    // sync range <-> number
+    adminSettings.addEventListener('input', (evt) => {
+        const target = evt.target;
+        if (!(target instanceof HTMLElement)) return;
+        if (target.matches('[data-setting-input]')) {
+            const key = target.getAttribute('data-setting-input');
+            if (key) {
+                updateAdminSettingsDraftFromInput(key, target);
+            }
+        }
+        if (target.matches('input[data-setting-range]')) {
+            const key = target.getAttribute('data-setting-range');
+            const wrap = adminSettings.querySelector(`[data-setting-slider="${CSS.escape(key)}"]`);
+            const num = wrap?.querySelector(`input[data-setting-input="${CSS.escape(key)}"]`);
+            if (num) num.value = target.value;
+        } else if (target.matches('input[data-setting-input]')) {
+            const key = target.getAttribute('data-setting-input');
+            const wrap = adminSettings.querySelector(`[data-setting-slider="${CSS.escape(key)}"]`);
+            const range = wrap?.querySelector(`input[data-setting-range="${CSS.escape(key)}"]`);
+            if (range && target instanceof HTMLInputElement) range.value = target.value;
+        }
+    });
+
+    adminSettings.addEventListener('click', async (evt) => {
+        const target = evt.target;
+        if (!(target instanceof HTMLElement)) return;
+
+        const header = target.closest?.('.admin-settings-group__header');
+        if (header) {
+            const group = header.closest?.('.admin-settings-group');
+            const groupId = group?.getAttribute('data-settings-group');
+            if (groupId) {
+                const collapsed = loadAdminSettingsCollapsed();
+                const willCollapse = !group.classList.contains('is-collapsed');
+                collapsed[groupId] = willCollapse;
+                saveAdminSettingsCollapsed(collapsed);
+                group.classList.toggle('is-collapsed', willCollapse);
+                header.setAttribute('aria-expanded', willCollapse ? 'false' : 'true');
+            }
+            return;
+        }
+
+        const clearKey = target.getAttribute('data-setting-clear');
+        if (clearKey) {
+            await clearAdminSetting(clearKey);
+            return;
+        }
+    });
+}
+
+function updateAdminSettingsDraftFromInput(key, el) {
+    const base = _adminSettingsBaseByKey[key];
+    if (!base) return;
+
+    let value = null;
+    if (el instanceof HTMLInputElement && el.type === 'checkbox') {
+        value = el.checked;
+    } else if (el instanceof HTMLTextAreaElement) {
+        value = el.value;
+    } else if (el instanceof HTMLInputElement) {
+        value = el.value;
+    } else {
+        return;
+    }
+
+    // Секрет считаем "изменённым" только если есть ввод.
+    if (base.secret) {
+        const str = String(value || '');
+        if (!str) {
+            delete _adminSettingsDraft[key];
+            _adminSettingsDirty.delete(key);
+        } else {
+            _adminSettingsDraft[key] = str;
+            _adminSettingsDirty.add(key);
+        }
+        updateAdminSettingsRowState(key);
+        updateAdminSettingsDraftToolbar();
+        return;
+    }
+
+    const baseVal = base.value ?? '';
+    const baseType = base.type || 'str';
+    const normalized = normalizeValueForCompare(baseType, value);
+    const normalizedBase = normalizeValueForCompare(baseType, baseVal);
+    if (normalized === normalizedBase) {
+        delete _adminSettingsDraft[key];
+        _adminSettingsDirty.delete(key);
+    } else {
+        _adminSettingsDraft[key] = value;
+        _adminSettingsDirty.add(key);
+    }
+    updateAdminSettingsRowState(key);
+    updateAdminSettingsDraftToolbar();
+}
+
+function normalizeValueForCompare(type, value) {
+    if (type === 'bool') {
+        if (value === true || String(value).toLowerCase() === 'true') return 'true';
+        return 'false';
+    }
+    if (type === 'int') {
+        const n = parseInt(String(value), 10);
+        return Number.isFinite(n) ? String(n) : '';
+    }
+    if (type === 'float') {
+        const n = Number(String(value).replace(',', '.'));
+        return Number.isFinite(n) ? String(n) : '';
+    }
+    if (type === 'list') {
+        return String(value || '')
+            .split(',')
+            .map((x) => x.trim())
+            .filter(Boolean)
+            .join(',');
+    }
+    return String(value ?? '');
+}
+
+function updateAdminSettingsRowState(key) {
+    const row = adminSettings.querySelector(`[data-setting-row="${CSS.escape(key)}"]`);
+    if (!row) return;
+    row.classList.toggle('is-dirty', _adminSettingsDirty.has(key));
+}
+
+function updateAdminSettingsDraftToolbar() {
+    const count = _adminSettingsDirty.size;
+    if (adminSettingsDraftInfo) {
+        adminSettingsDraftInfo.textContent = count ? `Изменено: ${count}` : '';
+    }
+    if (saveAdminSettingsDraftBtn) {
+        saveAdminSettingsDraftBtn.disabled = count === 0;
+    }
+    if (resetAdminSettingsDraftBtn) {
+        resetAdminSettingsDraftBtn.disabled = count === 0;
+    }
+}
+
+async function resetAdminSettingsDraft() {
+    _adminSettingsDraft = {};
+    _adminSettingsDirty = new Set();
+    if (_adminSettingsCache) {
+        renderAdminSettings(_adminSettingsCache, (adminSettingsSearch?.value || '').trim());
+        initAdminSettingsEditorEvents();
+    }
+    updateAdminSettingsDraftToolbar();
+}
+
+async function saveAdminSettingsDraft() {
+    const keys = Array.from(_adminSettingsDirty);
+    if (!keys.length) return;
+    if (saveAdminSettingsDraftBtn) {
+        saveAdminSettingsDraftBtn.disabled = true;
+        saveAdminSettingsDraftBtn.textContent = 'Сохранение...';
+    }
+    try {
+        let i = 0;
+        for (const key of keys) {
+            i += 1;
+            if (adminSettingsDraftInfo) {
+                adminSettingsDraftInfo.textContent = `Сохранение ${i}/${keys.length}...`;
+            }
+            const value = _adminSettingsDraft[key];
+            await apiJson('/api/admin/settings', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({key, value, action: 'set'}),
+            });
+        }
+        _adminSettingsDraft = {};
+        _adminSettingsDirty = new Set();
+        await loadAdminSettings();
+        if (adminSettingsDraftInfo) {
+            adminSettingsDraftInfo.textContent = 'Сохранено';
+            setTimeout(() => {
+                if (adminSettingsDraftInfo) adminSettingsDraftInfo.textContent = '';
+            }, 2000);
+        }
+    } catch (error) {
+        if (adminSettingsDraftInfo) {
+            adminSettingsDraftInfo.textContent = error.message;
+        }
+    } finally {
+        if (saveAdminSettingsDraftBtn) {
+            saveAdminSettingsDraftBtn.textContent = 'Сохранить всё';
+        }
+        updateAdminSettingsDraftToolbar();
+    }
+}
+
+function loadAdminSettingsCollapsed() {
+    try {
+        const raw = localStorage.getItem('adminSettingsCollapsed') || '{}';
+        const obj = JSON.parse(raw);
+        return obj && typeof obj === 'object' ? obj : {};
+    } catch (_) {
+        return {};
+    }
+}
+
+function saveAdminSettingsCollapsed(state) {
+    try {
+        localStorage.setItem('adminSettingsCollapsed', JSON.stringify(state || {}));
+    } catch (_) {
+        /* ignore */
+    }
+}
+
+async function saveAdminSetting(key) {
+    const input = adminSettings.querySelector(`[data-setting-input="${CSS.escape(key)}"]`);
+    const status = adminSettings.querySelector(`[data-setting-status="${CSS.escape(key)}"]`);
+    if (!input) return;
+    if (status) status.textContent = 'Сохранение...';
+
+    let value = null;
+    if (input instanceof HTMLInputElement && input.type === 'checkbox') {
+        value = input.checked;
+    } else if (input instanceof HTMLTextAreaElement) {
+        value = input.value;
+    } else if (input instanceof HTMLInputElement) {
+        value = input.value;
+    }
+    try {
+        await apiJson('/api/admin/settings', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({key, value, action: 'set'}),
+        });
+        if (status) status.textContent = 'Сохранено';
+        await loadAdminSettings();
+    } catch (error) {
+        if (status) status.textContent = error.message;
+    }
+}
+
+async function clearAdminSetting(key) {
+    const status = adminSettings.querySelector(`[data-setting-status="${CSS.escape(key)}"]`);
+    if (status) status.textContent = 'Сброс...';
+    try {
+        await apiJson('/api/admin/settings', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({key, action: 'clear'}),
+        });
+        if (status) status.textContent = 'Сброшено';
+        delete _adminSettingsDraft[key];
+        _adminSettingsDirty.delete(key);
+        await loadAdminSettings();
+    } catch (error) {
+        if (status) status.textContent = error.message;
+    }
+}
+
+function initTooltips() {
+    document.addEventListener('click', (evt) => {
+        const target = evt.target;
+        const open = document.querySelector('.tooltip-popover');
+        if (!(target instanceof HTMLElement)) {
+            return;
+        }
+        const button = target.closest?.('.help-icon');
+        if (!button) {
+            if (open && !open.contains(target)) {
+                open.remove();
+            }
+            return;
+        }
+        evt.preventDefault();
+        evt.stopPropagation();
+        if (open) {
+            open.remove();
+        }
+        const pop = document.createElement('div');
+        pop.className = 'tooltip-popover';
+        const key = button.getAttribute('data-setting-key') || '';
+        const env = button.getAttribute('data-setting-env') || '';
+        const type = button.getAttribute('data-setting-type') || '';
+        const description = button.getAttribute('data-setting-description') || '';
+        const allowed = button.getAttribute('data-setting-allowed') || '';
+        const secret = (button.getAttribute('data-setting-secret') || '') === '1';
+        const restart = (button.getAttribute('data-setting-restart') || '') === '1';
+        const restartHint = button.getAttribute('data-setting-restart-hint') || '';
+
+        const wrap = document.createElement('div');
+        wrap.className = 'setting-tooltip';
+
+        const title = document.createElement('div');
+        title.className = 'setting-tooltip__title';
+        title.textContent = key;
+        wrap.appendChild(title);
+
+        const addRow = (label, value) => {
+            if (!value) return;
+            const row = document.createElement('div');
+            row.className = 'setting-tooltip__row';
+            const strong = document.createElement('strong');
+            strong.textContent = label;
+            const span = document.createElement('span');
+            span.textContent = value;
+            row.appendChild(strong);
+            row.appendChild(span);
+            wrap.appendChild(row);
+        };
+
+        addRow('ENV', env);
+        addRow('Тип', type);
+        addRow('Описание', description);
+        addRow('Допустимо', allowed);
+        if (restart) {
+            addRow('Применение', restartHint || 'Требуется перезапуск приложения.');
+        }
+
+        if (secret) {
+            const note = document.createElement('div');
+            note.className = 'setting-tooltip__note';
+            note.textContent = 'Значение скрыто, т.к. это секрет.';
+            wrap.appendChild(note);
+        }
+
+        pop.appendChild(wrap);
+        document.body.appendChild(pop);
+        const rect = button.getBoundingClientRect();
+        const popRect = pop.getBoundingClientRect();
+        const left = Math.max(12, Math.min(window.innerWidth - popRect.width - 12, rect.left));
+        const top = Math.min(window.innerHeight - popRect.height - 12, rect.bottom + 8);
+        pop.style.left = `${left}px`;
+        pop.style.top = `${top}px`;
+    });
+    document.addEventListener('keydown', (evt) => {
+        if (evt.key !== 'Escape') return;
+        document.querySelector('.tooltip-popover')?.remove();
+    });
 }
 
 function renderAdminList(items, formatter) {

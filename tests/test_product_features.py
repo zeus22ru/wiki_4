@@ -82,6 +82,18 @@ def test_admin_overview(mock_client, mock_reachable, mock_models, client):
     assert "settings" in data
 
 
+def test_admin_settings_schema(client):
+    login_admin(client)
+    rv = client.get("/api/admin/settings/schema")
+    assert rv.status_code == 200
+    data = rv.get_json()
+    assert isinstance(data.get("groups"), list)
+    assert data["groups"], "ожидаются группы настроек"
+    first = data["groups"][0]
+    assert "title" in first
+    assert "items" in first
+
+
 def test_optional_api_key_blocks_api_when_enabled(client, monkeypatch):
     from config import settings
 
