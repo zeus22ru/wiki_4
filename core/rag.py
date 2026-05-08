@@ -181,6 +181,105 @@ def _clip_text(value: str, limit: int) -> str:
     return value[:limit - 3].rstrip() + "..."
 
 
+def _clip_text_keep_newlines(value: str, limit: int) -> str:
+    """
+    Обрезать длинный текст, сохраняя переводы строк.
+
+    Важно для контента, где переносы строк несут смысл (например, Mermaid/код).
+    """
+    value = (value or "").strip()
+    if len(value) <= limit:
+        return value
+    return value[:limit - 3].rstrip() + "..."
+
+
+def _normalize_mermaid_code(code_text: str) -> str:
+    """
+    Дешёвая нормализация Mermaid-кода для типовых ошибок LLM.
+
+    Цель: повысить шанс успешного рендера без ещё одного LLM-вызова.
+    """
+    text = (code_text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not text:
+        return text
+
+    # Нормализация частых HTML-тегов внутри label'ов.
+    # `<b>` убираем, а `<br>` унифицируем к `<br/>` (Mermaid любит этот вариант для многострочных подписей).
+    text = re.sub(r"(?i)</?b\s*>", "", text)
+    text = re.sub(r"(?i)<br\s*/?>", "<br/>", text)
+
+    # Частая ошибка LLM: подписи ребер в кавычках: `A -- "текст" --> B`.
+    # Для flowchart более устойчиво: `A -->|текст| B`.
+    text = re.sub(r'(?m)(--+)\s*"([^"\n]+)"\s*(--+>)', r"\1>| \2 |\3", text)
+    text = re.sub(r'(?m)(-\.+)\s*"([^"\n]+)"\s*(\.+->)', r"\1>| \2 |\3", text)
+
+    # Нормализуем "умные" кавычки.
+    text = (
+        text.replace("“", '"')
+        .replace("”", '"')
+        .replace("„", '"')
+        .replace("«", '"')
+        .replace("»", '"')
+        .replace("’", "'")
+        .replace("‘", "'")
+    )
+
+    # Частая ошибка: `subgraph "Название с пробелами"` (и тем более с вложенными кавычками).
+    # Приводим к форме `subgraph sg1["Название ..."]`.
+    sg_idx = 0
+
+    def _fix_subgraph_quoted(m: re.Match) -> str:
+        nonlocal sg_idx
+        sg_idx += 1
+        label = (m.group(1) or "").strip()
+        # Внутри ["..."] нельзя оставлять двойные кавычки — заменяем на одиночные.
+        label = label.replace('"', "'")
+        return f'subgraph sg{sg_idx}["{label}"]'
+
+    text = re.sub(
+        r'(?mi)^\s*subgraph\s+"([^"\n]*(?:"[^"\n]*)*)"\s*$',
+        _fix_subgraph_quoted,
+        text,
+    )
+    text = re.sub(
+        r"(?mi)^\s*subgraph\s+'([^'\n]*(?:'[^'\n]*)*)'\s*$",
+        _fix_subgraph_quoted,
+        text,
+    )
+
+    def _sanitize_bracket_labels(line: str) -> str:
+        """
+        В Mermaid flowchart есть форма `A["text"]` и `subgraph id["label"]`.
+        Если внутри text есть двойные кавычки, Mermaid ломается.
+        """
+        if '["' not in line:
+            return line
+        out = line
+        start = 0
+        while True:
+            i = out.find('["', start)
+            if i < 0:
+                break
+            j = out.find('"]', i + 2)
+            if j < 0:
+                break
+            inner = out[i + 2 : j]
+            # Переводы строк внутри [] ломают парсер Mermaid — заменяем на `<br/>`.
+            if "\n" in inner:
+                inner = inner.replace("\n", "<br/>")
+            if '"' in inner:
+                inner = inner.replace('"', "'")
+            if r"\"" in inner:
+                inner = inner.replace(r"\"", "'")
+            out = out[: i + 2] + inner + out[j:]
+            start = i + 2 + len(inner) + 2
+        return out
+
+    text = "\n".join(_sanitize_bracket_labels(ln) for ln in text.split("\n"))
+
+    return text
+
+
 def _parse_json_object(value: str) -> Dict[str, Any]:
     """Достать JSON-объект из ответа модели, даже если она добавила лишний текст."""
     value = (value or "").strip()
@@ -1047,6 +1146,7 @@ class RAGSystem:
         enabled = getattr(settings, "MERMAID_AUTOFIX_ENABLED", True)
         if not enabled:
             return answer
+        log_enabled = getattr(settings, "MERMAID_AUTOFIX_LOG_ENABLED", False)
 
         text = (answer or "")
         if "```mermaid" not in text:
@@ -1063,7 +1163,16 @@ class RAGSystem:
             raw = (m.group(1) or "").strip()
             if not raw:
                 continue
-            raw_clip = _clip_text(raw, 6000)
+            raw_norm = _normalize_mermaid_code(raw)
+            if log_enabled and raw_norm != raw:
+                rag_logger.debug(
+                    "Mermaid autofix: нормализация (до LLM)\n--- raw ---\n%s\n--- norm ---\n%s",
+                    _clip_text_keep_newlines(raw, 1200),
+                    _clip_text_keep_newlines(raw_norm, 1200),
+                )
+            raw = raw_norm
+            # В Mermaid переносы строк критичны для синтаксиса; не схлопываем whitespace.
+            raw_clip = _clip_text_keep_newlines(raw, 6000)
             fix_prompt = f"""Ты валидируешь и исправляешь синтаксис Mermaid (совместимость Mermaid 10.x).
 
 Вход: Mermaid-код диаграммы.
@@ -1088,9 +1197,22 @@ MERMAID:
             fence_match = re.search(r"```(?:mermaid)?\s*([\s\S]*?)\s*```", candidate, flags=re.IGNORECASE)
             if fence_match:
                 candidate = (fence_match.group(1) or "").strip()
+            candidate_norm = _normalize_mermaid_code(candidate)
+            if log_enabled and candidate_norm != candidate:
+                rag_logger.debug(
+                    "Mermaid autofix: нормализация (после LLM)\n--- candidate ---\n%s\n--- norm ---\n%s",
+                    _clip_text_keep_newlines(candidate, 1200),
+                    _clip_text_keep_newlines(candidate_norm, 1200),
+                )
+            candidate = candidate_norm
 
             # Минимальная sanity-проверка: должен начинаться с известного типа диаграммы.
             if not looks_like_mermaid(candidate):
+                if log_enabled:
+                    rag_logger.debug(
+                        "Mermaid autofix: пропуск, не похоже на Mermaid (first line=%r)",
+                        (candidate.splitlines() or [""])[0][:180],
+                    )
                 continue
 
             fixed = fixed[: m.start(1)] + candidate + fixed[m.end(1) :]
@@ -1098,6 +1220,8 @@ MERMAID:
 
         if replaced:
             rag_logger.info("Mermaid autofix: исправлено блоков=%s", replaced)
+        elif log_enabled:
+            rag_logger.debug("Mermaid autofix: блоки найдены=%s, замен не выполнено", len(blocks))
         return fixed
 
     def build_retrieval_query(

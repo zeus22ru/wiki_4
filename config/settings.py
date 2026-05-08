@@ -148,6 +148,16 @@ class Settings:
     # Максимум кандидатов в пуле до финального top_k (после дедупликации).
     DEEP_RETRIEVAL_MAX_CANDIDATES: int = int(os.getenv("DEEP_RETRIEVAL_MAX_CANDIDATES", "60"))
 
+    # Mermaid автофикс (после генерации ответа)
+    # Включает дополнительный LLM-вызов для попытки исправить Mermaid в ```mermaid``` блоках
+    MERMAID_AUTOFIX_ENABLED: bool = os.getenv("MERMAID_AUTOFIX_ENABLED", "true").lower() in (
+        "1", "true", "yes", "on",
+    )
+    # Подробный лог Mermaid-автофикса (включайте временно для отладки)
+    MERMAID_AUTOFIX_LOG_ENABLED: bool = os.getenv("MERMAID_AUTOFIX_LOG_ENABLED", "false").lower() in (
+        "1", "true", "yes", "on",
+    )
+
     # Logging настройки
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
     LOG_DIR: str = os.getenv("LOG_DIR", "./logs")
