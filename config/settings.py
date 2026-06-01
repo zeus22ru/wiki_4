@@ -6,8 +6,10 @@
 """
 
 import os
+import threading
+import time
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 import requests
 from dotenv import load_dotenv
@@ -272,12 +274,15 @@ def uses_openai_compatible_api() -> bool:
     )
 
 
-def inference_server_reachable(timeout: float = 5.0) -> bool:
-    """
-    Доступность сервера инференса.
-    Для OpenAI-совместимого режима — GET /v1/models и непустой список (LM Studio не поддерживает /api/tags).
-    Для Ollama — GET /api/tags.
-    """
+_INFERENCE_REACHABLE_CACHE: Optional[Tuple[bool, float]] = None
+_INFERENCE_REACHABLE_LOCK = threading.Lock()
+INFERENCE_REACHABLE_CACHE_TTL: float = float(
+    os.getenv("INFERENCE_REACHABLE_CACHE_TTL", "45")
+)
+
+
+def _inference_server_reachable_uncached(timeout: float = 5.0) -> bool:
+    """Проверка доступности сервера инференса без кэша."""
     base = settings.OLLAMA_URL.rstrip("/")
     if uses_openai_compatible_api():
         try:
@@ -296,6 +301,29 @@ def inference_server_reachable(timeout: float = 5.0) -> bool:
         return r.status_code == 200
     except Exception:
         return False
+
+
+def inference_server_reachable(timeout: float = 5.0, *, use_cache: bool = True) -> bool:
+    """
+    Доступность сервера инференса.
+    Для OpenAI-совместимого режима — GET /v1/models и непустой список (LM Studio не поддерживает /api/tags).
+    Для Ollama — GET /api/tags.
+
+    Результат кэшируется на INFERENCE_REACHABLE_CACHE_TTL секунд (по умолчанию 45), чтобы не
+    дергать /v1/models на каждый health-check во время длинной генерации.
+    """
+    global _INFERENCE_REACHABLE_CACHE
+    if use_cache and INFERENCE_REACHABLE_CACHE_TTL > 0:
+        with _INFERENCE_REACHABLE_LOCK:
+            if _INFERENCE_REACHABLE_CACHE is not None:
+                cached_ok, cached_at = _INFERENCE_REACHABLE_CACHE
+                if time.monotonic() - cached_at < INFERENCE_REACHABLE_CACHE_TTL:
+                    return cached_ok
+    ok = _inference_server_reachable_uncached(timeout)
+    if use_cache and INFERENCE_REACHABLE_CACHE_TTL > 0:
+        with _INFERENCE_REACHABLE_LOCK:
+            _INFERENCE_REACHABLE_CACHE = (ok, time.monotonic())
+    return ok
 
 
 def fetch_remote_model_ids(timeout: float = 5.0) -> List[str]:

@@ -10,8 +10,11 @@ import math
 import pickle
 import re
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Any, Callable, DefaultDict, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, DefaultDict, Dict, List, MutableMapping, Optional, Sequence, Tuple
+
+from utils.embeddings import get_embeddings_batch
 
 from chromadb.errors import NotFoundError
 
@@ -243,6 +246,82 @@ def bm25_ranking(bm25: Any, id_list: List[str], query: str, top_n: int) -> List[
     return [id_list[i] for i in ranked[:top_n]]
 
 
+def _unique_nonempty_queries(queries: Sequence[str]) -> List[str]:
+    seen: set[str] = set()
+    out: List[str] = []
+    for raw in queries:
+        q = (raw or "").strip()
+        if not q or q in seen:
+            continue
+        seen.add(q)
+        out.append(q)
+    return out
+
+
+def resolve_dense_embeddings(
+    queries: Sequence[str],
+    embedding_cache: Optional[MutableMapping[str, List[float]]] = None,
+) -> Tuple[Dict[str, List[float]], bool]:
+    """
+    Эмбеддинги для списка запросов одним batch-вызовом; пополняет embedding_cache.
+
+    Returns:
+        (query -> vector, all_ok)
+    """
+    cache: MutableMapping[str, List[float]] = (
+        embedding_cache if embedding_cache is not None else {}
+    )
+    unique = _unique_nonempty_queries(queries)
+    missing = [q for q in unique if not cache.get(q)]
+    if missing:
+        batch = get_embeddings_batch(missing)
+        if len(batch) != len(missing):
+            logger.error(
+                "Пакет эмбеддингов для retrieval: ожидалось %s, получено %s",
+                len(missing),
+                len(batch),
+            )
+            return dict(cache), False
+        for q, emb in zip(missing, batch):
+            if not emb:
+                return dict(cache), False
+            cache[q] = emb
+    return dict(cache), True
+
+
+def _dense_rankings_parallel(
+    collection,
+    query_embeddings: List[Tuple[str, List[float]]],
+    pool: int,
+    reload_collection: Callable[[], Any],
+) -> List[List[str]]:
+    """Параллельные dense-запросы к Chroma (порядок как у query_embeddings)."""
+    if not query_embeddings:
+        return []
+    if len(query_embeddings) == 1:
+        _q, emb = query_embeddings[0]
+        ids, _, _, _ = _chroma_query_dense(collection, emb, pool, reload_collection)
+        return [[str(x) for x in ids]]
+
+    max_workers = min(4, len(query_embeddings))
+    results: List[Optional[List[str]]] = [None] * len(query_embeddings)
+
+    def _one(idx: int, emb: List[float]) -> Tuple[int, List[str]]:
+        ids, _, _, _ = _chroma_query_dense(collection, emb, pool, reload_collection)
+        return idx, [str(x) for x in ids]
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = [
+            executor.submit(_one, i, emb)
+            for i, (_q, emb) in enumerate(query_embeddings)
+        ]
+        for fut in as_completed(futures):
+            idx, ranking = fut.result()
+            results[idx] = ranking
+
+    return [r if r is not None else [] for r in results]
+
+
 def hybrid_retrieve(
     collection,
     query_strings_for_dense: List[str],
@@ -252,6 +331,7 @@ def hybrid_retrieve(
     min_score: float,
     reload_collection: Callable[[], Any],
     bm25_bundle: Optional[Tuple[Any, List[str]]] = None,
+    embedding_cache: Optional[MutableMapping[str, List[float]]] = None,
 ) -> Tuple[List[Dict[str, Any]], Optional[str], Dict[str, Any]]:
     """
     Гибридный поиск с RRF и опциональным rerank.
@@ -270,7 +350,11 @@ def hybrid_retrieve(
     # --- только dense ---
     if mode == "dense":
         primary_q = query_strings_for_dense[0] if query_strings_for_dense else ""
-        emb = get_embedding_fn(primary_q)
+        primary_q = (primary_q or "").strip()
+        emb_map, ok = resolve_dense_embeddings([primary_q], embedding_cache)
+        if not ok or not primary_q:
+            return [], "embedding_unavailable", diagnostics
+        emb = emb_map.get(primary_q)
         if not emb:
             return [], "embedding_unavailable", diagnostics
         ids, dists, metas, docs = _chroma_query_dense(collection, emb, pool, reload_collection)
@@ -296,13 +380,25 @@ def hybrid_retrieve(
     # --- гибрид / sparse-only ветка ---
     dense_rankings: List[List[str]] = []
     all_embeddings_ok = True
-    for q in query_strings_for_dense:
-        emb = get_embedding_fn(q)
-        if not emb:
-            all_embeddings_ok = False
-            break
-        ids, _, _, _ = _chroma_query_dense(collection, emb, pool, reload_collection)
-        dense_rankings.append([str(x) for x in ids])
+    if mode != "sparse" and query_strings_for_dense:
+        emb_map, all_embeddings_ok = resolve_dense_embeddings(
+            query_strings_for_dense, embedding_cache
+        )
+        if all_embeddings_ok:
+            pairs: List[Tuple[str, List[float]]] = []
+            for q in query_strings_for_dense:
+                qn = (q or "").strip()
+                if not qn:
+                    continue
+                vec = emb_map.get(qn)
+                if not vec:
+                    all_embeddings_ok = False
+                    break
+                pairs.append((qn, vec))
+            if all_embeddings_ok and pairs:
+                dense_rankings = _dense_rankings_parallel(
+                    collection, pairs, pool, reload_collection
+                )
 
     if mode != "sparse" and not all_embeddings_ok:
         return [], "embedding_unavailable", diagnostics

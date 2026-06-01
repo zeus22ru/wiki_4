@@ -605,6 +605,7 @@ class RAGSystem:
 
         started = time.time()
         expansion = self.expand_retrieval_queries(user_query, conversation_history)
+        embedding_cache: Dict[str, List[float]] = {}
         deep_retrieval_logger.debug(
             "Deep retrieval: params top_k=%s, min_score=%s, max_iters=%s, new_per_iter=%s, stop_best=%.3f, max_candidates=%s",
             top_k,
@@ -644,7 +645,12 @@ class RAGSystem:
 
         for iter_idx in range(max_iters):
             iter_started = time.time()
-            documents, err, diag = self._retrieve_documents_inner(expansion, top_k=top_k, min_score=min_score)
+            documents, err, diag = self._retrieve_documents_inner(
+                expansion,
+                top_k=top_k,
+                min_score=min_score,
+                embedding_cache=embedding_cache,
+            )
             last_err = err
             last_retrieve_diag = dict(diag or {})
             iter_best = _best_score(documents)
@@ -802,6 +808,7 @@ class RAGSystem:
         expansion: Dict[str, Any],
         top_k: int,
         min_score: float,
+        embedding_cache: Optional[Dict[str, List[float]]] = None,
     ) -> Tuple[List[Dict], Optional[str], Dict[str, Any]]:
         mode = (settings.RETRIEVAL_MODE or "hybrid").lower()
         bm25_bundle = self._get_bm25_bundle() if mode in ("hybrid", "sparse") else None
@@ -817,6 +824,7 @@ class RAGSystem:
                 min_score,
                 self._reload_collection,
                 bm25_bundle=bm25_bundle,
+                embedding_cache=embedding_cache,
             )
         except Exception as e:
             rag_logger.error("Ошибка гибридного поиска: %s", e, exc_info=True)
