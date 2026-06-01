@@ -38,6 +38,22 @@ def _allowed_file(filename: str) -> bool:
     return ext in {x.strip().lower() for x in settings.ALLOWED_EXTENSIONS}
 
 
+def _upload_size_error(file) -> tuple[str | None, int | None]:
+    """Проверить размер загружаемого файла против settings.MAX_FILE_SIZE."""
+    stream = getattr(file, "stream", None)
+    if stream is None:
+        return None, None
+    pos = stream.tell()
+    stream.seek(0, 2)
+    size = stream.tell()
+    stream.seek(pos)
+    max_size = int(settings.MAX_FILE_SIZE)
+    if size > max_size:
+        limit_mb = max_size / (1024 * 1024)
+        return f"Файл слишком большой. Максимальный размер: {limit_mb:.1f} МБ", 413
+    return None, None
+
+
 def _file_record(path: Path) -> dict:
     stat = path.stat()
     try:
@@ -248,6 +264,9 @@ def upload_document():
         return jsonify({"error": "Имя файла пустое"}), 400
     if not _allowed_file(file.filename):
         return jsonify({"error": "Формат файла не поддерживается"}), 400
+    size_error, size_status = _upload_size_error(file)
+    if size_error:
+        return jsonify({"error": size_error}), size_status
 
     upload_dir = Path(settings.UPLOAD_DIR)
     upload_dir.mkdir(parents=True, exist_ok=True)
@@ -269,6 +288,9 @@ def preview_document_upload():
         return jsonify({"error": "Имя файла пустое"}), 400
     if not _allowed_file(file.filename):
         return jsonify({"error": "Формат файла не поддерживается"}), 400
+    size_error, size_status = _upload_size_error(file)
+    if size_error:
+        return jsonify({"error": size_error}), size_status
 
     filename = secure_filename(file.filename)
     existing_document = _find_existing_document(filename)

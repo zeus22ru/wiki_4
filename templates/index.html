@@ -131,10 +131,10 @@
                     </button>
                     <div class="rag-toolbar-advanced" id="ragAdvancedPanel" hidden>
                         <label>Сколько источников искать
-                            <input id="topKInput" type="number" min="1" max="10" value="5">
+                            <input id="topKInput" type="number" min="1" max="50" value="{{ rag_top_k }}">
                         </label>
                         <label>Минимальная релевантность
-                            <input id="minScoreInput" type="number" min="0" max="1" step="0.05" value="0">
+                            <input id="minScoreInput" type="number" min="0" max="1" step="0.05" value="{{ rag_min_score }}">
                         </label>
                     </div>
                 </div>

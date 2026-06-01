@@ -265,6 +265,9 @@ def update_setting():
         overrides.pop(key, None)
         save_overrides(overrides)
         apply_overrides(settings, overrides)
+        if key == "MAX_FILE_SIZE":
+            from flask import current_app
+            current_app.config["MAX_CONTENT_LENGTH"] = int(settings.MAX_FILE_SIZE)
         return jsonify({"ok": True, "key": key, "action": "clear"})
 
     try:
@@ -284,4 +287,7 @@ def update_setting():
     overrides[key] = coerced
     save_overrides(overrides)
     apply_overrides(settings, overrides)
+    if key == "MAX_FILE_SIZE":
+        from flask import current_app
+        current_app.config["MAX_CONTENT_LENGTH"] = int(settings.MAX_FILE_SIZE)
     return jsonify({"ok": True, "key": key, "value": ("••••••••" if spec.secret else coerced), "overridden": True})

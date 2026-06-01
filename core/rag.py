@@ -308,12 +308,14 @@ def _parse_json_object(value: str) -> Dict[str, Any]:
 
 def _format_conversation_history(
     conversation_history: Optional[List[Dict[str, str]]],
-    max_messages: int = 10,
+    max_messages: Optional[int] = None,
     max_chars_per_message: int = 700,
 ) -> str:
     """Сжать историю чата до компактного блока для LLM."""
     if not conversation_history:
         return ""
+    if max_messages is None:
+        max_messages = max(2, int(settings.RAG_QUERY_EXPANSION_MAX_MESSAGES))
 
     role_labels = {
         "user": "Пользователь",

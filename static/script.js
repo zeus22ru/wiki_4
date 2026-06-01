@@ -1,3 +1,4 @@
+let _ragChatDefaults = {top_k: 5, min_score: 0, max_citations: 5};
 let currentSources = [];
 let currentCitations = [];
 let currentChatId = null;
@@ -524,6 +525,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initializeAuth();
     checkHealth();
     loadChats();
+    syncRagToolbarDefaults();
     setInterval(checkHealth, 30000);
 
     messageForm.addEventListener('submit', handleSubmit);
@@ -1087,9 +1089,27 @@ function buildChatPayload(message) {
         message,
         chat_id: currentChatId,
         answer_mode: answerModeSelect.value,
-        top_k: Number(topKInput.value || 5),
-        min_score: Number(minScoreInput.value || 0),
+        top_k: Number(topKInput.value),
+        min_score: Number(minScoreInput.value),
     };
+}
+
+async function syncRagToolbarDefaults() {
+    if (!topKInput || !minScoreInput) {
+        return;
+    }
+    try {
+        const data = await apiJson('/api/rag/defaults');
+        _ragChatDefaults = data;
+        if (Number.isFinite(Number(data.top_k))) {
+            topKInput.value = String(data.top_k);
+        }
+        if (Number.isFinite(Number(data.min_score))) {
+            minScoreInput.value = String(data.min_score);
+        }
+    } catch (_) {
+        /* ignore */
+    }
 }
 
 async function readStream(response) {
@@ -1579,7 +1599,10 @@ async function loadRelatedDocuments(messageEl, sources = []) {
         const data = await apiJson('/api/documents/related', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({sources, limit: 5}),
+            body: JSON.stringify({
+                sources,
+                limit: Math.min(Number(_ragChatDefaults.top_k) || 5, 10),
+            }),
         });
         const documents = Array.isArray(data.documents) ? data.documents : [];
         if (documents.length) {
@@ -2287,6 +2310,7 @@ async function saveAdminSettingsDraft() {
         _adminSettingsDraft = {};
         _adminSettingsDirty = new Set();
         await loadAdminSettings();
+        await syncRagToolbarDefaults();
         if (adminSettingsDraftInfo) {
             adminSettingsDraftInfo.textContent = 'Сохранено';
             setTimeout(() => {

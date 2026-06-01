@@ -14,6 +14,7 @@ from functools import wraps
 
 # Импорт конфигурации и логирования
 from config import settings, get_logger, inference_server_reachable, fetch_remote_model_ids
+from config.chat_runtime import rag_chat_defaults, resolve_chat_rag_options
 
 # Импорт RAG системы
 from core.rag import RAGSystem, RAGResult
@@ -78,15 +79,7 @@ def _int_or_none(value):
 
 
 def _chat_options(data: dict) -> dict:
-    try:
-        min_score = float(data["min_score"]) if data.get("min_score") is not None else None
-    except (TypeError, ValueError):
-        min_score = None
-    return {
-        "top_k": _int_or_none(data.get("top_k")),
-        "min_score": min_score,
-        "answer_mode": data.get("answer_mode") or "default",
-    }
+    return resolve_chat_rag_options(data)
 
 
 def _resolve_chat_session(data: dict, query: str):
@@ -104,8 +97,10 @@ def _resolve_chat_session(data: dict, query: str):
     return chat_history, session.id
 
 
-def _conversation_history_for_rag(chat_history, chat_id: int, limit: int = 10) -> list[dict]:
+def _conversation_history_for_rag(chat_history, chat_id: int, limit: int | None = None) -> list[dict]:
     """Последние сообщения текущего чата для понимания уточняющих вопросов."""
+    if limit is None:
+        limit = max(2, int(settings.RAG_QUERY_EXPANSION_MAX_MESSAGES))
     return [
         {"role": msg.role, "content": msg.content}
         for msg in chat_history.get_recent_messages(chat_id, limit=limit)
@@ -134,6 +129,7 @@ app.secret_key = settings.SECRET_KEY
 app.config.update(
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE="Lax",
+    MAX_CONTENT_LENGTH=settings.MAX_FILE_SIZE,
 )
 _cors = settings.CORS_ORIGINS.strip()
 if _cors in ("*", ""):
@@ -236,7 +232,19 @@ def initialize_database():
 @log_api_request
 def index():
     """Главная страница"""
-    return render_template('index.html')
+    defaults = rag_chat_defaults()
+    return render_template(
+        'index.html',
+        rag_top_k=defaults["top_k"],
+        rag_min_score=defaults["min_score"],
+    )
+
+
+@app.route('/api/rag/defaults', methods=['GET'])
+@log_api_request
+def rag_defaults():
+    """Публичные дефолты RAG для панели чата (синхронизация с runtime-настройками)."""
+    return jsonify(rag_chat_defaults())
 
 
 @app.route('/api/health', methods=['GET'])
@@ -361,8 +369,8 @@ def chat():
         metadata={
             "model_name": settings.OLLAMA_CHAT_MODEL,
             "rag_settings_snapshot": {
-                "top_k": options["top_k"] or settings.RAG_TOP_K,
-                "min_score": options["min_score"] if options["min_score"] is not None else settings.RAG_MIN_SCORE,
+                "top_k": options["top_k"],
+                "min_score": options["min_score"],
                 "answer_mode": options["answer_mode"],
             },
             "latency_ms": latency_ms,
@@ -520,8 +528,8 @@ def chat_stream():
                         metadata={
                             "model_name": settings.OLLAMA_CHAT_MODEL,
                             "rag_settings_snapshot": {
-                                "top_k": options["top_k"] or settings.RAG_TOP_K,
-                                "min_score": options["min_score"] if options["min_score"] is not None else settings.RAG_MIN_SCORE,
+                                "top_k": options["top_k"],
+                                "min_score": options["min_score"],
                                 "answer_mode": options["answer_mode"],
                             },
                             "latency_ms": int((time.time() - started) * 1000),
