@@ -569,6 +569,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     initAdminSubtabs();
     initAdminSettingsSearch();
+    initAdminSettingsEditorEvents();
     initTooltips();
     initMermaidLightboxClicks();
 
@@ -903,6 +904,7 @@ async function openChat(chatId) {
             }
         });
         loadChats(chatSearchInput.value.trim());
+        switchPanel('chatPanel');
         messageInput.focus();
     } catch (error) {
         showInlineError(error.message);
@@ -1910,6 +1912,7 @@ let _adminSettingsCache = null;
 let _adminSettingsBaseByKey = {};
 let _adminSettingsDraft = {};
 let _adminSettingsDirty = new Set();
+let _adminSettingsEditorEventsInitialized = false;
 
 async function loadAdminSettings() {
     if (!adminSettings) {
@@ -1926,7 +1929,6 @@ async function loadAdminSettings() {
         _adminSettingsCache = data;
         _adminSettingsBaseByKey = indexAdminSettingsByKey(data);
         renderAdminSettings(data, (adminSettingsSearch?.value || '').trim());
-        initAdminSettingsEditorEvents();
         updateAdminSettingsDraftToolbar();
     } catch (error) {
         adminSettings.innerHTML = `<div class="empty-state">${escapeHtml(error.message)}</div>`;
@@ -1994,7 +1996,7 @@ function renderAdminSettings(payload, query) {
                     <span class="admin-settings-group__chev" aria-hidden="true">▾</span>
                     <h3>${escapeHtml(group.title || '')}</h3>
                     <span>${items.length} шт.</span>
-                    <span class="admin-settings-group__hint">Нажмите, чтобы свернуть</span>
+                    <span class="admin-settings-group__hint">${isCollapsed ? 'Нажмите, чтобы развернуть' : 'Нажмите, чтобы свернуть'}</span>
                 </button>
                 <div class="admin-settings-group__list">
                     ${items.map(renderAdminSettingItem).join('')}
@@ -2098,8 +2100,22 @@ function renderSettingInput(item, ui) {
     return `<input class="setting-text" type="text" data-setting-input="${escapeHtml(key)}" value="${escapeHtml(value)}">`;
 }
 
+function updateAdminSettingsGroupCollapsedUi(group, isCollapsed) {
+    const header = group.querySelector('.admin-settings-group__header');
+    if (!header) return;
+    header.setAttribute('aria-expanded', isCollapsed ? 'false' : 'true');
+    const hint = header.querySelector('.admin-settings-group__hint');
+    if (hint) {
+        hint.textContent = isCollapsed ? 'Нажмите, чтобы развернуть' : 'Нажмите, чтобы свернуть';
+    }
+}
+
 function initAdminSettingsEditorEvents() {
     if (!adminSettings) return;
+    if (_adminSettingsEditorEventsInitialized) {
+        return;
+    }
+    _adminSettingsEditorEventsInitialized = true;
 
     // sync range <-> number
     adminSettings.addEventListener('input', (evt) => {
@@ -2138,7 +2154,7 @@ function initAdminSettingsEditorEvents() {
                 collapsed[groupId] = willCollapse;
                 saveAdminSettingsCollapsed(collapsed);
                 group.classList.toggle('is-collapsed', willCollapse);
-                header.setAttribute('aria-expanded', willCollapse ? 'false' : 'true');
+                updateAdminSettingsGroupCollapsedUi(group, willCollapse);
             }
             return;
         }
@@ -2243,7 +2259,6 @@ async function resetAdminSettingsDraft() {
     _adminSettingsDirty = new Set();
     if (_adminSettingsCache) {
         renderAdminSettings(_adminSettingsCache, (adminSettingsSearch?.value || '').trim());
-        initAdminSettingsEditorEvents();
     }
     updateAdminSettingsDraftToolbar();
 }
