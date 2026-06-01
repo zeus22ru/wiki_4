@@ -138,8 +138,16 @@ def _get_cross_encoder():
         return None
     if _cross_encoder_model is None or _cross_encoder_name != name:
         logger.info("Загрузка cross-encoder: %s", name)
-        _cross_encoder_model = CrossEncoder(name)
-        _cross_encoder_name = name
+        try:
+            _cross_encoder_model = CrossEncoder(name)
+            _cross_encoder_name = name
+        except Exception as e:
+            logger.warning(
+                "Не удалось загрузить cross-encoder %s — rerank пропущен, поиск продолжается без него: %s",
+                name,
+                e,
+            )
+            return None
     return _cross_encoder_model
 
 

@@ -69,6 +69,10 @@ class Settings:
     OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
     # Лимит токенов ответа: OpenAI-совместимый max_tokens, Ollama /api/generate num_predict
     CHAT_MAX_TOKENS: int = int(os.getenv("CHAT_MAX_TOKENS", "2048"))
+    # Отключить thinking/reasoning у чат-модели (Qwen 3 и аналоги): enable_thinking=false в API
+    CHAT_DISABLE_THINKING: bool = os.getenv("CHAT_DISABLE_THINKING", "true").lower() in (
+        "1", "true", "yes", "on",
+    )
 
     # ChromaDB настройки
     CHROMA_PERSIST_DIR: str = os.getenv("CHROMA_PERSIST_DIR", "./chroma_db")

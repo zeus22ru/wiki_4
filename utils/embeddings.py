@@ -8,6 +8,7 @@
 """
 
 import json
+import re
 import requests
 from typing import List, Dict, Optional, Iterator
 from config import settings, get_logger
@@ -28,6 +29,126 @@ except ImportError:
     CHROMADB_AVAILABLE = False
 
 logger = get_logger(__name__)
+
+_THINK_BLOCK_RE = re.compile(
+    r"<(?:think|redacted_thinking)\b[^>]*>[\s\S]*?</(?:think|redacted_thinking)\b[^>]*>",
+    re.IGNORECASE,
+)
+_CYRILLIC_RE = re.compile(r"[\u0400-\u04FF]")
+_COT_PREFIX_MARKERS = (
+    "the user is asking",
+    "looking at the context",
+    "let's draft",
+    "i need to search",
+    "i should structure",
+)
+
+
+def _looks_like_json_string_array(text: str) -> bool:
+    """Ответ LLM с JSON-массивом строк — не обрезать по первой кириллице."""
+    t = (text or "").strip()
+    if not t:
+        return False
+    if t.startswith("[") and t.endswith("]"):
+        return True
+    if t.endswith("]") and ('",' in t or '",\n' in t or re.search(r'(?<!\\)"\s*,', t)):
+        return True
+    return False
+
+
+def _chat_disable_thinking() -> bool:
+    return bool(getattr(settings, "CHAT_DISABLE_THINKING", True))
+
+
+def strip_model_reasoning(text: str) -> str:
+    """
+    Убрать из ответа модели блоки thinking и типичный chain-of-thought до финального текста.
+    """
+    if not text:
+        return ""
+    cleaned = _THINK_BLOCK_RE.sub("", text).strip()
+    if not cleaned:
+        return ""
+    if _looks_like_json_string_array(cleaned):
+        return cleaned
+
+    if _CYRILLIC_RE.search(cleaned):
+        for match in re.finditer(r"(?:^|\n\n+)([#>*\-\s]*[\u0400-\u04FF])", cleaned, flags=re.MULTILINE):
+            return cleaned[match.start() :].lstrip()
+        idx = _CYRILLIC_RE.search(cleaned)
+        if idx:
+            para = cleaned.rfind("\n\n", 0, idx.start())
+            if para >= 0:
+                return cleaned[para:].lstrip()
+            return cleaned[idx.start() :].lstrip()
+
+    lower_head = cleaned[:400].lower()
+    if any(marker in lower_head for marker in _COT_PREFIX_MARKERS):
+        parts = re.split(r"\n\n\n+", cleaned, maxsplit=1)
+        if len(parts) > 1 and _CYRILLIC_RE.search(parts[1]):
+            return parts[1].lstrip()
+        blocks = re.split(r"\n\n+", cleaned)
+        for i, block in enumerate(blocks):
+            if _CYRILLIC_RE.search(block):
+                return "\n\n".join(blocks[i:]).lstrip()
+
+    return cleaned
+
+
+def _prepare_chat_user_content(prompt: str) -> str:
+    if not _chat_disable_thinking():
+        return prompt
+    if "/no_think" in prompt:
+        return prompt
+    return f"{prompt.rstrip()}\n\n/no_think"
+
+
+def _assistant_no_think_prefill() -> str:
+    """Prefill для LM Studio/Qwen3: пустой закрытый think-блок, чтобы пропустить фазу reasoning."""
+    open_tag = "<" + "think" + ">"
+    close_tag = "</" + "think" + ">"
+    return f"{open_tag}\n{close_tag}\n\n"
+
+
+def _build_openai_chat_payload(*, prompt: str, stream: bool) -> dict:
+    messages: List[Dict[str, str]] = [
+        {"role": "user", "content": _prepare_chat_user_content(prompt)},
+    ]
+    if _chat_disable_thinking():
+        messages.append({"role": "assistant", "content": _assistant_no_think_prefill()})
+    payload = {
+        "model": settings.OLLAMA_CHAT_MODEL,
+        "messages": messages,
+        "temperature": 0.3,
+        "top_p": 0.9,
+        "max_tokens": settings.CHAT_MAX_TOKENS,
+        "stream": stream,
+    }
+    if _chat_disable_thinking():
+        kwargs = {"enable_thinking": False}
+        payload["chat_template_kwargs"] = kwargs
+        payload["extra_body"] = {"chat_template_kwargs": kwargs}
+    return payload
+
+
+def _filter_reasoning_stream(chunks: Iterator[str]) -> Iterator[str]:
+    """Не отдавать в UI фрагменты, пока в буфере только reasoning/CoT."""
+    if not _chat_disable_thinking():
+        yield from chunks
+        return
+
+    buf = ""
+    emitted = 0
+    for piece in chunks:
+        if not piece:
+            continue
+        buf += piece
+        public = strip_model_reasoning(buf)
+        if len(public) <= emitted:
+            continue
+        delta = public[emitted:]
+        emitted = len(public)
+        yield delta
 
 
 def _iter_utf8_lines(response: requests.Response):
@@ -151,7 +272,10 @@ def chat_completion(prompt: str, timeout: int = 120) -> str:
     Полный ответ одним текстом. Внутри вызывается потоковый API (stream: true к Ollama
     и к OpenAI-совместимым серверам вроде LM Studio), фрагменты склеиваются здесь.
     """
-    return "".join(chat_completion_stream(prompt, timeout=timeout)).strip()
+    raw = "".join(chat_completion_stream(prompt, timeout=timeout))
+    if _chat_disable_thinking():
+        return strip_model_reasoning(raw)
+    return raw.strip()
 
 
 def chat_completion_stream(prompt: str, timeout: int = 120) -> Iterator[str]:
@@ -168,14 +292,7 @@ def chat_completion_stream(prompt: str, timeout: int = 120) -> Iterator[str]:
         try:
             with requests.post(
                 f"{base}/v1/chat/completions",
-                json={
-                    "model": settings.OLLAMA_CHAT_MODEL,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "temperature": 0.3,
-                    "top_p": 0.9,
-                    "max_tokens": settings.CHAT_MAX_TOKENS,
-                    "stream": True,
-                },
+                json=_build_openai_chat_payload(prompt=prompt, stream=True),
                 timeout=timeout,
                 headers=_embedding_headers(),
                 stream=True,
@@ -197,12 +314,7 @@ def chat_completion_stream(prompt: str, timeout: int = 120) -> Iterator[str]:
                     if not choices:
                         continue
                     delta = choices[0].get("delta") or {}
-                    content = (
-                        delta.get("content")
-                        or delta.get("reasoning_content")
-                        or delta.get("reasoning")
-                        or delta.get("thinking")
-                    )
+                    content = delta.get("content")
                     if content:
                         yield content
         except requests.exceptions.HTTPError as e:
@@ -261,6 +373,11 @@ def chat_completion_stream(prompt: str, timeout: int = 120) -> Iterator[str]:
     except Exception as e:
         logger.error("Ошибка при потоковой генерации: %s", e)
         yield f"Произошла ошибка при генерации ответа: {str(e)}"
+
+
+def chat_completion_stream_filtered(prompt: str, timeout: int = 120) -> Iterator[str]:
+    """Поток ответа с отсечением reasoning, если включён CHAT_DISABLE_THINKING."""
+    return _filter_reasoning_stream(chat_completion_stream(prompt, timeout=timeout))
 
 
 def get_embedding(text: str) -> List[float]:

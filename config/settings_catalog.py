@@ -117,6 +117,17 @@ SPECS: list[SettingSpec] = [
         description="Лимит длины ответа: OpenAI max_tokens / Ollama num_predict.",
         allowed="целое число ≥ 1",
     ),
+    SettingSpec(
+        key="CHAT_DISABLE_THINKING",
+        env="CHAT_DISABLE_THINKING",
+        group=_GROUP_LLM,
+        type="bool",
+        description=(
+            "Отключить внутренние рассуждения модели (режим thinking у Qwen 3/3.5 и аналогов). "
+            "В запрос чата передаётся enable_thinking=false; при утечке CoT в ответ — постобработка."
+        ),
+        allowed="true/false",
+    ),
     # Storage / Paths
     SettingSpec(
         key="CHROMA_PERSIST_DIR",

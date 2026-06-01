@@ -18,7 +18,13 @@ import requests
 import uuid
 
 from config import settings, get_logger
-from utils.embeddings import get_embedding, chat_completion, chat_completion_stream
+from utils.embeddings import (
+    get_embedding,
+    chat_completion,
+    chat_completion_stream,
+    strip_model_reasoning,
+    _filter_reasoning_stream,
+)
 from core.retrieval import hybrid_retrieve, load_bm25_okapi
 
 logger = get_logger(__name__)
@@ -345,20 +351,40 @@ def _slim_doc_label(doc: Dict[str, Any]) -> str:
     return " | ".join([p for p in parts if p])[:220]
 
 
+def _json_array_parse_candidates(value: str) -> List[str]:
+    """Варианты текста для json.loads (в т.ч. после обрезки strip_model_reasoning)."""
+    value = (value or "").strip()
+    if not value:
+        return []
+    candidates: List[str] = [value]
+    if value.endswith("]") and not value.lstrip().startswith("["):
+        candidates.append("[" + value)
+        head = value.lstrip()
+        if head and not head.startswith(('"', "'")):
+            candidates.append('["' + value)
+    match = re.search(r"\[.*\]", value, flags=re.DOTALL)
+    if match:
+        fragment = match.group(0)
+        if fragment not in candidates:
+            candidates.append(fragment)
+    return candidates
+
+
 def _parse_json_array_of_strings(value: str) -> List[str]:
     value = (value or "").strip()
     if not value:
         return []
-    try:
-        parsed = json.loads(value)
-    except json.JSONDecodeError:
-        match = re.search(r"\[.*\]", value, flags=re.DOTALL)
-        if not match:
-            return []
+    parsed = None
+    for candidate in _json_array_parse_candidates(value):
         try:
-            parsed = json.loads(match.group(0))
+            parsed = json.loads(candidate)
+            break
         except json.JSONDecodeError:
-            return []
+            continue
+    if parsed is None:
+        quoted = re.findall(r'"((?:[^"\\]|\\.)*)"', value)
+        if quoted:
+            parsed = quoted
     if not isinstance(parsed, list):
         return []
     out: List[str] = []
@@ -441,24 +467,7 @@ class RAGSystem:
 Сгенерируй 2–3 коротких альтернативных запроса к базе знаний (другие формулировки, синонимы).
 Верни только JSON-массив строк на русском."""
         raw = chat_completion(prompt, timeout=90) or ""
-        try:
-            parsed = json.loads(raw)
-        except json.JSONDecodeError:
-            match = re.search(r"\[.*\]", raw, flags=re.DOTALL)
-            if not match:
-                return []
-            try:
-                parsed = json.loads(match.group(0))
-            except json.JSONDecodeError:
-                return []
-        if not isinstance(parsed, list):
-            return []
-        out: List[str] = []
-        for item in parsed:
-            s = re.sub(r"\s+", " ", str(item)).strip()
-            if s and s not in out and len(s) > 2:
-                out.append(s[:500])
-        return out[:4]
+        return _parse_json_array_of_strings(raw)[:4]
 
     def _llm_hyde_passage(self, question: str) -> str:
         prompt = f"""Вопрос пользователя: {question}
@@ -1116,6 +1125,7 @@ class RAGSystem:
 8. Используй историю диалога только для понимания уточнений и местоимений; факты бери из контекста источников.
 9. Если история диалога противоречит найденному контексту, опирайся на контекст источников.
 10. Если пользователь просит изобразить что-то графически (например: "схема", "диаграмма", "граф", "визуализируй", "изобрази графически"), вместо отказа дай результат в формате Mermaid внутри блока Markdown ```mermaid ... ```. Выбирай подходящий тип диаграммы Mermaid (flowchart/graph, sequenceDiagram, classDiagram) и следи за корректным синтаксисом.
+11. Не выводи ход рассуждений, черновики и внутренний анализ. Сразу начинай с финального ответа пользователю на русском.
 
 ОТВЕТ:"""
         
@@ -1657,12 +1667,25 @@ MERMAID:
         )
 
         parts: List[str] = []
+        raw_chunks: List[str] = []
         gen_started = time.time()
-        for fragment in chat_completion_stream(prompt, timeout=120):
+
+        def _live_llm_chunks() -> Iterator[str]:
+            for fragment in chat_completion_stream(prompt, timeout=120):
+                raw_chunks.append(fragment)
+                yield fragment
+
+        for fragment in _filter_reasoning_stream(_live_llm_chunks()):
             parts.append(fragment)
-            yield {"type": "delta", "text": fragment}
+            if fragment:
+                yield {"type": "delta", "text": fragment}
+
+        raw_answer = "".join(raw_chunks)
         answer = "".join(parts)
         gen_ms = int((time.time() - gen_started) * 1000)
+        disable_thinking = bool(getattr(settings, "CHAT_DISABLE_THINKING", True))
+        if disable_thinking:
+            answer = strip_model_reasoning(answer)
         answer = self._autofix_mermaid_blocks(answer)
 
         _safe_json_log(
@@ -1673,7 +1696,10 @@ MERMAID:
                 "stream": True,
                 "chat_api_mode": str(getattr(settings, "CHAT_API_MODE", "") or ""),
                 "model": str(getattr(settings, "OLLAMA_CHAT_MODEL", "") or ""),
+                "chat_disable_thinking": disable_thinking,
                 "latency_llm_ms": gen_ms,
+                "answer_raw_chars": len(raw_answer or ""),
+                "cot_in_raw": "The user is asking" in (raw_answer or ""),
                 "answer_chars": len(answer or ""),
                 "answer": _clip_for_llm_log(answer),
             }
