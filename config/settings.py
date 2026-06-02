@@ -139,6 +139,10 @@ class Settings:
     )
     RAG_HYDE_ENABLED: bool = os.getenv("RAG_HYDE_ENABLED", "false").lower() in ("1", "true", "yes", "on")
     RAG_QUERY_EXPANSION_MAX_MESSAGES: int = int(os.getenv("RAG_QUERY_EXPANSION_MAX_MESSAGES", "6"))
+    # Короткие приветствия / small talk — ответ без поиска по Chroma
+    RAG_CHITCHAT_SKIP_RETRIEVAL: bool = os.getenv("RAG_CHITCHAT_SKIP_RETRIEVAL", "true").lower() in (
+        "1", "true", "yes", "on",
+    )
 
     # Deep retrieval (DeepResearch-подобный многошаговый поиск)
     # Если включено, retrieval может делать несколько итераций поиска с дозапросами.

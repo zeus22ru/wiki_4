@@ -17,7 +17,7 @@ from config import settings, get_logger, inference_server_reachable, fetch_remot
 from config.chat_runtime import rag_chat_defaults, resolve_chat_rag_options
 
 # Импорт RAG системы
-from core.rag import RAGSystem, RAGResult
+from core.rag import RAGSystem, RAGResult, classify_out_of_kb_query
 from core.chat_history import get_chat_history
 
 # Импорт общих функций для работы с эмбеддингами
@@ -433,9 +433,39 @@ def chat_stream():
     def generate():
         # Комментарий SSE: первый байты уходят клиенту до первого токена LLM (лучше для прокси/буферов).
         yield ": stream-open\n\n"
-        yield _sse_event({"type": "status", "message": "Ищу релевантные документы..."})
         started = time.time()
         try:
+            skip_kind = classify_out_of_kb_query(query)
+            if skip_kind:
+                yield _sse_event({"type": "status", "message": "Формирую ответ..."})
+                for evt in rag.stream_chitchat_answer(query, conversation_history, kind=skip_kind):
+                    if evt.get("type") == "delta":
+                        yield _sse_event({"type": "delta", "text": evt.get("text", "")})
+                    elif evt.get("type") == "done":
+                        rag_result = evt.get("rag_result")
+                        if rag_result is None:
+                            yield _sse_event({"type": "error", "message": "Пустой результат"})
+                            return
+                        payload = _rag_result_to_api_dict(rag_result)
+                        diag = dict(payload.get("diagnostics") or {})
+                        diag["latency_ms"] = int((time.time() - started) * 1000)
+                        payload["diagnostics"] = diag
+                        assistant_message = chat_history.add_message(
+                            session_id=chat_id,
+                            role="assistant",
+                            content=payload["answer"],
+                            metadata={"retrieval_status": skip_kind},
+                        )
+                        _maybe_update_chat_title(chat_history, chat_id, query)
+                        yield _sse_event({
+                            "type": "done",
+                            "chat_id": chat_id,
+                            "message_id": assistant_message.id,
+                            **payload,
+                        })
+                return
+
+            yield _sse_event({"type": "status", "message": "Ищу релевантные документы..."})
             documents, retrieve_error, expansion, retrieve_diag = rag.retrieve_documents_auto(
                 query, options["top_k"], options["min_score"], conversation_history
             )

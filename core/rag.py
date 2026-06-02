@@ -169,6 +169,124 @@ class RAGResult:
         return d
 
 
+_CHITCHAT_MAX_CHARS = 60
+_CHITCHAT_MAX_WORDS = 5
+
+_CHITCHAT_PHRASE_RE = re.compile(
+    r"^(?:"
+    r"привет(?:ствую)?|здравствуй(?:те)?|добрый\s+(?:день|утро|вечер)|"
+    r"как\s+дела|как\s+ты|как\s+сам|что\s+нового|как\s+жизнь|"
+    r"спасибо|благодарю|пожалуйста|"
+    r"пока|до\s+свидания|увидимся|"
+    r"ок(?:ей)?|ладно|ясно|понятно|хорошо|"
+    r"хай|hello|hi|hey|thanks|thank\s+you"
+    r")(?:[!?.…,\s]*)$",
+    re.IGNORECASE | re.UNICODE,
+)
+
+_CHITCHAT_GREETING_START = frozenset({
+    "привет", "приветствую", "здравствуй", "здравствуйте", "добрый",
+    "hello", "hi", "hey", "хай", "пока",
+})
+
+_KB_DOMAIN_HINT_RE = re.compile(
+    r"1\s*с|егаис|упп|ут\s|ка\s|склад|номенклат|документ|ошибк|настро|"
+    r"остат|реализац|ттн|маркир|списани|пользовател|отчет|отчёт|баз[аы]|"
+    r"диадок|тсд|отгруз|задан|статус|индикатор|выполнен",
+    re.IGNORECASE | re.UNICODE,
+)
+
+_OFF_TOPIC_MAX_CHARS = 120
+_OFF_TOPIC_MAX_WORDS = 14
+
+_OFF_TOPIC_TOPIC_RE = re.compile(
+    r"неб[оаеу]|солнц|лун[аыу]|планет|космос|звезд|звёзд|"
+    r"погод|дожд|снег|температур|климат|"
+    r"динозавр|животн|кошк|собак|"
+    r"футбол|хоккей|спорт|"
+    r"рецепт|готовить|"
+    r"анекдот|шутк|"
+    r"столиц[аы]\s+\w+|"
+    r"президент\s+\w+|"
+    r"кто\s+такой\s+(?!.*1\s*с)",
+    re.IGNORECASE | re.UNICODE,
+)
+
+_OFF_TOPIC_COLOR_QUESTION_RE = re.compile(
+    r"как(?:ой|ая|ое|им|ого)\s+цвет",
+    re.IGNORECASE | re.UNICODE,
+)
+
+
+def _kb_retrieval_skip_enabled() -> bool:
+    return bool(getattr(settings, "RAG_CHITCHAT_SKIP_RETRIEVAL", True))
+
+
+def is_chitchat_query(query: str) -> bool:
+    """
+    Короткая реплика не по теме wiki (приветствие, small talk).
+
+    Не срабатывает на рабочие вопросы вроде «как дела с остатками».
+    """
+    if not _kb_retrieval_skip_enabled():
+        return False
+    text = (query or "").strip()
+    if not text or len(text) > _CHITCHAT_MAX_CHARS:
+        return False
+    if _KB_DOMAIN_HINT_RE.search(text):
+        return False
+    normalized = re.sub(r"\s+", " ", text).strip()
+    words = normalized.split()
+    if not words or len(words) > _CHITCHAT_MAX_WORDS:
+        return False
+    lower = normalized.lower()
+    if _CHITCHAT_PHRASE_RE.match(lower):
+        return True
+    if words[0].lower() in _CHITCHAT_GREETING_START and len(words) <= 3:
+        return True
+    return False
+
+
+def is_off_topic_query(query: str) -> bool:
+    """
+    Общий вопрос вне корпоративной wiki (быт, природа, «цвет неба» и т.п.).
+
+    Не срабатывает на рабочие формулировки («какой цвет статуса в ЕГАИС»).
+    """
+    if not _kb_retrieval_skip_enabled():
+        return False
+    if is_chitchat_query(query):
+        return False
+    text = (query or "").strip()
+    if not text or len(text) > _OFF_TOPIC_MAX_CHARS:
+        return False
+    if _KB_DOMAIN_HINT_RE.search(text):
+        return False
+    normalized = re.sub(r"\s+", " ", text).strip()
+    words = normalized.split()
+    if not words or len(words) > _OFF_TOPIC_MAX_WORDS:
+        return False
+    if _OFF_TOPIC_TOPIC_RE.search(normalized):
+        return True
+    if _OFF_TOPIC_COLOR_QUESTION_RE.search(normalized):
+        return True
+    return False
+
+
+def should_skip_kb_retrieval(query: str) -> bool:
+    """Пропустить поиск по Chroma: small talk или вопрос не по базе знаний."""
+    return is_chitchat_query(query) or is_off_topic_query(query)
+
+
+def classify_out_of_kb_query(query: str) -> Optional[str]:
+    """Вернуть 'chitchat' | 'off_topic' или None, если нужен обычный RAG."""
+    if is_chitchat_query(query):
+        return "chitchat"
+    if is_off_topic_query(query):
+        return "off_topic"
+    return None
+
+
 def _source_from_metadata(metadata: Optional[Dict[str, Any]]) -> str:
     """Вернуть человекочитаемый источник из доступных метаданных Chroma."""
     metadata = metadata or {}
@@ -1023,6 +1141,93 @@ class RAGSystem:
         rag_logger.debug(f"Длина итогового ответа: {len(formatted_answer)} символов")
         
         return formatted_answer
+
+    def generate_chitchat_prompt(
+        self,
+        query: str,
+        conversation_history: Optional[List[Dict[str, str]]] = None,
+        kind: str = "chitchat",
+    ) -> str:
+        """Промпт без поиска по базе: приветствие (chitchat) или вопрос вне wiki (off_topic)."""
+        history_block = _format_conversation_history(conversation_history)
+        history_section = f"""
+ИСТОРИЯ ДИАЛОГА:
+{history_block}
+""" if history_block else ""
+        if kind == "off_topic":
+            user_block = f"Вопрос пользователя (общая тема, не по внутренней документации):\n{query}"
+            extra = (
+                "2. Вежливо поясни, что ты ассистент только по корпоративной wiki (1С/ERP, процессы, ошибки).\n"
+                "3. Не анализируй и не пересказывай случайные фрагменты документации; не связывай вопрос со статусами или цветами в 1С.\n"
+                "4. Можно одной короткой фразой ответить по сути общего вопроса (если это общеизвестный факт), затем предложи рабочий вопрос по базе знаний."
+            )
+        else:
+            user_block = f"Реплика пользователя (не вопрос по документации):\n{query}"
+            extra = (
+                "2. Не используй факты из wiki, не выдумывай инструкции, не давай списков и длинных объяснений.\n"
+                "3. Напомни, что ты помогаешь по внутренней документации, и предложи задать рабочий вопрос по 1С, процессам или ошибкам."
+            )
+        return f"""Ты — вежливый ассистент корпоративной базы знаний (wiki по 1С/ERP).
+{history_section}
+{user_block}
+
+ИНСТРУКЦИИ:
+1. Ответь кратко (1–3 предложения), по-русски, дружелюбно.
+{extra}
+4. Не выводи ход рассуждений — сразу финальный ответ.
+
+ОТВЕТ:"""
+
+    def _answer_chitchat(
+        self,
+        query: str,
+        conversation_history: Optional[List[Dict[str, str]]] = None,
+        kind: str = "chitchat",
+    ) -> RAGResult:
+        """Ответ без retrieval: small talk или вопрос вне базы знаний."""
+        rag_logger.info("Вопрос вне RAG (%s) — поиск по базе пропущен", kind)
+        prompt = self.generate_chitchat_prompt(query, conversation_history, kind=kind)
+        answer = self._generate_answer(prompt)
+        return RAGResult(
+            answer=(answer or "").strip(),
+            citations=[],
+            sources=[],
+            diagnostics={"retrieval_status": kind},
+        )
+
+    def stream_chitchat_answer(
+        self,
+        query: str,
+        conversation_history: Optional[List[Dict[str, str]]] = None,
+        kind: str = "chitchat",
+    ) -> Iterator[Dict[str, Any]]:
+        """Потоковый ответ без retrieval (small talk / off-topic)."""
+        rag_logger.info("Потоковая генерация вне RAG (%s, без документов)", kind)
+        prompt = self.generate_chitchat_prompt(query, conversation_history, kind=kind)
+        parts: List[str] = []
+        raw_chunks: List[str] = []
+
+        def _live_llm_chunks() -> Iterator[str]:
+            for fragment in chat_completion_stream(prompt, timeout=120):
+                raw_chunks.append(fragment)
+                yield fragment
+
+        for fragment in _filter_reasoning_stream(_live_llm_chunks()):
+            parts.append(fragment)
+            if fragment:
+                yield {"type": "delta", "text": fragment}
+
+        answer = "".join(parts)
+        if getattr(settings, "CHAT_DISABLE_THINKING", True):
+            answer = strip_model_reasoning(answer)
+        answer = (answer or "").strip()
+        rag_result = RAGResult(
+            answer=answer,
+            citations=[],
+            sources=[],
+            diagnostics={"retrieval_status": kind},
+        )
+        yield {"type": "done", "rag_result": rag_result}
     
     def generate_rag_prompt(
         self,
@@ -1091,31 +1296,61 @@ class RAGSystem:
         context = "\n---\n".join(context_parts)
         
         mode_instructions = {
-            "brief": "Дай краткий ответ в 2-4 предложениях, но не теряй ключевые условия.",
+            "default": "Дай полезный структурированный ответ по сути вопроса.",
+            "brief": "Дай краткий ответ в 2-4 предложениях, но не теряй ключевые условия. Без эмодзи и без Mermaid.",
             "detailed": "Дай подробный структурированный ответ с шагами и важными оговорками.",
-            "sources_only": "Отвечай только тем, что явно следует из контекста. Если данных мало, прямо скажи об этом.",
+            "sources_only": (
+                "Отвечай только тем, что явно следует из контекста. Если данных мало, прямо скажи об этом. "
+                "Без эмодзи и без Mermaid."
+            ),
             "steps": "Дай пошаговое объяснение с нумерованными шагами.",
             "employee_instruction": (
                 "Оформи ответ как рабочую инструкцию для сотрудника: цель, когда применять, "
                 "что понадобится, пошаговые действия, частые ошибки, проверка результата и источники."
             ),
         }
-        extra_instruction = mode_instructions.get(answer_mode, "Дай полезный структурированный ответ.")
+        extra_instruction = mode_instructions.get(
+            answer_mode,
+            mode_instructions["default"],
+        )
 
         # Формируем промпт
         history_block = _format_conversation_history(conversation_history)
         history_section = f"""
 ИСТОРИЯ ДИАЛОГА:
 {history_block}
-""" if history_block else """
-ИСТОРИЯ ДИАЛОГА:
-Нет предыдущих сообщений.
-"""
+""" if history_block else ""
         retrieval_section = f"""
-ПОИСКОВЫЙ ЗАПРОС:
+ПОИСКОВЫЙ ЗАПРОС (только для понимания темы поиска, не отвечай на эту фразу как на вопрос):
 {retrieval_query}
 """ if retrieval_query and retrieval_query != query else ""
-        prompt = f"""Ты - полезный ассистент, который отвечает на вопросы на основе предоставленного контекста.
+
+        # Предыдущая версия промпта (v1) — оставлена для отката:
+        # prompt = f"""Ты - полезный ассистент, который отвечает на вопросы на основе предоставленного контекста.
+        #
+        # КОНТЕКСТ:
+        # {context}
+        # {history_section}{retrieval_section}
+        #
+        # ВОПРОС:
+        # {query}
+        #
+        # ИНСТРУКЦИИ:
+        # 1. Всегда отвечай на русском языке. Если вопрос или часть контекста на другом языке — переведи и изложи ответ по-русски (термины/названия/цитаты сохраняй как в источнике при необходимости).
+        # 2. Ответь на вопрос, используя информацию из контекста.
+        # 3. Если в контексте нет информации для ответа, честно скажи об этом.
+        # 4. Ссылайся на источники в ответе, используя формат [Источник: название].
+        # 5. Не выдумывай информацию, которой нет в контексте.
+        # 6. Форматируй ответ с использованием Markdown для лучшей читаемости.
+        # 7. Режим ответа: {extra_instruction}
+        # 8. Используй историю диалога только для понимания уточнений и местоимений; факты бери из контекста источников.
+        # 9. Если история диалога противоречит найденному контексту, опирайся на контекст источников.
+        # 10. Если пользователь просит изобразить что-то графически (например: "схема", "диаграмма", "граф", "визуализируй", "изобрази графически"), вместо отказа дай результат в формате Mermaid внутри блока Markdown ```mermaid ... ```. Выбирай подходящий тип диаграммы Mermaid (flowchart/graph, sequenceDiagram, classDiagram) и следи за корректным синтаксисом.
+        # 11. Не выводи ход рассуждений, черновики и внутренний анализ. Сразу начинай с финального ответа пользователю на русском.
+        # 12. Добавляй иконки (эмодзи) markdown по смыслу, но не слишком много.
+        # ОТВЕТ:"""
+
+        prompt = f"""Ты — ассистент корпоративной базы знаний (wiki по 1С/ERP). Отвечаешь сотрудникам по инструкциям из предоставленного контекста.
 
 КОНТЕКСТ:
 {context}
@@ -1125,17 +1360,30 @@ class RAGSystem:
 {query}
 
 ИНСТРУКЦИИ:
-1. Всегда отвечай на русском языке. Если вопрос или часть контекста на другом языке — переведи и изложи ответ по-русски (термины/названия/цитаты сохраняй как в источнике при необходимости).
-2. Ответь на вопрос, используя информацию из контекста.
-3. Если в контексте нет информации для ответа, честно скажи об этом.
-4. Ссылайся на источники в ответе, используя формат [Источник: название].
-5. Не выдумывай информацию, которой нет в контексте.
-6. Форматируй ответ с использованием Markdown для лучшей читаемости.
-7. Режим ответа: {extra_instruction}
-8. Используй историю диалога только для понимания уточнений и местоимений; факты бери из контекста источников.
-9. Если история диалога противоречит найденному контексту, опирайся на контекст источников.
-10. Если пользователь просит изобразить что-то графически (например: "схема", "диаграмма", "граф", "визуализируй", "изобрази графически"), вместо отказа дай результат в формате Mermaid внутри блока Markdown ```mermaid ... ```. Выбирай подходящий тип диаграммы Mermaid (flowchart/graph, sequenceDiagram, classDiagram) и следи за корректным синтаксисом.
-11. Не выводи ход рассуждений, черновики и внутренний анализ. Сразу начинай с финального ответа пользователю на русском.
+
+Опора на контекст:
+1. Единственный источник фактов — блок КОНТЕКСТ выше. Не используй внешние знания, если их нет в контексте.
+2. Ответь на ВОПРОС, используя информацию из контекста. Игнорируй служебный шум wiki (URL, «XWiki page:», авторы правок), если он не нужен для ответа.
+3. Если в контексте нет данных для ответа — скажи прямо; предложи 1–2 уточнения (модуль, роль, версия) или укажи, какой фрагмент контекста ближе всего к теме.
+4. Если фрагменты контекста противоречат друг другу — опиши варианты и укажи [Источник: …] для каждого.
+5. Если текст обрезан (заканчивается на «...») — не достраивай недостающее; опирайся только на видимую часть.
+6. Используй историю диалога только для уточнений и местоимений; факты бери из контекста источников.
+7. Если история диалога противоречит контексту — опирайся на контекст источников.
+
+Язык и формат:
+8. Всегда отвечай на русском. Если вопрос или фрагмент контекста на другом языке — изложи по-русски; термины и названия кнопок/меню сохраняй как в источнике.
+9. Форматируй ответ Markdown: списки, заголовки, для путей меню и кнопок 1С — кавычки «…» как в интерфейсе.
+10. Режим ответа: {extra_instruction}
+
+Источники:
+11. После важных блоков (шаг, правило, ограничение) указывай [Источник: точное название из строки «[Источник: …]» в контексте].
+12. Не добавляй в конце отдельный раздел «Источники» со списком — его при необходимости формирует система.
+
+Специальные случаи:
+13. Если ВОПРОС — приветствие, общий вопрос вне wiki («как дела», «каким цветом небо») или тема не про 1С/процессы компании — ответь кратко, не используй КОНТЕКСТ и не натягивай случайные фрагменты wiki на бытовые вопросы.
+14. Mermaid (```mermaid ... ```) — только если она хорошо подходит по смыслу или пользователь явно просит схему/диаграмму/граф/визуализацию, либо без схемы ответ непонятен; иначе текст или список. Следи за синтаксисом Mermaid 10.x.
+15. Не выводи ход рассуждений и черновики — сразу финальный ответ.
+16. Эмодзи не обязательны; в режимах «кратко» и «только по источникам» не используй.
 
 ОТВЕТ:"""
         
@@ -1441,6 +1689,16 @@ MERMAID:
         rag_logger.debug(f"Параметры: top_k={top_k}, min_score={min_score}, include_citations={include_citations}, max_citations={max_citations}")
         
         start_time = time.time()
+
+        skip_kind = classify_out_of_kb_query(query)
+        if skip_kind:
+            result = self._answer_chitchat(query, conversation_history, kind=skip_kind)
+            result.diagnostics = {
+                **(result.diagnostics or {}),
+                "latency_ms": int((time.time() - start_time) * 1000),
+                "conversation_messages": len(conversation_history or []),
+            }
+            return result
         
         # 1. Поиск релевантных документов
         rag_logger.debug("Шаг 1: Поиск релевантных документов")
