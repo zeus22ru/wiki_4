@@ -69,6 +69,27 @@ def _chat_disable_thinking() -> bool:
     return bool(getattr(settings, "CHAT_DISABLE_THINKING", True))
 
 
+_FENCE_BLOCK_RE = re.compile(r"```[\s\S]*?```", re.MULTILINE)
+
+
+def _mask_code_fences(text: str) -> tuple[str, List[str]]:
+    """Временно убрать fenced-блоки, чтобы CoT-обрезка не ломала ```mermaid."""
+    fences: List[str] = []
+
+    def _repl(match: re.Match) -> str:
+        fences.append(match.group(0))
+        return f"\n\x00FENCE{len(fences) - 1}\x00\n"
+
+    return _FENCE_BLOCK_RE.sub(_repl, text), fences
+
+
+def _unmask_code_fences(text: str, fences: List[str]) -> str:
+    out = text or ""
+    for idx, fence in enumerate(fences):
+        out = out.replace(f"\x00FENCE{idx}\x00", fence)
+    return out.strip()
+
+
 def strip_model_reasoning(text: str) -> str:
     """
     Убрать из ответа модели блоки thinking и типичный chain-of-thought до финального текста.
@@ -81,27 +102,29 @@ def strip_model_reasoning(text: str) -> str:
     if _looks_like_json_string_array(cleaned):
         return cleaned
 
-    if _CYRILLIC_RE.search(cleaned):
-        for match in re.finditer(r"(?:^|\n\n+)([#>*\-\s]*[\u0400-\u04FF])", cleaned, flags=re.MULTILINE):
-            return cleaned[match.start() :].lstrip()
-        idx = _CYRILLIC_RE.search(cleaned)
-        if idx:
-            para = cleaned.rfind("\n\n", 0, idx.start())
-            if para >= 0:
-                return cleaned[para:].lstrip()
-            return cleaned[idx.start() :].lstrip()
+    masked, fences = _mask_code_fences(cleaned)
 
-    lower_head = cleaned[:400].lower()
+    if _CYRILLIC_RE.search(masked):
+        for match in re.finditer(r"(?:^|\n\n+)([#>*\-\s]*[\u0400-\u04FF])", masked, flags=re.MULTILINE):
+            return _unmask_code_fences(masked[match.start() :].lstrip(), fences)
+        idx = _CYRILLIC_RE.search(masked)
+        if idx:
+            para = masked.rfind("\n\n", 0, idx.start())
+            if para >= 0:
+                return _unmask_code_fences(masked[para:].lstrip(), fences)
+            return _unmask_code_fences(masked[idx.start() :].lstrip(), fences)
+
+    lower_head = masked[:400].lower()
     if any(marker in lower_head for marker in _COT_PREFIX_MARKERS):
-        parts = re.split(r"\n\n\n+", cleaned, maxsplit=1)
+        parts = re.split(r"\n\n\n+", masked, maxsplit=1)
         if len(parts) > 1 and _CYRILLIC_RE.search(parts[1]):
-            return parts[1].lstrip()
-        blocks = re.split(r"\n\n+", cleaned)
+            return _unmask_code_fences(parts[1].lstrip(), fences)
+        blocks = re.split(r"\n\n+", masked)
         for i, block in enumerate(blocks):
             if _CYRILLIC_RE.search(block):
-                return "\n\n".join(blocks[i:]).lstrip()
+                return _unmask_code_fences("\n\n".join(blocks[i:]).lstrip(), fences)
 
-    return cleaned
+    return _unmask_code_fences(masked, fences)
 
 
 def _prepare_chat_user_content(prompt: str) -> str:

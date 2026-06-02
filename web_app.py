@@ -17,7 +17,7 @@ from config import settings, get_logger, inference_server_reachable, fetch_remot
 from config.chat_runtime import rag_chat_defaults, resolve_chat_rag_options
 
 # Импорт RAG системы
-from core.rag import RAGSystem, RAGResult, classify_out_of_kb_query
+from core.rag import RAGSystem, RAGResult, classify_out_of_kb_query, fix_mermaid_block_code
 from core.chat_history import get_chat_history
 from utils.embeddings import ChatCompletionError
 
@@ -629,6 +629,34 @@ def chat_stream():
             })
 
     return Response(stream_with_context(generate()), headers=stream_headers)
+
+
+@app.route('/api/mermaid/fix', methods=['POST'])
+@log_api_request
+def mermaid_fix():
+    """Починить синтаксис одного блока Mermaid (fallback после ошибки рендера в браузере)."""
+    data = _get_json_body()
+    code = (data.get("code") or "").strip()
+    parse_error = (data.get("parse_error") or "").strip()
+    if not code:
+        return jsonify({"error": "Не указан code"}), 400
+    if len(code) > 12000:
+        return jsonify({"error": "Слишком длинный блок Mermaid"}), 400
+
+    if not inference_server_reachable():
+        fixed = fix_mermaid_block_code(code, parse_error=parse_error)
+        return jsonify({
+            "code": fixed,
+            "changed": fixed != code,
+            "llm_used": False,
+        })
+
+    fixed = fix_mermaid_block_code(code, parse_error=parse_error)
+    return jsonify({
+        "code": fixed,
+        "changed": fixed != code,
+        "llm_used": bool(getattr(settings, "MERMAID_AUTOFIX_ENABLED", True)),
+    })
 
 
 @app.route('/api/chat/verify', methods=['POST'])

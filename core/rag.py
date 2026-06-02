@@ -317,6 +317,63 @@ def _clip_text_keep_newlines(value: str, limit: int) -> str:
     return value[:limit - 3].rstrip() + "..."
 
 
+def _looks_like_flowchart_block(text: str) -> bool:
+    for line in (text or "").split("\n"):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("%%"):
+            continue
+        return stripped.startswith("flowchart ") or stripped.startswith("graph ")
+    return False
+
+
+def _quote_unsafe_flowchart_labels(text: str) -> str:
+    """
+    Mermaid 10 flowchart: подписи узлов с (, ), <br/>, URL ломают парсер без кавычек.
+    Преобразует `A[текст (прим)]` -> `A["текст (прим)"]`, `{...}` -> `{"..."}`.
+    """
+    if not _looks_like_flowchart_block(text):
+        return text
+
+    unsafe = re.compile(r"[()<]|://")
+    br_tag = re.compile(r"(?i)<br\s*/?>")
+
+    def _needs_quotes(label: str) -> bool:
+        return bool(unsafe.search(label) or br_tag.search(label) or "'" in label)
+
+    def _quote_square(m: re.Match) -> str:
+        node_id = m.group(1)
+        label = m.group(2)
+        if not _needs_quotes(label):
+            return m.group(0)
+        label = label.replace('"', "'")
+        return f'{node_id}["{label}"]'
+
+    def _quote_diamond(m: re.Match) -> str:
+        node_id = m.group(1)
+        label = m.group(2)
+        if not _needs_quotes(label):
+            return m.group(0)
+        label = label.replace('"', "'")
+        return f'{node_id}{{"{label}"}}'
+
+    def _quote_subgraph_brackets(m: re.Match) -> str:
+        prefix = m.group(1)
+        title = (m.group(2) or "").strip()
+        if not title:
+            return m.group(0)
+        title = title.replace('"', "'")
+        return f'{prefix}["{title}"]'
+
+    text = re.sub(r"(\b[A-Za-z_]\w*)\[([^\]\"\n]+)\]", _quote_square, text)
+    text = re.sub(r"(\b[A-Za-z_]\w*)\{([^{}\"\n]+)\}", _quote_diamond, text)
+    text = re.sub(
+        r"(?mi)^(\s*subgraph\s+\w+)\s+\[([^\]\"\n]+)\]\s*$",
+        _quote_subgraph_brackets,
+        text,
+    )
+    return text
+
+
 def _normalize_mermaid_code(code_text: str) -> str:
     """
     Дешёвая нормализация Mermaid-кода для типовых ошибок LLM.
@@ -326,6 +383,9 @@ def _normalize_mermaid_code(code_text: str) -> str:
     text = (code_text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
     if not text:
         return text
+
+    # LLM иногда экранирует кавычки как \", что ломает subgraph/labels в Mermaid 10.
+    text = text.replace('\\"', '"')
 
     # Нормализация частых HTML-тегов внутри label'ов.
     # `<b>` убираем, а `<br>` унифицируем к `<br/>` (Mermaid любит этот вариант для многострочных подписей).
@@ -401,7 +461,116 @@ def _normalize_mermaid_code(code_text: str) -> str:
 
     text = "\n".join(_sanitize_bracket_labels(ln) for ln in text.split("\n"))
 
+    text = _quote_unsafe_flowchart_labels(text)
+
+    # LLM иногда переводит директиву style («стиль A fill:#fff») — ломает парсер Mermaid.
+    text = re.sub(r"(?mi)^(\s*)(?:стиль|Стиль|СТИЛЬ)\s+", r"\1style ", text)
+
     return text
+
+
+_MERMAID_LINE_PREFIXES = (
+    "graph ",
+    "flowchart ",
+    "sequenceDiagram",
+    "classDiagram",
+    "stateDiagram",
+    "erDiagram",
+    "journey",
+    "gantt",
+    "mindmap",
+    "timeline",
+    "quadrantChart",
+    "sankey-beta",
+)
+
+
+def _coerce_mermaid_code(code_text: str) -> str:
+    """Нормализация + отсечение мусорных строк перед заголовком диаграммы."""
+    text = _normalize_mermaid_code(code_text)
+    if not text:
+        return text
+    lines = text.split("\n")
+    start_idx = None
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("%%"):
+            continue
+        if any(stripped.startswith(prefix) for prefix in _MERMAID_LINE_PREFIXES):
+            start_idx = i
+            break
+    if start_idx is None or start_idx == 0:
+        return text
+    return "\n".join(lines[start_idx:])
+
+
+def fix_mermaid_block_code(raw: str, parse_error: str = "") -> str:
+    """
+    Починить один блок Mermaid (тело без ```), с нормализацией и опциональным LLM-autofix.
+    Всегда возвращает лучший доступный вариант (минимум — результат _coerce_mermaid_code).
+    """
+    original = (raw or "").strip()
+    if not original:
+        return original
+
+    best = _coerce_mermaid_code(original)
+    if not getattr(settings, "MERMAID_AUTOFIX_ENABLED", True):
+        return best
+    if best != original and not (parse_error or "").strip():
+        return best
+
+    raw_clip = _clip_text_keep_newlines(best, 6000)
+    error_block = ""
+    if (parse_error or "").strip():
+        error_block = (
+            f"\nОшибка парсера Mermaid в браузере:\n"
+            f"{_clip_text_keep_newlines(parse_error.strip(), 800)}\n"
+        )
+    fix_prompt = f"""Ты валидируешь и исправляешь синтаксис Mermaid (совместимость Mermaid 10.x).
+
+Вход: Mermaid-код диаграммы.
+Задача:
+- исправь ошибки синтаксиса (некорректные идентификаторы, кавычки, скобки, стрелки, лишние символы);
+- подписи узлов с круглыми скобками, URL или <br/> оборачивай в кавычки: A["текст (пример)"], B{{"вопрос<br/>вариант"}};
+- сохрани смысл и структуру диаграммы;
+- первая значимая строка должна начинаться с типа диаграммы (flowchart, graph, sequenceDiagram и т.д.);
+- НЕ добавляй объяснений и НЕ оборачивай в Markdown;
+- верни ТОЛЬКО исправленный Mermaid-код (без ```).
+{error_block}
+MERMAID:
+{raw_clip}
+"""
+    candidate = ""
+    try:
+        candidate = (chat_completion(fix_prompt, timeout=60) or "").strip()
+    except Exception:
+        candidate = ""
+
+    if not candidate:
+        return best
+
+    fence_match = re.search(r"```(?:mermaid)?\s*([\s\S]*?)\s*```", candidate, flags=re.IGNORECASE)
+    if fence_match:
+        candidate = (fence_match.group(1) or "").strip()
+    coerced = _coerce_mermaid_code(candidate)
+    if looks_like_mermaid(coerced):
+        return coerced
+    return best
+
+
+def _merge_mermaid_from_raw(raw: str, answer: str) -> str:
+    """Восстановить ```mermaid``` из сырого ответа LLM, если CoT-обрезка сломала fenced-блок."""
+    current = answer or ""
+    if not raw or "```mermaid" in current.lower():
+        return current
+    block_match = re.search(r"```mermaid\s*[\s\S]*?```", raw, flags=re.IGNORECASE)
+    if not block_match:
+        return current
+    intro = strip_model_reasoning(raw[: block_match.start()]).strip()
+    sources_match = re.search(r"\n\n\*\*Источники:\*\*[\s\S]*$", current)
+    tail = (sources_match.group(0) if sources_match else "").strip()
+    merged = "\n\n".join(p for p in (intro, block_match.group(0).strip(), tail) if p)
+    return merged
 
 
 def _parse_json_object(value: str) -> Dict[str, Any]:
@@ -1227,6 +1396,7 @@ class RAGSystem:
         if getattr(settings, "CHAT_DISABLE_THINKING", True):
             answer = strip_model_reasoning(answer)
         answer = (answer or "").strip()
+        answer = self._autofix_mermaid_blocks(answer)
         rag_result = RAGResult(
             answer=answer,
             citations=[],
@@ -1387,7 +1557,7 @@ class RAGSystem:
 
 Специальные случаи:
 13. Если ВОПРОС — приветствие, общий вопрос вне wiki («как дела», «каким цветом небо») или тема не про 1С/процессы компании — ответь кратко, не используй КОНТЕКСТ и не натягивай случайные фрагменты wiki на бытовые вопросы.
-14. Mermaid (```mermaid ... ```) — только если она хорошо подходит по смыслу или пользователь явно просит схему/диаграмму/граф/визуализацию, либо без схемы ответ непонятен; иначе текст или список. Следи за синтаксисом Mermaid 10.x.
+14. Mermaid (```mermaid ... ```) — только если она хорошо подходит по смыслу или пользователь явно просит схему/диаграмму/граф/визуализацию, либо без схемы ответ непонятен; иначе текст или список. Следи за синтаксисом Mermaid 10.x: директива оформления только `style ID fill:#цвет` (не «стиль»); подписи с (, ), <br/> или ' — в кавычках.
 15. Не выводи ход рассуждений и черновики — сразу финальный ответ.
 16. Эмодзи не обязательны; в режимах «кратко» и «только по источникам» не используй.
 
@@ -1437,60 +1607,16 @@ class RAGSystem:
             raw = (m.group(1) or "").strip()
             if not raw:
                 continue
-            raw_norm = _normalize_mermaid_code(raw)
-            if log_enabled and raw_norm != raw:
+            if log_enabled and _coerce_mermaid_code(raw) != raw:
                 rag_logger.debug(
                     "Mermaid autofix: нормализация (до LLM)\n--- raw ---\n%s\n--- norm ---\n%s",
                     _clip_text_keep_newlines(raw, 1200),
-                    _clip_text_keep_newlines(raw_norm, 1200),
+                    _clip_text_keep_newlines(_coerce_mermaid_code(raw), 1200),
                 )
-            raw = raw_norm
-            # В Mermaid переносы строк критичны для синтаксиса; не схлопываем whitespace.
-            raw_clip = _clip_text_keep_newlines(raw, 6000)
-            fix_prompt = f"""Ты валидируешь и исправляешь синтаксис Mermaid (совместимость Mermaid 10.x).
-
-Вход: Mermaid-код диаграммы.
-Задача:
-- исправь ошибки синтаксиса (некорректные идентификаторы, кавычки, скобки, стрелки, лишние символы);
-- сохрани смысл и структуру диаграммы;
-- НЕ добавляй объяснений и НЕ оборачивай в Markdown;
-- верни ТОЛЬКО исправленный Mermaid-код (без ```).
-
-MERMAID:
-{raw_clip}
-"""
-            try:
-                candidate = (chat_completion(fix_prompt, timeout=60) or "").strip()
-            except Exception:
-                candidate = ""
-
-            if not candidate:
-                continue
-
-            # Иногда модель возвращает код в ```; аккуратно извлечём содержимое.
-            fence_match = re.search(r"```(?:mermaid)?\s*([\s\S]*?)\s*```", candidate, flags=re.IGNORECASE)
-            if fence_match:
-                candidate = (fence_match.group(1) or "").strip()
-            candidate_norm = _normalize_mermaid_code(candidate)
-            if log_enabled and candidate_norm != candidate:
-                rag_logger.debug(
-                    "Mermaid autofix: нормализация (после LLM)\n--- candidate ---\n%s\n--- norm ---\n%s",
-                    _clip_text_keep_newlines(candidate, 1200),
-                    _clip_text_keep_newlines(candidate_norm, 1200),
-                )
-            candidate = candidate_norm
-
-            # Минимальная sanity-проверка: должен начинаться с известного типа диаграммы.
-            if not looks_like_mermaid(candidate):
-                if log_enabled:
-                    rag_logger.debug(
-                        "Mermaid autofix: пропуск, не похоже на Mermaid (first line=%r)",
-                        (candidate.splitlines() or [""])[0][:180],
-                    )
-                continue
-
-            fixed = fixed[: m.start(1)] + candidate + fixed[m.end(1) :]
-            replaced += 1
+            best = fix_mermaid_block_code(raw)
+            if best != raw:
+                replaced += 1
+            fixed = fixed[: m.start(1)] + best + fixed[m.end(1) :]
 
         if replaced:
             rag_logger.info("Mermaid autofix: исправлено блоков=%s", replaced)
@@ -1859,6 +1985,7 @@ MERMAID:
         rag_logger.debug("Шаг 4: Обогащение ответа цитатами")
         enrich_started = time.perf_counter()
         rag_result = self.enrich_answer_with_citations(answer, documents, max_citations)
+        rag_result.answer = self._autofix_mermaid_blocks(rag_result.answer or "")
         query_timings_ms["citation_enrich_ms"] = _query_elapsed_ms(enrich_started)
         elapsed = time.time() - start_time
         query_timings_ms["total_ms"] = _query_elapsed_ms(query_perf_started)
@@ -1989,6 +2116,7 @@ MERMAID:
         disable_thinking = bool(getattr(settings, "CHAT_DISABLE_THINKING", True))
         if disable_thinking:
             answer = strip_model_reasoning(answer)
+        answer = _merge_mermaid_from_raw(raw_answer, answer)
         answer = self._autofix_mermaid_blocks(answer)
 
         _safe_json_log(
@@ -2010,6 +2138,7 @@ MERMAID:
 
         enrich_started = time.perf_counter()
         rag_result = self.enrich_answer_with_citations(answer, documents, max_citations)
+        rag_result.answer = self._autofix_mermaid_blocks(rag_result.answer or "")
         stream_timings_ms["citation_enrich_ms"] = _stream_elapsed_ms(enrich_started)
         stream_timings_ms["total_ms"] = _stream_elapsed_ms(stream_perf_started)
         rag_result.diagnostics = {
@@ -2157,20 +2286,8 @@ def highlight_citations_in_text(text: str, citations: List[Citation]) -> str:
 
 def looks_like_mermaid(code_text: str) -> bool:
     """Грубая проверка: похоже ли содержимое на Mermaid-диаграмму."""
-    text = str(code_text or "").strip()
+    text = _coerce_mermaid_code(code_text).strip()
     if not text:
         return False
-    return (
-        text.startswith("graph ")
-        or text.startswith("flowchart ")
-        or text.startswith("sequenceDiagram")
-        or text.startswith("classDiagram")
-        or text.startswith("stateDiagram")
-        or text.startswith("erDiagram")
-        or text.startswith("journey")
-        or text.startswith("gantt")
-        or text.startswith("mindmap")
-        or text.startswith("timeline")
-        or text.startswith("quadrantChart")
-        or text.startswith("sankey-beta")
-    )
+    first = (text.splitlines() or [""])[0].strip()
+    return any(first.startswith(prefix) for prefix in _MERMAID_LINE_PREFIXES)

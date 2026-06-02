@@ -22,6 +22,21 @@ let reindexPollTimer = null;
 let _mermaidInitialized = false;
 let _mermaidLightbox = null;
 let _mermaidLightboxCurrentSvg = null;
+
+function recoverMermaidInAnswer(streamText, finalText) {
+    const final = String(finalText || '');
+    const stream = String(streamText || '');
+    if (/```mermaid/i.test(final)) {
+        return final;
+    }
+    const block = stream.match(/```mermaid[\s\S]*?```/i)?.[0];
+    if (!block) {
+        return final;
+    }
+    const intro = (final.split(/```/)[0] || stream.split(/```/)[0] || '').trim();
+    const sources = final.match(/\n\n\*\*Источники:\*\*[\s\S]*$/)?.[0]?.trim() || '';
+    return [intro, block, sources].filter(Boolean).join('\n\n');
+}
 let _chatListCache = [];
 let _chatListSearch = '';
 
@@ -195,42 +210,74 @@ function renderMermaidIn(container) {
     // Важно: mermaid.run/init иногда НЕ бросают исключение и рисуют "error diagram" в DOM.
     // Поэтому по возможности используем mermaid.render(...) и управляем результатом вручную.
     nodesToRender.forEach((node, idx) => {
-        const raw = nodesRawText.get(node) || node.textContent || '';
         const renderId = `mmd-${Date.now()}-${Math.random().toString(16).slice(2)}-${idx}`;
 
-        const fallback = () => {
+        const showFallback = (raw) => {
             node.classList.add('mermaid-error');
             node.innerHTML = `<pre class="mermaid-error__pre"><code>${escapeHtml(raw)}</code></pre>`;
         };
 
-        try {
-            if (typeof mermaid.render === 'function') {
-                const maybe = mermaid.render(renderId, raw);
-                Promise.resolve(maybe)
-                    .then((res) => {
-                        const svg = res && (res.svg || res);
-                        if (typeof svg !== 'string' || !svg.trim().startsWith('<svg')) {
-                            fallback();
-                            return;
-                        }
-                        node.classList.remove('mermaid-error');
-                        node.innerHTML = svg;
-                    })
-                    .catch(() => fallback());
+        const renderWithCode = (code, allowServerFix) => {
+            const trimmed = String(code || '').trim();
+            if (!trimmed) {
+                showFallback(code);
                 return;
             }
+            node.textContent = trimmed;
+            node.classList.remove('mermaid-error');
 
-            // Fallback для старых API: всё равно оборачиваем в try/catch + suppressErrorRendering.
-            if (typeof mermaid.run === 'function') {
-                mermaid.run({nodes: [node]});
-            } else if (typeof mermaid.init === 'function') {
-                mermaid.init(undefined, [node]);
-            } else {
-                fallback();
+            const fail = (reason) => {
+                if (!allowServerFix) {
+                    showFallback(trimmed);
+                    return;
+                }
+                fetch('/api/mermaid/fix', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({code: trimmed, parse_error: String(reason || '')}),
+                })
+                    .then((resp) => (resp.ok ? resp.json() : null))
+                    .then((data) => {
+                        const fixed = (data && data.code) ? String(data.code).trim() : '';
+                        if (fixed && fixed !== trimmed) {
+                            renderWithCode(fixed, false);
+                            return;
+                        }
+                        showFallback(trimmed);
+                    })
+                    .catch(() => showFallback(trimmed));
+            };
+
+            try {
+                if (typeof mermaid.render === 'function') {
+                    const maybe = mermaid.render(`${renderId}-${allowServerFix ? 'a' : 'b'}`, trimmed);
+                    Promise.resolve(maybe)
+                        .then((res) => {
+                            const svg = res && (res.svg || res);
+                            if (typeof svg !== 'string' || !svg.trim().startsWith('<svg')) {
+                                fail('invalid_svg');
+                                return;
+                            }
+                            node.classList.remove('mermaid-error');
+                            node.innerHTML = svg;
+                        })
+                        .catch((err) => fail(`render_rejected:${err?.message || err || ''}`));
+                    return;
+                }
+
+                if (typeof mermaid.run === 'function') {
+                    mermaid.run({nodes: [node]});
+                } else if (typeof mermaid.init === 'function') {
+                    mermaid.init(undefined, [node]);
+                } else {
+                    fail('no_render_api');
+                }
+            } catch (_) {
+                fail('render_exception');
             }
-        } catch (_) {
-            fallback();
-        }
+        };
+
+        renderWithCode(nodesRawText.get(node) || node.textContent || '', true);
     });
 }
 
@@ -1554,21 +1601,22 @@ async function readStream(response, requestId) {
             } else if (payload.type === 'done') {
                 cancelStreamMarkdownFrame();
                 const finalText = payload.answer != null ? payload.answer : accumulated;
-                streamRenderMetrics.finalChars = finalText.length;
+                const textToRender = recoverMermaidInAnswer(accumulated, finalText);
+                streamRenderMetrics.finalChars = textToRender.length;
                 setCurrentChatId(payload.chat_id || currentChatId);
                 ensureStreamShell();
-                streamContent.innerHTML = formatMessage(finalText);
+                streamContent.innerHTML = formatMessage(textToRender);
                 renderMermaidIn(streamContent);
                 streamContent.classList.remove('streaming-in-progress');
                 linkifySourceReferences(streamShell, payload.sources || [], payload.citations || []);
                 addSourcesButton(streamShell, payload.sources || [], payload.citations || []);
                 addVerifyButton(streamShell, {
-                    answer: finalText,
+                    answer: textToRender,
                     sources: payload.sources || [],
                     citations: payload.citations || [],
                 });
                 schedulePostAnswerEnhancements(streamShell, {
-                    answer: finalText,
+                    answer: textToRender,
                     sources: payload.sources || [],
                     citations: payload.citations || [],
                 });
