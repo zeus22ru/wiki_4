@@ -8,9 +8,11 @@ from __future__ import annotations
 
 import math
 import pickle
+import queue
 import re
+import threading
+import time
 from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Callable, DefaultDict, Dict, List, MutableMapping, Optional, Sequence, Tuple
 
@@ -38,6 +40,8 @@ except ImportError:
 # Cross-encoder (тяжёлая зависимость, подгружается лениво)
 _cross_encoder_model = None
 _cross_encoder_name: Optional[str] = None
+_BM25_CACHE_LOCK = threading.Lock()
+_BM25_CACHE: Optional[Dict[str, Any]] = None
 
 
 def _tokenize_bm25(text: str) -> List[str]:
@@ -49,6 +53,26 @@ def _tokenize_bm25(text: str) -> List[str]:
 def bm25_index_path() -> Path:
     base = Path(settings.CHROMA_PERSIST_DIR)
     return base / settings.BM25_INDEX_FILENAME
+
+
+def invalidate_bm25_cache() -> None:
+    """Сбросить process-level кэш готового BM25 Okapi после успешной переиндексации."""
+    global _BM25_CACHE
+    with _BM25_CACHE_LOCK:
+        _BM25_CACHE = None
+
+
+def _bm25_file_signature(path: Path) -> Optional[Tuple[str, str, int, int]]:
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    return (
+        str(path.resolve()),
+        settings.CHROMA_COLLECTION_NAME,
+        int(stat.st_mtime_ns),
+        int(stat.st_size),
+    )
 
 
 def save_bm25_index(ids: List[str], texts: List[str]) -> None:
@@ -71,6 +95,7 @@ def save_bm25_index(ids: List[str], texts: List[str]) -> None:
     }
     with open(path, "wb") as f:
         pickle.dump(payload, f, protocol=pickle.HIGHEST_PROTOCOL)
+    invalidate_bm25_cache()
     logger.info("Сохранён BM25-индекс: %s (%s документов)", path, len(ids))
 
 
@@ -102,6 +127,14 @@ def build_bm25_okapi(ids: List[str], texts: List[str]) -> Any:
 
 
 def load_bm25_okapi() -> Optional[Tuple[Any, List[str]]]:
+    global _BM25_CACHE
+    path = bm25_index_path()
+    signature = _bm25_file_signature(path)
+    if signature is not None:
+        with _BM25_CACHE_LOCK:
+            if _BM25_CACHE and _BM25_CACHE.get("signature") == signature:
+                return _BM25_CACHE["bundle"]
+
     corpus = load_bm25_corpus()
     if not corpus:
         return None
@@ -111,7 +144,12 @@ def load_bm25_okapi() -> Optional[Tuple[Any, List[str]]]:
     except Exception as e:
         logger.warning("Ошибка построения BM25: %s", e)
         return None
-    return bm25, aligned_ids
+    bundle = (bm25, aligned_ids)
+    signature = _bm25_file_signature(path)
+    if signature is not None:
+        with _BM25_CACHE_LOCK:
+            _BM25_CACHE = {"signature": signature, "bundle": bundle}
+    return bundle
 
 
 def reciprocal_rank_fusion(
@@ -172,11 +210,18 @@ def rerank_cross_encoder(
         return documents
     limit = top_n if top_n is not None else len(documents)
     chunk = documents[:limit]
-    pairs = [[query, d.get("text") or ""] for d in chunk]
+    max_text_chars = max(0, int(getattr(settings, "RERANK_MAX_TEXT_CHARS", 4000) or 0))
+    query_text = str(query or "")
+    pairs = [
+        [query_text, (str(d.get("text") or "")[:max_text_chars] if max_text_chars else str(d.get("text") or ""))]
+        for d in chunk
+    ]
     try:
-        raw_scores = model.predict(pairs, show_progress_bar=False)
+        raw_scores = _predict_rerank_scores(model, pairs)
     except Exception as e:
         logger.warning("Ошибка cross-encoder rerank: %s", e)
+        return documents
+    if raw_scores is None:
         return documents
     scored = []
     for doc, s in zip(chunk, raw_scores):
@@ -190,6 +235,32 @@ def rerank_cross_encoder(
         scored.append(d)
     scored.sort(key=lambda x: x["score"], reverse=True)
     return scored + documents[limit:]
+
+
+def _predict_rerank_scores(model: Any, pairs: List[List[str]]) -> Optional[Any]:
+    """Выполнить rerank predict с опциональным timeout и fallback к исходному порядку."""
+    timeout = float(getattr(settings, "RERANK_TIMEOUT_SECONDS", 15) or 0)
+    if timeout <= 0:
+        return model.predict(pairs, show_progress_bar=False)
+
+    result_queue: "queue.Queue[Tuple[str, Any]]" = queue.Queue(maxsize=1)
+
+    def _run() -> None:
+        try:
+            result_queue.put(("ok", model.predict(pairs, show_progress_bar=False)))
+        except Exception as exc:
+            result_queue.put(("error", exc))
+
+    worker = threading.Thread(target=_run, daemon=True)
+    worker.start()
+    worker.join(timeout)
+    if worker.is_alive():
+        logger.warning("Cross-encoder rerank timeout after %.2f seconds; fallback to original order", timeout)
+        return None
+    status, payload = result_queue.get()
+    if status == "error":
+        raise payload
+    return payload
 
 
 def _chroma_query_dense(
@@ -215,6 +286,43 @@ def _chroma_query_dense(
     metas = (results.get("metadatas") or [[]])[0]
     docs = (results.get("documents") or [[]])[0]
     return ids, dists, metas, docs
+
+
+def _chroma_query_dense_batch(
+    collection,
+    query_embeddings: Sequence[List[float]],
+    n_results: int,
+    reload_collection: Callable[[], Any],
+) -> List[Tuple[List[str], List[float], List[Optional[Dict]], List[str]]]:
+    """Выполнить несколько dense-запросов к Chroma одним batch-вызовом."""
+    if not query_embeddings:
+        return []
+    try:
+        results = collection.query(
+            query_embeddings=list(query_embeddings),
+            n_results=n_results,
+            include=["documents", "metadatas", "distances"],
+        )
+    except NotFoundError:
+        results = reload_collection().query(
+            query_embeddings=list(query_embeddings),
+            n_results=n_results,
+            include=["documents", "metadatas", "distances"],
+        )
+
+    ids_all = results.get("ids") or []
+    dists_all = results.get("distances") or []
+    metas_all = results.get("metadatas") or []
+    docs_all = results.get("documents") or []
+    out: List[Tuple[List[str], List[float], List[Optional[Dict]], List[str]]] = []
+    for idx in range(len(query_embeddings)):
+        out.append((
+            ids_all[idx] if idx < len(ids_all) else [],
+            dists_all[idx] if idx < len(dists_all) else [],
+            metas_all[idx] if idx < len(metas_all) else [],
+            docs_all[idx] if idx < len(docs_all) else [],
+        ))
+    return out
 
 
 def _documents_from_chroma_ids(
@@ -295,7 +403,7 @@ def _dense_rankings_parallel(
     pool: int,
     reload_collection: Callable[[], Any],
 ) -> List[List[str]]:
-    """Параллельные dense-запросы к Chroma (порядок как у query_embeddings)."""
+    """Batch dense-запросы к Chroma (порядок как у query_embeddings)."""
     if not query_embeddings:
         return []
     if len(query_embeddings) == 1:
@@ -303,23 +411,13 @@ def _dense_rankings_parallel(
         ids, _, _, _ = _chroma_query_dense(collection, emb, pool, reload_collection)
         return [[str(x) for x in ids]]
 
-    max_workers = min(4, len(query_embeddings))
-    results: List[Optional[List[str]]] = [None] * len(query_embeddings)
-
-    def _one(idx: int, emb: List[float]) -> Tuple[int, List[str]]:
-        ids, _, _, _ = _chroma_query_dense(collection, emb, pool, reload_collection)
-        return idx, [str(x) for x in ids]
-
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = [
-            executor.submit(_one, i, emb)
-            for i, (_q, emb) in enumerate(query_embeddings)
-        ]
-        for fut in as_completed(futures):
-            idx, ranking = fut.result()
-            results[idx] = ranking
-
-    return [r if r is not None else [] for r in results]
+    batch_results = _chroma_query_dense_batch(
+        collection,
+        [emb for _q, emb in query_embeddings],
+        pool,
+        reload_collection,
+    )
+    return [[str(x) for x in ids] for ids, _dists, _metas, _docs in batch_results]
 
 
 def hybrid_retrieve(
@@ -343,7 +441,29 @@ def hybrid_retrieve(
         "retrieval_mode": settings.RETRIEVAL_MODE,
         "queries_dense": list(query_strings_for_dense),
         "queries_sparse": list(query_strings_for_sparse),
+        "timings_ms": {},
     }
+    started = time.perf_counter()
+    timings: Dict[str, int] = diagnostics["timings_ms"]
+
+    def elapsed_ms(stage_started: float) -> int:
+        return int((time.perf_counter() - stage_started) * 1000)
+
+    def finish(
+        documents: List[Dict[str, Any]],
+        error_code: Optional[str],
+    ) -> Tuple[List[Dict[str, Any]], Optional[str], Dict[str, Any]]:
+        timings["total_ms"] = elapsed_ms(started)
+        logger.debug(
+            "Retrieval diagnostics: mode=%s stage=%s docs=%s error=%s timings_ms=%s",
+            diagnostics.get("retrieval_mode"),
+            diagnostics.get("stage"),
+            len(documents or []),
+            error_code,
+            timings,
+        )
+        return documents, error_code, diagnostics
+
     mode = (settings.RETRIEVAL_MODE or "hybrid").lower()
     pool = max(top_k, settings.RAG_FUSION_CANDIDATES, settings.RERANK_TOP_N)
 
@@ -351,13 +471,17 @@ def hybrid_retrieve(
     if mode == "dense":
         primary_q = query_strings_for_dense[0] if query_strings_for_dense else ""
         primary_q = (primary_q or "").strip()
+        stage_started = time.perf_counter()
         emb_map, ok = resolve_dense_embeddings([primary_q], embedding_cache)
+        timings["embedding_ms"] = elapsed_ms(stage_started)
         if not ok or not primary_q:
-            return [], "embedding_unavailable", diagnostics
+            return finish([], "embedding_unavailable")
         emb = emb_map.get(primary_q)
         if not emb:
-            return [], "embedding_unavailable", diagnostics
+            return finish([], "embedding_unavailable")
+        stage_started = time.perf_counter()
         ids, dists, metas, docs = _chroma_query_dense(collection, emb, pool, reload_collection)
+        timings["dense_chroma_ms"] = elapsed_ms(stage_started)
         documents = []
         for i, cid in enumerate(ids):
             score = dists[i] if i < len(dists) else 0.0
@@ -372,18 +496,47 @@ def hybrid_retrieve(
         documents.sort(key=lambda x: x["score"], reverse=True)
         documents = documents[:top_k]
         if settings.RERANK_ENABLED and documents:
+            stage_started = time.perf_counter()
             documents = rerank_cross_encoder(primary_q, documents, top_n=settings.RERANK_TOP_N)
+            timings["rerank_ms"] = elapsed_ms(stage_started)
             documents = [d for d in documents[:top_k] if d.get("score", 0) >= min_score]
         diagnostics["stage"] = "dense_only"
-        return documents, None, diagnostics
+        return finish(documents, None)
 
     # --- гибрид / sparse-only ветка ---
+    bm25 = None
+    bm25_ids: List[str] = []
+    if bm25_bundle:
+        bm25, bm25_ids = bm25_bundle
+    elif _BM25_AVAILABLE:
+        stage_started = time.perf_counter()
+        loaded = load_bm25_okapi()
+        timings["bm25_load_ms"] = elapsed_ms(stage_started)
+        if loaded:
+            bm25, bm25_ids = loaded
+
+    sparse_rankings: List[List[str]] = []
+    if bm25 is not None:
+        stage_started = time.perf_counter()
+        for q in query_strings_for_sparse:
+            sparse_rankings.append(bm25_ranking(bm25, bm25_ids, q, pool))
+        timings["bm25_search_ms"] = elapsed_ms(stage_started)
+
     dense_rankings: List[List[str]] = []
     all_embeddings_ok = True
+    dense_error: Optional[str] = None
     if mode != "sparse" and query_strings_for_dense:
-        emb_map, all_embeddings_ok = resolve_dense_embeddings(
-            query_strings_for_dense, embedding_cache
-        )
+        try:
+            stage_started = time.perf_counter()
+            emb_map, all_embeddings_ok = resolve_dense_embeddings(
+                query_strings_for_dense, embedding_cache
+            )
+            timings["embedding_ms"] = elapsed_ms(stage_started)
+        except Exception as e:
+            emb_map = {}
+            all_embeddings_ok = False
+            dense_error = str(e)
+            timings["embedding_ms"] = elapsed_ms(stage_started)
         if all_embeddings_ok:
             pairs: List[Tuple[str, List[float]]] = []
             for q in query_strings_for_dense:
@@ -393,48 +546,58 @@ def hybrid_retrieve(
                 vec = emb_map.get(qn)
                 if not vec:
                     all_embeddings_ok = False
+                    dense_error = "empty_embedding"
                     break
                 pairs.append((qn, vec))
             if all_embeddings_ok and pairs:
+                stage_started = time.perf_counter()
                 dense_rankings = _dense_rankings_parallel(
                     collection, pairs, pool, reload_collection
                 )
+                timings["dense_chroma_ms"] = elapsed_ms(stage_started)
+        elif dense_error is None:
+            dense_error = "embedding_unavailable"
 
     if mode != "sparse" and not all_embeddings_ok:
-        return [], "embedding_unavailable", diagnostics
-
-    sparse_rankings: List[List[str]] = []
-    bm25 = None
-    bm25_ids: List[str] = []
-    if bm25_bundle:
-        bm25, bm25_ids = bm25_bundle
-    elif _BM25_AVAILABLE:
-        loaded = load_bm25_okapi()
-        if loaded:
-            bm25, bm25_ids = loaded
-
-    if bm25 is not None:
-        for q in query_strings_for_sparse:
-            sparse_rankings.append(bm25_ranking(bm25, bm25_ids, q, pool))
+        diagnostics["degraded"] = True
+        diagnostics["dense_error"] = dense_error or "embedding_unavailable"
+        if mode == "hybrid" and sparse_rankings and any(sparse_rankings):
+            diagnostics["used_sparse_fallback"] = True
+            logger.warning(
+                "Dense retrieval недоступен, используется BM25 fallback: %s",
+                diagnostics["dense_error"],
+            )
+        else:
+            diagnostics["used_sparse_fallback"] = False
+            return finish([], "embedding_unavailable")
+    else:
+        diagnostics["degraded"] = False
+        diagnostics["used_sparse_fallback"] = False
 
     if mode == "sparse":
         if not sparse_rankings or not any(sparse_rankings):
             diagnostics["stage"] = "sparse_empty"
-            return [], None, diagnostics
+            return finish([], None)
+        stage_started = time.perf_counter()
         fused = reciprocal_rank_fusion(sparse_rankings, k=settings.RRF_K_CONSTANT)
+        timings["rrf_ms"] = elapsed_ms(stage_started)
     else:
         rankings_for_rrf: List[List[str]] = []
         rankings_for_rrf.extend(dense_rankings)
         rankings_for_rrf.extend(sparse_rankings)
         if not rankings_for_rrf:
-            return [], "search_error", diagnostics
+            return finish([], "search_error")
+        stage_started = time.perf_counter()
         fused = reciprocal_rank_fusion(rankings_for_rrf, k=settings.RRF_K_CONSTANT)
+        timings["rrf_ms"] = elapsed_ms(stage_started)
 
     diagnostics["rrf_fused_count"] = len(fused)
     candidate_ids = [fid for fid, _ in fused[: max(pool, settings.RERANK_TOP_N)]]
     id_to_rrf = {fid: sc for fid, sc in fused}
 
+    stage_started = time.perf_counter()
     chroma_map = _documents_from_chroma_ids(collection, candidate_ids, reload_collection)
+    timings["chroma_fetch_ms"] = elapsed_ms(stage_started)
     documents = []
     for cid in candidate_ids:
         if cid not in chroma_map:
@@ -452,18 +615,20 @@ def hybrid_retrieve(
 
     if not documents:
         diagnostics["stage"] = "no_hits"
-        return [], None, diagnostics
+        return finish([], None)
 
     primary_sparse_q = query_strings_for_sparse[0] if query_strings_for_sparse else ""
     primary_dense_q = query_strings_for_dense[0] if query_strings_for_dense else primary_sparse_q
 
     if settings.RERANK_ENABLED:
+        stage_started = time.perf_counter()
         documents = rerank_cross_encoder(primary_dense_q, documents, top_n=settings.RERANK_TOP_N)
+        timings["rerank_ms"] = elapsed_ms(stage_started)
     else:
         documents.sort(key=lambda x: x.get("score", 0), reverse=True)
 
     documents = [d for d in documents if d.get("score", 0) >= min_score]
     documents = documents[:top_k]
-    diagnostics["stage"] = "hybrid" if mode == "hybrid" else mode
+    diagnostics["stage"] = "sparse_fallback" if diagnostics.get("used_sparse_fallback") else ("hybrid" if mode == "hybrid" else mode)
     diagnostics["final_count"] = len(documents)
-    return documents, None, diagnostics
+    return finish(documents, None)

@@ -1,6 +1,6 @@
 # Векторная база знаний для вопрос-ответной системы
 
-Система для создания локальной векторной базы знаний и RAG-вопрос-ответа по документам. Поддерживает веб-интерфейс, CLI, JSON API и чат-бота Битрикс24. Для инференса используется **Ollama** или **LM Studio** (OpenAI-совместимый локальный API), для векторного поиска — локальная ChromaDB.
+Система для создания локальной векторной базы знаний и RAG-вопрос-ответа по документам. Поддерживает веб-интерфейс, CLI, JSON API и чат-бота Битрикс24. Для инференса используется **Ollama** или **LM Studio** (OpenAI-совместимый локальный API), для поиска — ChromaDB с опциональным гибридным retrieval (dense + BM25/RRF).
 
 Переключение между Ollama и LM Studio задаётся в `.env` через `INFERENCE_BACKEND`.
 
@@ -45,7 +45,7 @@ wiki_4/
 ├── docker-compose.yml       # Docker конфигурация
 ├── GPU_SETUP.md             # Настройка GPU
 ├── create_vector_db.py     # Скрипт создания векторной БД
-├── qa_system.py            # CLI вопрос-ответная система
+├── qa_system.py            # CLI вопрос-ответ через текущий RAGSystem
 ├── web_app.py              # Flask веб-приложение
 ├── start.bat               # Скрипт запуска на Windows
 ├── requirements.txt        # Зависимости Python
@@ -192,9 +192,10 @@ python create_vector_db.py
 
 - Просканирует папку `data/` и найдет все поддерживаемые файлы
 - Извлечет текст из файлов
-- Разобьет текст на чанки (по 500 символов с перекрытием 50)
+- Разобьет текст на чанки: при `STRUCTURAL_CHUNKING_ENABLED=true` учитываются HTML/Markdown-заголовки и секции, иначе используется размер `CHUNK_SIZE` с перекрытием `CHUNK_OVERLAP`
 - Сгенерирует эмбеддинги через выбранный сервер инференса
 - Сохранит векторную базу данных в папку `chroma_db/`
+- Сохранит BM25-корпус рядом с Chroma, если доступна гибридная индексация
 
 ### 2. Вопрос-ответная система
 
@@ -206,7 +207,7 @@ python create_vector_db.py
 python qa_system.py
 ```
 
-Система предложит вводить вопросы и будет генерировать ответы на основе найденных документов.
+CLI использует тот же `RAGSystem.query()`, что и web/API: учитываются гибридный retrieval, chitchat/off-topic routing и текущие RAG-настройки.
 
 Для выхода введите: `exit`, `quit`, `выход` или `q`
 
@@ -259,6 +260,11 @@ curl -N -X POST http://localhost:5000/api/chat/stream \
   -H "Accept: text/event-stream" \
   -d '{"message":"Как настроить принтер на ТСД?","chat_id":1,"answer_mode":"steps"}'
 
+# Короткий small talk при RAG_CHITCHAT_SKIP_RETRIEVAL=true отвечает без поиска по Chroma
+curl -X POST http://localhost:5000/api/chat \
+  -H "Content-Type: application/json" \
+  -d '{"message":"привет"}'
+
 curl -X POST http://localhost:5000/api/chat/verify \
   -H "Content-Type: application/json" \
   -d '{"answer":"...","sources":[],"citations":[]}'
@@ -302,6 +308,8 @@ curl -X POST http://localhost:5000/api/documents/related -H "Content-Type: appli
 curl -X POST http://localhost:5000/api/documents/reindex
 curl http://localhost:5000/api/documents/jobs
 ```
+
+`POST /api/documents/reindex` запускает фоновую переиндексацию, а состояние нужно отслеживать через `/api/documents/jobs`. После успешного reindex новые документы используются RAG-поиском; если менялась embedding-модель или параметры чанкинга, требуется полный reindex.
 
 **Админ-диагностика (только admin):**
 
@@ -377,7 +385,13 @@ ADMIN_API_KEY=
 RAG_TOP_K=5
 RAG_MAX_CITATIONS=5
 RAG_MIN_SCORE=0.0
-RAG_MAX_CONTEXT_LENGTH=3000
+RAG_MAX_CONTEXT_LENGTH=90000
+RETRIEVAL_MODE=hybrid
+BM25_INDEX_FILENAME=bm25_corpus.pkl
+STRUCTURAL_CHUNKING_ENABLED=true
+STRUCTURAL_CHUNK_MAX_CHARS=1200
+STRUCTURAL_CHUNK_MIN_CHARS=80
+RAG_CHITCHAT_SKIP_RETRIEVAL=true
 
 # Cache настройка
 CACHE_ENABLED=true
@@ -401,13 +415,13 @@ BITRIX24_INTERNAL_API_KEY=
 Система использует архитектуру RAG (Retrieval-Augmented Generation):
 
 1. **Извлечение текста**: обработчики читают HTML, TXT, DOCX, PDF, XLSX/XLS, PPTX и DOC
-2. **Чанкование**: Текст разбивается на фрагменты для лучшего поиска
-3. **Эмбеддинги**: сервер инференса (Ollama или LM Studio) генерирует вектор запроса и сопоставляет с индексом
-4. **Векторный поиск**: ChromaDB выполняет семантический поиск по запросу
-5. **Генерация ответа**: чат-модель на том же сервере формирует ответ по найденному контексту
-6. **Цитирование**: Извлекаются и форматируются цитаты из найденных документов
-7. **Кэширование**: Эмбеддинги кэшируются для ускорения повторных запросов
-8. **Логирование**: Детальное логирование в файлы для отладки
+2. **Чанкование**: структурное чанкирование сохраняет секции и метаданные `section_path`/`chunk_kind`, fallback — обычные чанки по `CHUNK_SIZE`
+3. **Индексация**: сервер инференса строит эмбеддинги для ChromaDB; рядом может сохраняться BM25-корпус для гибридного поиска
+4. **Retrieval**: `RAGSystem` использует режим `RETRIEVAL_MODE` (`hybrid`, `dense`, `sparse`), при hybrid объединяет dense/BM25 кандидатов через RRF и опциональный rerank
+5. **Query routing**: короткий chitchat/off-topic может отвечать без retrieval, чтобы не засорять поиск по базе знаний
+6. **Генерация ответа**: чат-модель формирует ответ по найденному контексту и выбранному `answer_mode`
+7. **Цитирование**: извлекаются и форматируются цитаты, источники включают score, путь и метаданные секции
+8. **Кэширование и логирование**: эмбеддинги кэшируются, RAG/LLM обмены пишутся в логи для диагностики
 
 ## Примеры использования
 

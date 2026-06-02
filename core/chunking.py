@@ -13,6 +13,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from bs4 import BeautifulSoup, NavigableString, Tag
 
 from config import settings, get_logger
+from config.validation import validate_chunk_bounds
 
 logger = get_logger(__name__)
 
@@ -23,6 +24,8 @@ def chunk_text_fixed_size(text: str, chunk_size: int = None, overlap: int = None
         chunk_size = settings.CHUNK_SIZE
     if overlap is None:
         overlap = settings.CHUNK_OVERLAP
+    validate_chunk_bounds(int(chunk_size), int(overlap))
+
     chunks: List[str] = []
     start = 0
     text_len = len(text)

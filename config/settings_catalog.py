@@ -350,6 +350,22 @@ SPECS: list[SettingSpec] = [
         description="Сколько кандидатов rerank’ать (после initial retrieval).",
         allowed="целое число ≥ 1",
     ),
+    SettingSpec(
+        key="RERANK_MAX_TEXT_CHARS",
+        env="RERANK_MAX_TEXT_CHARS",
+        group=_GROUP_HYBRID,
+        type="int",
+        description="Максимальная длина текста одного чанка, передаваемого в cross-encoder rerank.",
+        allowed="целое число ≥ 0; 0 отключает обрезку",
+    ),
+    SettingSpec(
+        key="RERANK_TIMEOUT_SECONDS",
+        env="RERANK_TIMEOUT_SECONDS",
+        group=_GROUP_HYBRID,
+        type="float",
+        description="Сколько секунд ждать cross-encoder rerank перед fallback к исходному порядку.",
+        allowed="число ≥ 0; 0 отключает timeout-wrapper",
+    ),
     # Query expansion / conversational
     SettingSpec(
         key="CONVERSATIONAL_REWRITE_ENABLED",

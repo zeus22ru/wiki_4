@@ -5,9 +5,25 @@ let currentChatId = null;
 let isProcessing = false;
 let currentAuth = {authenticated: false, role: 'guest', user: null};
 const SOURCE_REFERENCE_PATTERN = /\[Источник:\s*([^\]]+)\]/g;
+const ACTIVE_CHAT_STORAGE_KEY = 'wiki4.activeChatId';
+const CHAT_MESSAGE_MIN_LENGTH = 1;
+const CHAT_MESSAGE_MAX_LENGTH = 5000;
+const CHAT_TOP_K_MIN = 1;
+const CHAT_TOP_K_MAX = 10;
+const CHAT_MIN_SCORE_MIN = 0;
+const CHAT_MIN_SCORE_MAX = 1;
+const WELCOME_MESSAGE = 'Привет! Я AI-ассистент по базе знаний компании. Задайте мне любой вопрос, и я постараюсь найти ответ в документации.';
+const STREAM_RENDER_DEBUG = false;
+const STREAM_RENDER_DEBUG_STORAGE_KEY = 'wiki4.streamRenderDebug';
+const FRONTEND_OPTIMIZATION_DEBUG_STORAGE_KEY = 'wiki4.frontendOptimizationDebug';
+let activeStreamController = null;
+let activeStreamRequestId = 0;
+let reindexPollTimer = null;
 let _mermaidInitialized = false;
 let _mermaidLightbox = null;
 let _mermaidLightboxCurrentSvg = null;
+let _chatListCache = [];
+let _chatListSearch = '';
 
 const messagesContainer = document.getElementById('messages');
 const messageForm = document.getElementById('messageForm');
@@ -524,7 +540,7 @@ function initMermaidLightboxClicks() {
 document.addEventListener('DOMContentLoaded', () => {
     initializeAuth();
     checkHealth();
-    loadChats();
+    loadChats().then(restoreActiveChatAfterReload);
     syncRagToolbarDefaults();
     setInterval(checkHealth, 30000);
 
@@ -574,6 +590,9 @@ document.addEventListener('DOMContentLoaded', () => {
     initAdminSettingsEditorEvents();
     initTooltips();
     initMermaidLightboxClicks();
+    if (messageInput) {
+        messageInput.maxLength = CHAT_MESSAGE_MAX_LENGTH;
+    }
 
     messageInput.addEventListener('keydown', (e) => {
         if (e.key === 'Enter' && !e.shiftKey) {
@@ -773,9 +792,10 @@ async function register(e) {
 }
 
 async function logout() {
+    abortActiveStream();
     try {
         currentAuth = await apiJson('/api/auth/logout', {method: 'POST'});
-        currentChatId = null;
+        setCurrentChatId(null);
         resetMessages(true);
         applyAuthState();
         loadChats();
@@ -790,6 +810,52 @@ function debounce(fn, delay) {
         clearTimeout(timer);
         timer = setTimeout(() => fn(...args), delay);
     };
+}
+
+function isFrontendOptimizationDebugEnabled() {
+    try {
+        return localStorage.getItem(FRONTEND_OPTIMIZATION_DEBUG_STORAGE_KEY) === '1';
+    } catch (_) {
+        return false;
+    }
+}
+
+function logFrontendOptimization(event, details = {}) {
+    if (!isFrontendOptimizationDebugEnabled()) {
+        return;
+    }
+    console.debug('[frontend-optimization]', event, details);
+}
+
+function runWhenIdle(callback, options = {}) {
+    const timeout = options.timeout ?? 1500;
+    const idle = window.requestIdleCallback;
+    if (typeof idle === 'function') {
+        return idle(callback, {timeout});
+    }
+    return setTimeout(() => callback({
+        didTimeout: true,
+        timeRemaining: () => 0,
+    }), Math.min(timeout, 250));
+}
+
+function deferPostAnswerWork(messageEl, work, options = {}) {
+    if (!messageEl || typeof work !== 'function') {
+        return null;
+    }
+    const handle = runWhenIdle(() => {
+        if (!messageEl.isConnected) {
+            logFrontendOptimization('post-answer-skipped-detached');
+            return;
+        }
+        work();
+    }, options);
+    return handle;
+}
+
+function schedulePostAnswerEnhancements(messageEl, details = {}) {
+    deferPostAnswerWork(messageEl, () => loadFollowupSuggestions(messageEl, details), {timeout: 1800});
+    deferPostAnswerWork(messageEl, () => loadRelatedDocuments(messageEl, details.sources || []), {timeout: 2200});
 }
 
 function switchPanel(panelId) {
@@ -829,12 +895,131 @@ async function checkHealth() {
 
 async function loadChats(search = '') {
     try {
+        _chatListSearch = search;
         const qs = search ? `?q=${encodeURIComponent(search)}` : '';
         const data = await apiJson(`/api/chats${qs}`);
-        renderChatList(data.chats || []);
+        _chatListCache = data.chats || [];
+        renderChatList(_chatListCache);
     } catch (error) {
         chatList.innerHTML = `<div class="empty-state">${escapeHtml(error.message)}</div>`;
     }
+}
+
+function getStoredActiveChatId() {
+    try {
+        const value = sessionStorage.getItem(ACTIVE_CHAT_STORAGE_KEY);
+        return value && /^[\w:-]+$/.test(value) ? value : null;
+    } catch (_) {
+        return null;
+    }
+}
+
+function rememberActiveChat(chatId) {
+    try {
+        if (chatId) {
+            sessionStorage.setItem(ACTIVE_CHAT_STORAGE_KEY, String(chatId));
+        } else {
+            sessionStorage.removeItem(ACTIVE_CHAT_STORAGE_KEY);
+        }
+    } catch (_) {
+        /* ignore storage failures */
+    }
+}
+
+function setCurrentChatId(chatId) {
+    currentChatId = chatId || null;
+    rememberActiveChat(currentChatId);
+    updateActiveChatListItem();
+}
+
+function updateActiveChatListItem() {
+    if (!chatList) {
+        return;
+    }
+    const activeId = currentChatId == null ? '' : String(currentChatId);
+    chatList.querySelectorAll('.chat-list-item').forEach((item) => {
+        item.classList.toggle('active', item.dataset.chatId === activeId);
+    });
+}
+
+function normalizeChatListItem(chat = {}) {
+    const id = chat.id || chat.chat_id;
+    if (!id) {
+        return null;
+    }
+    return {
+        id,
+        title: chat.title || chat.chat_title,
+        updated_at: chat.updated_at || chat.updatedAt,
+    };
+}
+
+function shouldUseLocalChatListUpdate() {
+    return !_chatListSearch && !(chatSearchInput?.value || '').trim();
+}
+
+function upsertChatListItem(chat = {}) {
+    const normalized = normalizeChatListItem(chat);
+    if (!normalized || !shouldUseLocalChatListUpdate()) {
+        return false;
+    }
+    const existing = _chatListCache.find((item) => String(item.id) === String(normalized.id));
+    const nextItem = {
+        ...existing,
+        ...normalized,
+        title: normalized.title || existing?.title || 'Новый чат',
+        updated_at: normalized.updated_at || new Date().toISOString(),
+    };
+    const withoutCurrent = _chatListCache.filter((item) => String(item.id) !== String(normalized.id));
+    _chatListCache = [nextItem, ...withoutCurrent];
+    renderChatList(_chatListCache);
+    logFrontendOptimization('chat-list-upsert', {chatId: normalized.id});
+    return true;
+}
+
+function updateCachedChatTitle(chatId, title) {
+    if (!chatId || !shouldUseLocalChatListUpdate()) {
+        return false;
+    }
+    let updated = false;
+    _chatListCache = _chatListCache.map((chat) => {
+        if (String(chat.id) !== String(chatId)) {
+            return chat;
+        }
+        updated = true;
+        return {
+            ...chat,
+            title,
+            updated_at: chat.updated_at || new Date().toISOString(),
+        };
+    });
+    if (updated) {
+        renderChatList(_chatListCache);
+        logFrontendOptimization('chat-list-title', {chatId});
+    }
+    return updated;
+}
+
+function removeCachedChat(chatId) {
+    if (!chatId || !shouldUseLocalChatListUpdate()) {
+        return false;
+    }
+    const next = _chatListCache.filter((chat) => String(chat.id) !== String(chatId));
+    if (next.length === _chatListCache.length) {
+        return false;
+    }
+    _chatListCache = next;
+    renderChatList(_chatListCache);
+    logFrontendOptimization('chat-list-remove', {chatId});
+    return true;
+}
+
+async function restoreActiveChatAfterReload() {
+    const storedChatId = getStoredActiveChatId();
+    if (!storedChatId || currentChatId) {
+        return;
+    }
+    await openChat(storedChatId, {restore: true});
 }
 
 function renderChatList(chats) {
@@ -845,8 +1030,9 @@ function renderChatList(chats) {
     }
     chats.forEach((chat) => {
         const item = document.createElement('button');
-        item.className = `chat-list-item ${chat.id === currentChatId ? 'active' : ''}`;
+        item.className = `chat-list-item ${String(chat.id) === String(currentChatId) ? 'active' : ''}`;
         item.type = 'button';
+        item.dataset.chatId = String(chat.id);
         item.innerHTML = `
             <span class="chat-title">${escapeHtml(chat.title || 'Новый чат')}</span>
             <span class="chat-date">${formatDate(chat.updated_at)}</span>
@@ -877,10 +1063,11 @@ function renderChatList(chats) {
     });
 }
 
-async function openChat(chatId) {
+async function openChat(chatId, options = {}) {
+    abortActiveStream();
     try {
         const data = await apiJson(`/api/chats/${chatId}`);
-        currentChatId = data.chat.id;
+        setCurrentChatId(data.chat.id);
         resetMessages(false);
         (data.messages || []).forEach((msg) => {
             const type = msg.role === 'assistant' ? 'bot' : 'user';
@@ -896,33 +1083,41 @@ async function openChat(chatId) {
                     sources: msg.sources || [],
                     citations: msg.citations || [],
                 });
-                loadFollowupSuggestions(messageEl, {
+                schedulePostAnswerEnhancements(messageEl, {
                     answer: msg.content,
                     sources: msg.sources || [],
                     citations: msg.citations || [],
                 });
-                loadRelatedDocuments(messageEl, msg.sources || []);
                 addFeedbackControls(messageEl, msg.id);
             }
         });
-        loadChats(chatSearchInput.value.trim());
+        updateActiveChatListItem();
         switchPanel('chatPanel');
         messageInput.focus();
     } catch (error) {
+        if (options.restore) {
+            setCurrentChatId(null);
+            resetMessages(true);
+            loadChats(chatSearchInput.value.trim());
+            return;
+        }
         showInlineError(error.message);
     }
 }
 
 async function startNewChat() {
+    abortActiveStream();
     try {
         const chat = await apiJson('/api/chats', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({title: 'Новый чат'}),
         });
-        currentChatId = chat.id;
+        setCurrentChatId(chat.id);
         resetMessages(true);
-        loadChats();
+        if (!upsertChatListItem(chat)) {
+            loadChats(chatSearchInput.value.trim());
+        }
         switchPanel('chatPanel');
         messageInput.focus();
     } catch (error) {
@@ -941,7 +1136,9 @@ async function renameChat(chat) {
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({title: title.trim()}),
         });
-        loadChats(chatSearchInput.value.trim());
+        if (!updateCachedChatTitle(chat.id, title.trim())) {
+            loadChats(chatSearchInput.value.trim());
+        }
     } catch (error) {
         showInlineError(error.message);
     }
@@ -951,13 +1148,18 @@ async function deleteChat(chatId) {
     if (!confirm('Удалить этот чат?')) {
         return;
     }
+    if (currentChatId === chatId) {
+        abortActiveStream();
+    }
     try {
         await apiJson(`/api/chats/${chatId}`, {method: 'DELETE'});
         if (currentChatId === chatId) {
-            currentChatId = null;
+            setCurrentChatId(null);
             resetMessages(true);
         }
-        loadChats(chatSearchInput.value.trim());
+        if (!removeCachedChat(chatId)) {
+            loadChats(chatSearchInput.value.trim());
+        }
     } catch (error) {
         showInlineError(error.message);
     }
@@ -967,12 +1169,15 @@ async function clearAllChats() {
     if (!confirm('Очистить все чаты? Это действие нельзя отменить.')) {
         return;
     }
+    abortActiveStream();
     try {
         await apiJson('/api/chats', {method: 'DELETE'});
-        currentChatId = null;
+        setCurrentChatId(null);
         chatSearchInput.value = '';
         resetMessages(true);
-        loadChats();
+        _chatListCache = [];
+        _chatListSearch = '';
+        renderChatList(_chatListCache);
     } catch (error) {
         showInlineError(error.message);
     }
@@ -987,8 +1192,10 @@ async function ensureChat() {
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({title: 'Новый чат'}),
     });
-    currentChatId = chat.id;
-    loadChats();
+    setCurrentChatId(chat.id);
+    if (!upsertChatListItem(chat)) {
+        loadChats(chatSearchInput.value.trim());
+    }
     return currentChatId;
 }
 
@@ -998,15 +1205,28 @@ function resetMessages(withWelcome) {
     currentCitations = [];
     closeSourcesPanel();
     if (withWelcome) {
-        addMessage('Привет! Я AI-ассистент по базе знаний компании. Задайте мне любой вопрос, и я постараюсь найти ответ в документации.', 'bot');
+        addMessage(WELCOME_MESSAGE, 'bot', {system: true, welcome: true});
     }
 }
 
-async function sendChatClassic(message) {
+function removeWelcomeMessage() {
+    const welcome = messagesContainer.querySelector('.welcome-message');
+    if (welcome) {
+        welcome.remove();
+        return;
+    }
+    const first = messagesContainer.querySelector('.message.bot-message');
+    const text = first?.querySelector('.message-content')?.innerText?.trim();
+    if (text === WELCOME_MESSAGE) {
+        first.remove();
+    }
+}
+
+async function sendChatClassic(message, payload = null) {
     const data = await apiJson('/api/chat', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify(buildChatPayload(message)),
+        body: JSON.stringify(payload || buildChatPayload(message)),
     });
     hideTypingIndicator();
     const botMessage = addMessage(data.answer, 'bot', {
@@ -1014,84 +1234,200 @@ async function sendChatClassic(message) {
         citations: data.citations || [],
         messageId: data.message_id,
     });
-    currentChatId = data.chat_id || currentChatId;
+    setCurrentChatId(data.chat_id || currentChatId);
     addSourcesButton(botMessage, data.sources || [], data.citations || []);
     addVerifyButton(botMessage, {
         answer: data.answer,
         sources: data.sources || [],
         citations: data.citations || [],
     });
-    loadFollowupSuggestions(botMessage, {
+    schedulePostAnswerEnhancements(botMessage, {
         answer: data.answer,
         sources: data.sources || [],
         citations: data.citations || [],
     });
-    loadRelatedDocuments(botMessage, data.sources || []);
     addFeedbackControls(botMessage, data.message_id);
-    loadChats();
+    if (!upsertChatListItem({
+        id: data.chat_id || currentChatId,
+        title: data.chat_title || data.title,
+        updated_at: data.updated_at,
+    })) {
+        loadChats(chatSearchInput.value.trim());
+    }
 }
 
 async function handleSubmit(e) {
     e.preventDefault();
     const message = messageInput.value.trim();
-    if (!message || isProcessing) {
+    if (isProcessing) {
+        return;
+    }
+    const payload = validateChatPayload(message);
+    if (!payload) {
         return;
     }
 
     await ensureChat();
-    addMessage(message, 'user');
+    payload.chat_id = currentChatId;
+    removeWelcomeMessage();
+    addMessage(payload.message, 'user');
     messageInput.value = '';
+    const requestId = startStreamRequest();
     showTypingIndicator();
-    isProcessing = true;
-    sendButton.disabled = true;
+    setProcessingState(true);
 
     try {
         const response = await fetch('/api/chat/stream', {
             method: 'POST',
             credentials: 'same-origin',
+            signal: activeStreamController.signal,
             headers: {
                 'Content-Type': 'application/json',
                 'Accept': 'text/event-stream',
             },
-            body: JSON.stringify(buildChatPayload(message)),
+            body: JSON.stringify(payload),
         });
 
         if (response.status === 404) {
-            await sendChatClassic(message);
+            if (isActiveStreamRequest(requestId)) {
+                await sendChatClassic(payload.message, payload);
+            }
             return;
         }
 
         hideTypingIndicator();
+        if (!isActiveStreamRequest(requestId)) {
+            return;
+        }
         if (!response.ok) {
             const errData = await response.json().catch(() => ({}));
-            addMessage(errData.error || `Ошибка ${response.status}`, 'bot');
+            showInlineError(errData.error || `Ошибка ${response.status}`);
             return;
         }
         if (!response.body || !response.body.getReader) {
-            addMessage('Поток ответа недоступен в этом браузере', 'bot');
+            showInlineError('Поток ответа недоступен в этом браузере');
             return;
         }
 
-        await readStream(response);
+        await readStream(response, requestId);
     } catch (error) {
+        if (error.name === 'AbortError' || !isActiveStreamRequest(requestId)) {
+            return;
+        }
         hideTypingIndicator();
-        addMessage(`Произошла ошибка при отправке запроса: ${error.message}`, 'bot');
+        showInlineError(`Произошла ошибка при отправке запроса: ${error.message}`);
     } finally {
-        isProcessing = false;
-        sendButton.disabled = false;
-        messageInput.focus();
-        loadChats(chatSearchInput.value.trim());
+        if (isActiveStreamRequest(requestId)) {
+            clearActiveStream(requestId);
+            setProcessingState(false);
+            messageInput.focus();
+            if (shouldUseLocalChatListUpdate()) {
+                updateActiveChatListItem();
+            } else {
+                loadChats(chatSearchInput.value.trim());
+            }
+        }
     }
 }
 
-function buildChatPayload(message) {
+function buildChatPayload(message, overrides = {}) {
     return {
         message,
         chat_id: currentChatId,
         answer_mode: answerModeSelect.value,
         top_k: Number(topKInput.value),
         min_score: Number(minScoreInput.value),
+        ...overrides,
     };
+}
+
+function validateChatPayload(message) {
+    if (!message) {
+        showInlineError('Введите сообщение перед отправкой.');
+        messageInput.focus();
+        return null;
+    }
+    if (message.length < CHAT_MESSAGE_MIN_LENGTH || message.length > CHAT_MESSAGE_MAX_LENGTH) {
+        showInlineError(`Сообщение должно быть от ${CHAT_MESSAGE_MIN_LENGTH} до ${CHAT_MESSAGE_MAX_LENGTH} символов.`);
+        messageInput.focus();
+        return null;
+    }
+
+    const topK = Number(topKInput.value);
+    if (!Number.isInteger(topK) || topK < CHAT_TOP_K_MIN || topK > CHAT_TOP_K_MAX) {
+        showInlineError(`Количество источников должно быть целым числом от ${CHAT_TOP_K_MIN} до ${CHAT_TOP_K_MAX}.`);
+        topKInput.focus();
+        return null;
+    }
+
+    const minScore = Number(minScoreInput.value);
+    if (!Number.isFinite(minScore) || minScore < CHAT_MIN_SCORE_MIN || minScore > CHAT_MIN_SCORE_MAX) {
+        showInlineError('Минимальная релевантность должна быть числом от 0 до 1.');
+        minScoreInput.focus();
+        return null;
+    }
+
+    const allowedModes = new Set([...answerModeSelect.options].map((option) => option.value));
+    const answerMode = answerModeSelect.value;
+    if (!allowedModes.has(answerMode)) {
+        showInlineError('Выберите допустимый стиль ответа.');
+        answerModeSelect.focus();
+        return null;
+    }
+
+    return buildChatPayload(message, {
+        answer_mode: answerMode,
+        top_k: topK,
+        min_score: minScore,
+    });
+}
+
+function setProcessingState(processing) {
+    isProcessing = processing;
+    sendButton.disabled = processing;
+}
+
+function startStreamRequest() {
+    abortActiveStream();
+    activeStreamRequestId += 1;
+    activeStreamController = new AbortController();
+    return activeStreamRequestId;
+}
+
+function isActiveStreamRequest(requestId) {
+    return requestId === activeStreamRequestId && activeStreamController;
+}
+
+function clearActiveStream(requestId) {
+    if (requestId !== activeStreamRequestId) {
+        return;
+    }
+    activeStreamController = null;
+}
+
+function abortActiveStream() {
+    if (activeStreamController) {
+        try {
+            activeStreamController.abort();
+        } catch (_) {
+            /* ignore abort failures */
+        }
+        activeStreamController = null;
+        activeStreamRequestId += 1;
+    }
+    hideTypingIndicator();
+    setProcessingState(false);
+}
+
+function isStreamRenderDebugEnabled() {
+    if (STREAM_RENDER_DEBUG) {
+        return true;
+    }
+    try {
+        return localStorage.getItem(STREAM_RENDER_DEBUG_STORAGE_KEY) === '1';
+    } catch (_) {
+        return false;
+    }
 }
 
 async function syncRagToolbarDefaults() {
@@ -1112,7 +1448,7 @@ async function syncRagToolbarDefaults() {
     }
 }
 
-async function readStream(response) {
+async function readStream(response, requestId) {
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
@@ -1121,6 +1457,29 @@ async function readStream(response) {
     let accumulated = '';
     let streamRafId = null;
     let doneReceived = false;
+    const streamRenderMetrics = {
+        enabled: isStreamRenderDebugEnabled(),
+        startedAt: (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now(),
+        renderCount: 0,
+        accumulatedChars: 0,
+        finalChars: 0,
+    };
+
+    const logStreamRenderMetrics = (status) => {
+        if (!streamRenderMetrics.enabled) {
+            return;
+        }
+        const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+        const elapsedMs = Math.max(1, now - streamRenderMetrics.startedAt);
+        console.debug('[stream-render]', {
+            status,
+            renderCount: streamRenderMetrics.renderCount,
+            rendersPerSecond: Number((streamRenderMetrics.renderCount / (elapsedMs / 1000)).toFixed(2)),
+            accumulatedChars: streamRenderMetrics.accumulatedChars,
+            finalChars: streamRenderMetrics.finalChars || streamRenderMetrics.accumulatedChars,
+            elapsedMs: Number(elapsedMs.toFixed(1)),
+        });
+    };
 
     const cancelStreamMarkdownFrame = () => {
         if (streamRafId != null) {
@@ -1135,11 +1494,9 @@ async function readStream(response) {
             return;
         }
         streamContent.innerHTML = formatMessage(accumulated);
-        // Mermaid рендерим только после завершения стрима (payload.type === 'done'):
-        // во время стрима Markdown/код-блоки могут быть незавершенными, и Mermaid
-        // периодически падает с "Syntax error in text", после чего блок помечается как обработанный.
-        // Вместо рендера показываем анимированную заглушку.
         replaceMermaidBlocksWithPlaceholder(streamContent);
+        streamRenderMetrics.renderCount += 1;
+        streamRenderMetrics.accumulatedChars = accumulated.length;
         scrollToBottom();
     };
 
@@ -1169,7 +1526,7 @@ async function readStream(response) {
     scrollToBottom();
 
     const processSseBlock = (block) => {
-        if (doneReceived) {
+        if (doneReceived || !isActiveStreamRequest(requestId)) {
             return;
         }
         const lines = block.split('\n').map((line) => line.replace(/\r$/, ''));
@@ -1197,7 +1554,8 @@ async function readStream(response) {
             } else if (payload.type === 'done') {
                 cancelStreamMarkdownFrame();
                 const finalText = payload.answer != null ? payload.answer : accumulated;
-                currentChatId = payload.chat_id || currentChatId;
+                streamRenderMetrics.finalChars = finalText.length;
+                setCurrentChatId(payload.chat_id || currentChatId);
                 ensureStreamShell();
                 streamContent.innerHTML = formatMessage(finalText);
                 renderMermaidIn(streamContent);
@@ -1209,20 +1567,27 @@ async function readStream(response) {
                     sources: payload.sources || [],
                     citations: payload.citations || [],
                 });
-                loadFollowupSuggestions(streamShell, {
+                schedulePostAnswerEnhancements(streamShell, {
                     answer: finalText,
                     sources: payload.sources || [],
                     citations: payload.citations || [],
                 });
-                loadRelatedDocuments(streamShell, payload.sources || []);
                 addFeedbackControls(streamShell, payload.message_id);
+                upsertChatListItem({
+                    id: payload.chat_id || currentChatId,
+                    title: payload.chat_title || payload.title,
+                    updated_at: payload.updated_at,
+                });
                 doneReceived = true;
+                logStreamRenderMetrics('done');
             } else if (payload.type === 'error') {
                 cancelStreamMarkdownFrame();
                 ensureStreamShell();
                 streamContent.textContent = payload.message || 'Ошибка потока';
+                streamShell.classList.add('system-message');
                 streamContent.classList.remove('streaming-in-progress');
                 doneReceived = true;
+                logStreamRenderMetrics('error');
             }
         });
     };
@@ -1230,6 +1595,10 @@ async function readStream(response) {
     let processedBlocksSinceYield = 0;
     while (true) {
         const {done, value} = await reader.read();
+        if (!isActiveStreamRequest(requestId)) {
+            try { await reader.cancel(); } catch (_) { /* ignore */ }
+            return;
+        }
         if (done) {
             break;
         }
@@ -1255,11 +1624,25 @@ async function readStream(response) {
     if (buffer.trim()) {
         processSseBlock(buffer);
     }
+    if (!doneReceived && isActiveStreamRequest(requestId)) {
+        cancelStreamMarkdownFrame();
+        if (streamShell) {
+            streamShell.remove();
+        }
+        logStreamRenderMetrics('aborted');
+        throw new Error('Соединение с потоком ответа прервано до завершения.');
+    }
 }
 
 function addMessage(text, type, details = {}) {
     const messageDiv = document.createElement('div');
     messageDiv.className = `message ${type}-message`;
+    if (details.system) {
+        messageDiv.classList.add('system-message');
+    }
+    if (details.welcome) {
+        messageDiv.classList.add('welcome-message');
+    }
     if (details.messageId) {
         messageDiv.dataset.messageId = details.messageId;
     }
@@ -1848,6 +2231,7 @@ async function startReindex() {
     try {
         const data = await apiJson('/api/documents/reindex', {method: 'POST'});
         renderJob(data.job);
+        clearReindexPoll();
         pollJobs();
     } catch (error) {
         setJobStatus(error.message, {state: 'failed'});
@@ -1855,17 +2239,25 @@ async function startReindex() {
 }
 
 async function pollJobs() {
+    clearReindexPoll();
     try {
         const data = await apiJson('/api/documents/jobs');
         const latest = (data.jobs || [])[0];
         if (latest) {
             renderJob(latest);
             if (latest.status === 'pending' || latest.status === 'running') {
-                setTimeout(pollJobs, 2000);
+                reindexPollTimer = setTimeout(pollJobs, 2000);
             }
         }
     } catch (_) {
         /* ignore polling errors */
+    }
+}
+
+function clearReindexPoll() {
+    if (reindexPollTimer) {
+        clearTimeout(reindexPollTimer);
+        reindexPollTimer = null;
     }
 }
 
@@ -2490,11 +2882,30 @@ function renderAdminRiskList(items) {
 }
 
 function exportCurrentChat() {
-    const messages = [...messagesContainer.querySelectorAll('.message')].map((node) => {
+    const messages = [...messagesContainer.querySelectorAll('.message')]
+    .filter((node) => (
+        !node.classList.contains('system-message') &&
+        !node.classList.contains('welcome-message') &&
+        node.id !== 'typingIndicator'
+    ))
+    .map((node) => {
         const role = node.classList.contains('user-message') ? 'Вы' : 'Ассистент';
-        const text = node.querySelector('.message-content')?.innerText || '';
+        const content = node.querySelector('.message-content')?.cloneNode(true);
+        if (!content) {
+            return '';
+        }
+        content.querySelectorAll([
+            '.show-sources-btn',
+            '.verify-answer-btn',
+            '.feedback-controls',
+            '.followup-suggestions',
+            '.related-documents',
+            '.verification-result',
+            '.copy-button',
+        ].join(',')).forEach((el) => el.remove());
+        const text = content.innerText || '';
         return `## ${role}\n\n${text.trim()}`;
-    }).join('\n\n');
+    }).filter(Boolean).join('\n\n');
     const blob = new Blob([messages], {type: 'text/markdown;charset=utf-8'});
     const link = document.createElement('a');
     link.href = URL.createObjectURL(blob);
@@ -2504,7 +2915,7 @@ function exportCurrentChat() {
 }
 
 function showInlineError(message) {
-    addMessage(message, 'bot');
+    addMessage(message, 'bot', {system: true});
 }
 
 function formatBytes(bytes) {

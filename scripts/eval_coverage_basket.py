@@ -15,10 +15,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from config import settings, get_logger, inference_server_reachable
 from core.chat_history import get_chat_history
@@ -184,7 +189,9 @@ def _parse_bool(value: str) -> bool:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(
+        description="Экспорт и прогон coverage-корзинки по текущему RAG retrieval."
+    )
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     p_export = sub.add_parser("export", help="Экспорт coverage-корзинки из слабых ответов")

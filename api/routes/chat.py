@@ -24,14 +24,25 @@ logger = get_logger(__name__)
 
 # Создаем Blueprint для маршрутов чатов
 chat_bp = Blueprint('chat', __name__, url_prefix='/api/chats')
+CHAT_LIST_DEFAULT_LIMIT = 50
+CHAT_LIST_MAX_LIMIT = 100
+
+
+def _bounded_int_arg(name: str, default: int, minimum: int, maximum: int) -> int:
+    raw_value = request.args.get(name)
+    try:
+        value = int(raw_value) if raw_value is not None else default
+    except (TypeError, ValueError):
+        value = default
+    return max(minimum, min(maximum, value))
 
 
 @chat_bp.route('', methods=['GET'])
 def get_chats():
     """Получить список всех чатов"""
     try:
-        limit = request.args.get('limit', 50, type=int)
-        offset = request.args.get('offset', 0, type=int)
+        limit = _bounded_int_arg('limit', CHAT_LIST_DEFAULT_LIMIT, 1, CHAT_LIST_MAX_LIMIT)
+        offset = _bounded_int_arg('offset', 0, 0, 1_000_000)
         search = (request.args.get('q') or '').strip()
         
         chat_history = get_chat_history()

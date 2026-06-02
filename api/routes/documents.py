@@ -2,9 +2,10 @@
 # -*- coding: utf-8 -*-
 """API управления базой знаний и задачами индексации."""
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 import difflib
+import sys
 import tempfile
 import threading
 import traceback
@@ -29,6 +30,9 @@ def require_admin_role():
 
 _jobs = {}
 _jobs_lock = threading.Lock()
+_JOB_STATUSES_ACTIVE = {"pending", "running"}
+_JOBS_MAX_ITEMS = 50
+_JOBS_TTL = timedelta(hours=12)
 
 
 def _allowed_file(filename: str) -> bool:
@@ -190,40 +194,114 @@ def _resolve_document_path(raw_path: str | None) -> Path | None:
     return None
 
 
+def _parse_job_dt(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _prune_jobs_locked(now: datetime | None = None) -> None:
+    """Ограничить историю jobs по TTL и размеру. Вызывать только под _jobs_lock."""
+    now = now or datetime.now()
+    stale_ids = []
+    for job_id, job in _jobs.items():
+        if job.get("status") in _JOB_STATUSES_ACTIVE:
+            continue
+        finished_at = _parse_job_dt(job.get("finished_at"))
+        started_at = _parse_job_dt(job.get("started_at"))
+        marker = finished_at or started_at
+        if marker and now - marker > _JOBS_TTL:
+            stale_ids.append(job_id)
+    for job_id in stale_ids:
+        _jobs.pop(job_id, None)
+
+    if len(_jobs) <= _JOBS_MAX_ITEMS:
+        return
+    ordered = sorted(
+        _jobs.items(),
+        key=lambda item: item[1].get("started_at", ""),
+        reverse=True,
+    )
+    keep = {job_id for job_id, _job in ordered[:_JOBS_MAX_ITEMS]}
+    for job_id, job in list(_jobs.items()):
+        if job_id not in keep and job.get("status") not in _JOB_STATUSES_ACTIVE:
+            _jobs.pop(job_id, None)
+
+
+def _active_reindex_job_locked() -> dict | None:
+    """Вернуть активную задачу reindex. Вызывать только под _jobs_lock."""
+    for job in sorted(_jobs.values(), key=lambda item: item.get("started_at", ""), reverse=True):
+        if job.get("status") in _JOB_STATUSES_ACTIVE:
+            return dict(job)
+    return None
+
+
+def _create_reindex_job() -> tuple[dict | None, dict | None]:
+    """Создать pending job или вернуть текущую активную job для 409."""
+    now = datetime.now()
+    with _jobs_lock:
+        _prune_jobs_locked(now)
+        active = _active_reindex_job_locked()
+        if active:
+            return None, active
+
+        job_id = str(uuid4())
+        job = {
+            "id": job_id,
+            "status": "pending",
+            "stage": "pending",
+            "progress": 0,
+            "message": "Ожидает запуска",
+            "started_at": now.isoformat(),
+            "finished_at": None,
+        }
+        _jobs[job_id] = job
+        return dict(job), None
+
+
 def _set_job(job_id: str, **updates) -> None:
     with _jobs_lock:
         _jobs.setdefault(job_id, {}).update(updates)
 
 
+def _reset_long_lived_rag_state() -> None:
+    """Сбросить кэшированные подключения web_app после успешной переиндексации."""
+    web_app_module = sys.modules.get("web_app")
+    if web_app_module is None:
+        return
+
+    lock = getattr(web_app_module, "init_lock", None)
+    if lock is None:
+        return
+
+    with lock:
+        rag = getattr(web_app_module, "rag_system", None)
+        if rag is not None and hasattr(rag, "_bm25_bundle"):
+            rag._bm25_bundle = None
+        setattr(web_app_module, "collection", None)
+        setattr(web_app_module, "rag_system", None)
+        setattr(web_app_module, "db_initialized", False)
+
+
 def _run_reindex(job_id: str) -> None:
     _set_job(job_id, status="running", stage="scan", progress=1, message="Сканирование документов")
     try:
-        from create_vector_db import create_vector_db, process_all_files
+        from create_vector_db import reindex_vector_db
 
-        documents = process_all_files(settings.DATA_DIR)
-        if not documents:
-            _set_job(
-                job_id,
-                status="failed",
-                stage="scan",
-                progress=100,
-                message="Не найдено документов для индексации",
-                finished_at=datetime.now().isoformat(),
-            )
-            return
-        _set_job(
-            job_id,
-            stage="process",
-            progress=10,
-            message=f"Подготовлено чанков: {len(documents)}",
-        )
-        create_vector_db(documents, progress_callback=lambda updates: _set_job(job_id, **updates))
+        diagnostics = reindex_vector_db(progress_callback=lambda updates: _set_job(job_id, **updates))
+        _reset_long_lived_rag_state()
+        indexed_chunks = diagnostics.get("chunks_added") or diagnostics.get("chunks") or 0
+        mode = diagnostics.get("index_mode") or "unknown"
         _set_job(
             job_id,
             status="done",
             stage="done",
             progress=100,
-            message=f"Индексация завершена: {len(documents)} чанков",
+            message=f"Индексация завершена ({mode}): {indexed_chunks} чанков обновлено",
+            diagnostics=diagnostics,
             finished_at=datetime.now().isoformat(),
         )
     except Exception as exc:
@@ -334,26 +412,23 @@ def related_documents():
 @documents_bp.route("/reindex", methods=["POST"])
 def reindex_documents():
     """Запустить переиндексацию в фоновом потоке."""
-    job_id = str(uuid4())
-    now = datetime.now().isoformat()
-    _set_job(
-        job_id,
-        id=job_id,
-        status="pending",
-        stage="pending",
-        progress=0,
-        message="Ожидает запуска",
-        started_at=now,
-        finished_at=None,
-    )
-    thread = threading.Thread(target=_run_reindex, args=(job_id,), daemon=True)
+    job, active = _create_reindex_job()
+    if active:
+        return jsonify({
+            "error": "reindex_already_running",
+            "message": "Переиндексация уже выполняется",
+            "active_job": active,
+        }), 409
+
+    thread = threading.Thread(target=_run_reindex, args=(job["id"],), daemon=True)
     thread.start()
-    return jsonify({"job": _jobs[job_id]}), 202
+    return jsonify({"job": job}), 202
 
 
 @documents_bp.route("/jobs", methods=["GET"])
 def list_jobs():
     """Последние задачи индексации."""
     with _jobs_lock:
+        _prune_jobs_locked()
         jobs = sorted(_jobs.values(), key=lambda item: item.get("started_at", ""), reverse=True)
-    return jsonify({"jobs": jobs[:20]})
+    return jsonify({"jobs": [dict(job) for job in jobs[:20]]})

@@ -9,7 +9,7 @@ import json
 import re
 from pathlib import Path
 from typing import List, Optional
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from config import settings, get_logger
 from models import ChatSession, Message, User
@@ -133,10 +133,50 @@ class ChatHistoryManager:
                 CREATE INDEX IF NOT EXISTS idx_messages_session_id 
                 ON messages(session_id)
             ''')
+
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_messages_created_at
+                ON messages(created_at)
+            ''')
+
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_messages_role
+                ON messages(role)
+            ''')
+
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_messages_session_created_at
+                ON messages(session_id, created_at)
+            ''')
+
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_messages_role_created_at
+                ON messages(role, created_at)
+            ''')
             
             cursor.execute('''
                 CREATE INDEX IF NOT EXISTS idx_chat_sessions_user_id 
                 ON chat_sessions(user_id)
+            ''')
+
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_chat_sessions_updated_at
+                ON chat_sessions(updated_at)
+            ''')
+
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_feedback_rating
+                ON feedback(rating)
+            ''')
+
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_feedback_created_at
+                ON feedback(created_at)
+            ''')
+
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_feedback_rating_created_at
+                ON feedback(rating, created_at)
             ''')
             
             conn.commit()
@@ -360,6 +400,59 @@ class ChatHistoryManager:
                 logger.info(f"Удалены все сессии чатов: {deleted_count}")
 
             return deleted_count
+
+    def cleanup_guest_sessions(
+        self,
+        retention_days: int = 30,
+        dry_run: bool = True,
+        limit: int = 1000,
+        vacuum: bool = False,
+    ) -> dict:
+        """Удалить старые guest/orphan-сессии с безопасным dry-run режимом."""
+        retention_days = max(1, int(retention_days))
+        limit = max(1, min(int(limit), 10000))
+        cutoff = (datetime.now() - timedelta(days=retention_days)).isoformat()
+
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT s.id
+                FROM chat_sessions s
+                LEFT JOIN users u ON u.id = s.user_id
+                WHERE (s.user_id IS NULL OR u.id IS NULL)
+                  AND s.updated_at < ?
+                ORDER BY s.updated_at ASC
+                LIMIT ?
+            ''', (cutoff, limit))
+            session_ids = [row[0] for row in cursor.fetchall()]
+
+            deleted_count = 0
+            if session_ids and not dry_run:
+                placeholders = ",".join("?" for _ in session_ids)
+                cursor.execute(f"DELETE FROM chat_sessions WHERE id IN ({placeholders})", session_ids)
+                deleted_count = cursor.rowcount
+                conn.commit()
+
+        vacuumed = False
+        if vacuum and deleted_count:
+            self.vacuum()
+            vacuumed = True
+
+        return {
+            "dry_run": dry_run,
+            "retention_days": retention_days,
+            "cutoff": cutoff,
+            "matched": len(session_ids),
+            "deleted": deleted_count,
+            "limit": limit,
+            "vacuumed": vacuumed,
+            "session_ids": session_ids,
+        }
+
+    def vacuum(self) -> None:
+        """Запустить VACUUM отдельным соединением после cleanup."""
+        with self._get_connection() as conn:
+            conn.execute("VACUUM")
     
     # ========== Методы для работы с сообщениями ==========
     
@@ -552,11 +645,19 @@ class ChatHistoryManager:
             ''', (limit,))
             return [dict(row) for row in cursor.fetchall()]
 
-    def get_feedback_summary(self) -> dict:
+    def get_feedback_summary(self, created_after: Optional[str] = None) -> dict:
         """Сводка оценок ответов."""
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute('SELECT rating, COUNT(*) AS count FROM feedback GROUP BY rating')
+            if created_after:
+                cursor.execute('''
+                    SELECT rating, COUNT(*) AS count
+                    FROM feedback
+                    WHERE created_at >= ?
+                    GROUP BY rating
+                ''', (created_after,))
+            else:
+                cursor.execute('SELECT rating, COUNT(*) AS count FROM feedback GROUP BY rating')
             counts = {row['rating']: row['count'] for row in cursor.fetchall()}
             return {
                 "up": counts.get("up", 0),
@@ -564,15 +665,30 @@ class ChatHistoryManager:
                 "total": sum(counts.values()),
             }
 
-    def get_top_sources(self, limit: int = 10) -> List[dict]:
+    def get_top_sources(
+        self,
+        limit: int = 10,
+        created_after: Optional[str] = None,
+        scan_limit: int = 2000,
+    ) -> List[dict]:
         """Самые часто используемые источники в ответах."""
+        scan_limit = max(1, min(int(scan_limit), 10000))
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute('''
+            params: list[object] = []
+            created_filter = ""
+            if created_after:
+                created_filter = "AND created_at >= ?"
+                params.append(created_after)
+            params.append(scan_limit)
+            cursor.execute(f'''
                 SELECT sources_json
                 FROM messages
                 WHERE role = 'assistant' AND sources_json IS NOT NULL
-            ''')
+                {created_filter}
+                ORDER BY created_at DESC
+                LIMIT ?
+            ''', params)
             counts: dict[str, dict] = {}
             for row in cursor.fetchall():
                 try:
@@ -605,16 +721,31 @@ class ChatHistoryManager:
             ''', (limit,))
             return [dict(row) for row in cursor.fetchall()]
 
-    def get_source_feedback(self, limit: int = 10) -> List[dict]:
+    def get_source_feedback(
+        self,
+        limit: int = 10,
+        created_after: Optional[str] = None,
+        scan_limit: int = 1000,
+    ) -> List[dict]:
         """Источники, чаще всего встречающиеся в ответах с негативной оценкой."""
+        scan_limit = max(1, min(int(scan_limit), 10000))
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute('''
+            params: list[object] = []
+            created_filter = ""
+            if created_after:
+                created_filter = "AND f.created_at >= ?"
+                params.append(created_after)
+            params.append(scan_limit)
+            cursor.execute(f'''
                 SELECT m.sources_json
                 FROM feedback f
                 JOIN messages m ON m.id = f.message_id
                 WHERE f.rating = 'down' AND m.sources_json IS NOT NULL
-            ''')
+                {created_filter}
+                ORDER BY f.created_at DESC
+                LIMIT ?
+            ''', params)
             counts: dict[str, dict] = {}
             for row in cursor.fetchall():
                 try:
@@ -654,17 +785,32 @@ class ChatHistoryManager:
                     return f"Низкая максимальная релевантность: {best_score:.2f}"
         return None
 
-    def get_weak_answers(self, limit: int = 10) -> List[dict]:
+    def get_weak_answers(
+        self,
+        limit: int = 10,
+        created_after: Optional[str] = None,
+        scan_limit: int = 1000,
+    ) -> List[dict]:
         """Ответы, которые стоит проверить редактору базы знаний."""
+        scan_limit = max(1, min(int(scan_limit), 10000))
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute('''
+            params: list[object] = []
+            created_filter = ""
+            if created_after:
+                created_filter = "AND created_at >= ?"
+                params.append(created_after)
+            params.append(scan_limit)
+            cursor.execute(f'''
                 SELECT id, session_id, role, content, sources_json, created_at, citations_json, metadata_json,
                        retrieval_query_text
                 FROM messages
-                ORDER BY created_at ASC
-            ''')
-            messages = [Message.from_row(row) for row in cursor.fetchall()]
+                WHERE role IN ('user', 'assistant')
+                {created_filter}
+                ORDER BY created_at DESC
+                LIMIT ?
+            ''', params)
+            messages = list(reversed([Message.from_row(row) for row in cursor.fetchall()]))
 
         previous_user_by_session: dict[int, Message] = {}
         weak = []
@@ -696,10 +842,20 @@ class ChatHistoryManager:
         useful = [word for word in words if word not in stop_words]
         return " ".join(useful[:5]) or (question or "Без вопроса")[:80]
 
-    def get_knowledge_gaps(self, limit: int = 10) -> List[dict]:
+    def get_knowledge_gaps(
+        self,
+        limit: int = 10,
+        created_after: Optional[str] = None,
+        scan_limit: int = 2000,
+    ) -> List[dict]:
         """Сгруппировать слабые ответы в темы для пополнения базы знаний."""
         groups: dict[str, dict] = {}
-        for item in self.get_weak_answers(limit=200):
+        weak_limit = max(200, limit * 20)
+        for item in self.get_weak_answers(
+            limit=weak_limit,
+            created_after=created_after,
+            scan_limit=scan_limit,
+        ):
             key = self._gap_key(item.get("question", ""))
             group = groups.setdefault(key, {
                 "topic": key,

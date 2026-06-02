@@ -14,6 +14,8 @@ from typing import List, Optional, Tuple
 import requests
 from dotenv import load_dotenv
 
+from .validation import validate_chunk_bounds
+
 # Загружаем переменные окружения из .env файла
 load_dotenv()
 
@@ -111,6 +113,7 @@ class Settings:
     # hybrid | dense | sparse
     RETRIEVAL_MODE: str = os.getenv("RETRIEVAL_MODE", "hybrid")
     BM25_INDEX_FILENAME: str = os.getenv("BM25_INDEX_FILENAME", "bm25_corpus.pkl")
+    INDEX_MANIFEST_FILENAME: str = os.getenv("INDEX_MANIFEST_FILENAME", "index_manifest.json")
     RAG_FUSION_CANDIDATES: int = int(os.getenv("RAG_FUSION_CANDIDATES", "24"))
     RRF_K_CONSTANT: int = int(os.getenv("RRF_K_CONSTANT", "60"))
     # Делитель для отображения RRF-скора как «релевантности» до rerank
@@ -118,6 +121,8 @@ class Settings:
     RERANK_ENABLED: bool = os.getenv("RERANK_ENABLED", "false").lower() in ("1", "true", "yes", "on")
     RERANK_MODEL: str = os.getenv("RERANK_MODEL", "cross-encoder/ms-marco-MiniLM-L-6-v2")
     RERANK_TOP_N: int = int(os.getenv("RERANK_TOP_N", "20"))
+    RERANK_MAX_TEXT_CHARS: int = int(os.getenv("RERANK_MAX_TEXT_CHARS", "4000"))
+    RERANK_TIMEOUT_SECONDS: float = float(os.getenv("RERANK_TIMEOUT_SECONDS", "15"))
 
     # Структурные чанки и Contextual Retrieval (при индексации)
     STRUCTURAL_CHUNKING_ENABLED: bool = os.getenv("STRUCTURAL_CHUNKING_ENABLED", "true").lower() in (
@@ -216,6 +221,7 @@ class Settings:
 
     def __init__(self):
         """Инициализация настроек и создание необходимых директорий"""
+        validate_chunk_bounds(self.CHUNK_SIZE, self.CHUNK_OVERLAP)
         self._create_directories()
 
     def _create_directories(self):

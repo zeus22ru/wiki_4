@@ -6,11 +6,23 @@
 
 import sys
 import io
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 import requests
 
-OLLAMA_URL = "http://localhost:11434"
+from config import settings
+
+OLLAMA_URL = settings.OLLAMA_URL.rstrip("/")
+
+
+def _configure_stdout() -> None:
+    if hasattr(sys.stdout, "buffer"):
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+
 
 def test_model_embeddings(model_name):
     """Тест модели на поддержку эмбеддингов"""
@@ -50,9 +62,12 @@ def test_model_embeddings(model_name):
 
 
 def main():
+    _configure_stdout()
     print("=" * 60)
     print("Тестирование доступных моделей")
     print("=" * 60)
+    print(f"URL из настроек: {OLLAMA_URL}")
+    print("Скрипт проверяет Ollama endpoints /api/tags и /api/embed.")
     
     # Получаем список моделей
     try:
@@ -87,8 +102,7 @@ def main():
     else:
         print("✗ Ни одна из доступных моделей не поддерживает эмбеддинги")
         print("\nРекомендация: установите модель для эмбеддингов:")
-        print("  docker exec -it ollama ollama pull nomic-embed-text")
-        print("  docker exec -it ollama ollama pull mxbai-embed-large")
+        print(f"  docker exec -it ollama ollama pull {settings.OLLAMA_EMBEDDING_MODEL}")
 
 
 if __name__ == "__main__":

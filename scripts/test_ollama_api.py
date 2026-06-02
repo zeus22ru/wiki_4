@@ -6,12 +6,24 @@
 
 import sys
 import io
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 import requests
-import json
 
-OLLAMA_URL = "http://localhost:11434"
+from config import settings
+
+OLLAMA_URL = settings.OLLAMA_URL.rstrip("/")
+EMBEDDING_MODEL = settings.OLLAMA_EMBEDDING_MODEL
+
+
+def _configure_stdout() -> None:
+    if hasattr(sys.stdout, "buffer"):
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+
 
 def test_ollama_connection():
     """Проверка подключения к ollama"""
@@ -30,13 +42,13 @@ def test_ollama_connection():
 
 
 def test_embeddings_api_v1():
-    """Тест API v1 для эмбеддингов (/api/embeddings)"""
-    print("\n--- Тест API v1 (/api/embeddings) ---")
+    """Тест legacy Ollama API для эмбеддингов (/api/embeddings)."""
+    print("\n--- Тест legacy Ollama API (/api/embeddings) ---")
     try:
         response = requests.post(
             f"{OLLAMA_URL}/api/embeddings",
             json={
-                "model": "qwen",
+                "model": EMBEDDING_MODEL,
                 "prompt": "Тестовый текст для проверки эмбеддингов"
             },
             timeout=30
@@ -58,13 +70,13 @@ def test_embeddings_api_v1():
 
 
 def test_embeddings_api_v2():
-    """Тест API v2 для эмбеддингов (/api/embed)"""
-    print("\n--- Тест API v2 (/api/embed) ---")
+    """Тест текущего Ollama API для эмбеддингов (/api/embed)."""
+    print("\n--- Тест текущего Ollama API (/api/embed) ---")
     try:
         response = requests.post(
             f"{OLLAMA_URL}/api/embed",
             json={
-                "model": "qwen",
+                "model": EMBEDDING_MODEL,
                 "input": "Тестовый текст для проверки эмбеддингов"
             },
             timeout=30
@@ -127,9 +139,12 @@ def test_model_for_embeddings(model_name):
 
 
 def main():
+    _configure_stdout()
     print("=" * 60)
     print("Тестирование API ollama для эмбеддингов")
     print("=" * 60)
+    print(f"URL из настроек: {OLLAMA_URL}")
+    print(f"Модель эмбеддингов из настроек: {EMBEDDING_MODEL}")
     
     # Проверка подключения
     if not test_ollama_connection():
@@ -140,7 +155,7 @@ def main():
     api_v2_works = test_embeddings_api_v2()
     
     # Тест разных моделей
-    models_to_test = ["qwen", "nomic-embed-text", "mxbai-embed-large", "all-minilm"]
+    models_to_test = [EMBEDDING_MODEL]
     
     print("\n" + "=" * 60)
     print("Тестирование разных моделей")
@@ -163,7 +178,7 @@ def main():
     else:
         print("  ✗ Не найдено моделей, поддерживающих эмбеддинги")
         print("\nРекомендация: установите модель для эмбеддингов:")
-        print("  docker exec -it ollama ollama pull nomic-embed-text")
+        print(f"  docker exec -it ollama ollama pull {EMBEDDING_MODEL}")
 
 
 if __name__ == "__main__":

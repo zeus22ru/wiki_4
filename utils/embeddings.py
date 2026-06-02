@@ -30,6 +30,15 @@ except ImportError:
 
 logger = get_logger(__name__)
 
+
+class ChatCompletionError(RuntimeError):
+    """Явная ошибка генерации LLM, которую нельзя отдавать как обычный текст ответа."""
+
+    def __init__(self, message: str, *, code: str = "generation_error"):
+        super().__init__(message)
+        self.code = code
+        self.message = message
+
 _THINK_BLOCK_RE = re.compile(
     r"<(?:think|redacted_thinking)\b[^>]*>[\s\S]*?</(?:think|redacted_thinking)\b[^>]*>",
     re.IGNORECASE,
@@ -321,16 +330,24 @@ def chat_completion_stream(prompt: str, timeout: int = 120) -> Iterator[str]:
             body = e.response.text[:800] if e.response is not None else ""
             code = e.response.status_code if e.response else "?"
             logger.error("HTTP ошибка chat/completions (stream): %s %s", code, body)
-            yield f"Произошла ошибка при генерации ответа: HTTP {code}"
-        except requests.exceptions.Timeout:
+            raise ChatCompletionError(f"Ошибка генерации ответа: HTTP {code}", code="generation_error") from e
+        except requests.exceptions.Timeout as e:
             logger.error("Таймаут при генерации ответа (stream, chat/completions)")
-            yield "Произошла ошибка при генерации ответа: Превышено время ожидания"
-        except requests.exceptions.ConnectionError:
+            raise ChatCompletionError(
+                "Ошибка генерации ответа: превышено время ожидания",
+                code="generation_timeout",
+            ) from e
+        except requests.exceptions.ConnectionError as e:
             logger.error("Ошибка подключения к серверу LLM (stream, chat/completions)")
-            yield "Произошла ошибка при генерации ответа: Не удалось подключиться к серверу LLM"
+            raise ChatCompletionError(
+                "Ошибка генерации ответа: не удалось подключиться к серверу LLM",
+                code="generation_unavailable",
+            ) from e
         except Exception as e:
             logger.error("Ошибка при потоковой генерации: %s", e)
-            yield f"Произошла ошибка при генерации ответа: {str(e)}"
+            if isinstance(e, ChatCompletionError):
+                raise
+            raise ChatCompletionError("Ошибка генерации ответа", code="generation_error") from e
         return
 
     try:
@@ -363,16 +380,24 @@ def chat_completion_stream(prompt: str, timeout: int = 120) -> Iterator[str]:
     except requests.exceptions.HTTPError as e:
         code = e.response.status_code if e.response else "?"
         logger.error("HTTP ошибка при потоковой генерации (/api/generate): %s", code)
-        yield f"Произошла ошибка при генерации ответа: HTTP {code}"
-    except requests.exceptions.Timeout:
+        raise ChatCompletionError(f"Ошибка генерации ответа: HTTP {code}", code="generation_error") from e
+    except requests.exceptions.Timeout as e:
         logger.error("Таймаут при потоковой генерации (/api/generate)")
-        yield "Произошла ошибка при генерации ответа: Превышено время ожидания"
-    except requests.exceptions.ConnectionError:
+        raise ChatCompletionError(
+            "Ошибка генерации ответа: превышено время ожидания",
+            code="generation_timeout",
+        ) from e
+    except requests.exceptions.ConnectionError as e:
         logger.error("Ошибка подключения к Ollama (stream)")
-        yield "Произошла ошибка при генерации ответа: Не удалось подключиться к Ollama"
+        raise ChatCompletionError(
+            "Ошибка генерации ответа: не удалось подключиться к Ollama",
+            code="generation_unavailable",
+        ) from e
     except Exception as e:
         logger.error("Ошибка при потоковой генерации: %s", e)
-        yield f"Произошла ошибка при генерации ответа: {str(e)}"
+        if isinstance(e, ChatCompletionError):
+            raise
+        raise ChatCompletionError("Ошибка генерации ответа", code="generation_error") from e
 
 
 def chat_completion_stream_filtered(prompt: str, timeout: int = 120) -> Iterator[str]:

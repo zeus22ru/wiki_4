@@ -2446,6 +2446,30 @@ a.data-card.data-card--link:focus-visible {
 }
 
 @media (max-width: 768px) {
+    .app-container {
+        flex-direction: column;
+        gap: 0.75rem;
+        padding: 0.75rem;
+    }
+
+    .workspace-sidebar {
+        display: flex;
+        width: 100%;
+        min-width: 0;
+        height: auto;
+        max-height: 34vh;
+        padding: 0.85rem;
+    }
+
+    .workspace-sidebar .sidebar-header,
+    .workspace-sidebar .sidebar-footer {
+        flex-shrink: 0;
+    }
+
+    .chat-list {
+        max-height: 18vh;
+    }
+
     body {
         align-items: stretch;
     }

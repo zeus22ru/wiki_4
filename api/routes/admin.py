@@ -5,6 +5,7 @@
 from datetime import datetime, timedelta
 from pathlib import Path
 from collections import Counter
+import time
 
 from flask import Blueprint, jsonify
 from flask import request
@@ -18,9 +19,12 @@ from config import (
     fetch_remote_model_ids,
 )
 from core.chat_history import get_chat_history
+from core.retrieval import bm25_index_path
 
 logger = get_logger(__name__)
 admin_bp = Blueprint("admin", __name__, url_prefix="/api/admin")
+_OVERVIEW_CACHE_TTL_SECONDS = 15
+_overview_cache: dict | None = None
 
 
 @admin_bp.before_request
@@ -66,6 +70,36 @@ def _chroma_status() -> dict:
             "collection": settings.CHROMA_COLLECTION_NAME,
             "error": str(exc),
         }
+
+
+def _path_size_bytes(path: Path) -> int | None:
+    """Best-effort size for files/directories used by admin diagnostics."""
+    try:
+        if path.is_file():
+            return path.stat().st_size
+        if not path.exists():
+            return None
+        total = 0
+        for child in path.rglob("*"):
+            if child.is_file():
+                try:
+                    total += child.stat().st_size
+                except OSError:
+                    continue
+        return total
+    except OSError:
+        return None
+
+
+def _storage_sizes() -> dict:
+    db_path = Path(settings.DATABASE_PATH)
+    chroma_path = Path(settings.CHROMA_PERSIST_DIR)
+    bm25_path = bm25_index_path()
+    return {
+        "sqlite_db_bytes": _path_size_bytes(db_path),
+        "chroma_dir_bytes": _path_size_bytes(chroma_path),
+        "bm25_index_bytes": _path_size_bytes(bm25_path),
+    }
 
 
 def _document_quality() -> dict:
@@ -155,26 +189,90 @@ def _quality_risks(feedback: dict, documents: dict, weak_answers: list[dict], kn
     return risks
 
 
+def _overview_window() -> tuple[int, str]:
+    window_days = request.args.get("window_days", 30, type=int)
+    window_days = max(1, min(window_days or 30, 365))
+    created_after = (datetime.now() - timedelta(days=window_days)).isoformat()
+    return window_days, created_after
+
+
+def _cache_key(window_days: int) -> tuple:
+    return (
+        settings.DATABASE_PATH,
+        settings.DATA_DIR,
+        settings.CHROMA_PERSIST_DIR,
+        settings.CHROMA_COLLECTION_NAME,
+        window_days,
+    )
+
+
+def _clear_overview_cache() -> None:
+    global _overview_cache
+    _overview_cache = None
+
+
 @admin_bp.route("/overview", methods=["GET"])
 def overview():
     """Сводное состояние приложения, Chroma, LLM и истории."""
+    global _overview_cache
+    overview_started = time.perf_counter()
+    timings_ms: dict[str, int] = {}
+
+    def mark_timing(name: str, stage_started: float) -> None:
+        timings_ms[name] = int((time.perf_counter() - stage_started) * 1000)
+
+    window_days, created_after = _overview_window()
+    key = _cache_key(window_days)
+    now = time.monotonic()
+    force_refresh = request.args.get("refresh") in {"1", "true", "yes"}
+    if (
+        not force_refresh
+        and _overview_cache
+        and _overview_cache.get("key") == key
+        and _overview_cache.get("expires_at", 0) > now
+    ):
+        return jsonify(_overview_cache["payload"])
+
     models = []
     models_error = None
+    stage_started = time.perf_counter()
     try:
         models = fetch_remote_model_ids()
     except Exception as exc:
         models_error = str(exc)
         logger.warning("Не удалось получить модели: %s", exc)
+    mark_timing("models_ms", stage_started)
 
+    stage_started = time.perf_counter()
     history = get_chat_history()
-    feedback_summary = history.get_feedback_summary()
+    mark_timing("history_init_ms", stage_started)
+    stage_started = time.perf_counter()
+    feedback_summary = history.get_feedback_summary(created_after=created_after)
+    mark_timing("feedback_summary_ms", stage_started)
+    stage_started = time.perf_counter()
     documents_quality = _document_quality()
-    weak_answers = history.get_weak_answers(limit=10)
-    knowledge_gaps = history.get_knowledge_gaps(limit=10)
-    return jsonify({
+    mark_timing("document_quality_ms", stage_started)
+    stage_started = time.perf_counter()
+    weak_answers = history.get_weak_answers(limit=10, created_after=created_after, scan_limit=1000)
+    mark_timing("weak_answers_ms", stage_started)
+    stage_started = time.perf_counter()
+    knowledge_gaps = history.get_knowledge_gaps(limit=10, created_after=created_after, scan_limit=2000)
+    mark_timing("knowledge_gaps_ms", stage_started)
+    stage_started = time.perf_counter()
+    storage_sizes = _storage_sizes()
+    mark_timing("storage_sizes_ms", stage_started)
+    stage_started = time.perf_counter()
+    chroma_status = _chroma_status()
+    mark_timing("chroma_status_ms", stage_started)
+    stage_started = time.perf_counter()
+    llm_status = inference_server_reachable()
+    mark_timing("llm_health_ms", stage_started)
+    timings_ms["total_ms"] = int((time.perf_counter() - overview_started) * 1000)
+
+    payload = {
         "health": {
-            "llm": inference_server_reachable(),
-            "chroma": _chroma_status(),
+            "llm": llm_status,
+            "chroma": chroma_status,
         },
         "settings": _public_settings(),
         "models": {
@@ -188,17 +286,29 @@ def overview():
             "message_count": history.get_total_message_count(),
         },
         "quality": {
+            "window_days": window_days,
             "feedback": feedback_summary,
             "recent_feedback": history.get_feedback(limit=10),
-            "top_sources": history.get_top_sources(limit=8),
+            "top_sources": history.get_top_sources(limit=8, created_after=created_after, scan_limit=2000),
             "negative_feedback": history.get_negative_feedback_context(limit=5),
-            "negative_sources": history.get_source_feedback(limit=8),
+            "negative_sources": history.get_source_feedback(limit=8, created_after=created_after, scan_limit=1000),
             "weak_answers": weak_answers,
             "knowledge_gaps": knowledge_gaps,
             "documents": documents_quality,
             "risks": _quality_risks(feedback_summary, documents_quality, weak_answers, knowledge_gaps),
         },
-    })
+        "diagnostics": {
+            "cache_ttl_seconds": _OVERVIEW_CACHE_TTL_SECONDS,
+            "timings_ms": timings_ms,
+            "sizes": storage_sizes,
+        },
+    }
+    _overview_cache = {
+        "key": key,
+        "expires_at": now + _OVERVIEW_CACHE_TTL_SECONDS,
+        "payload": payload,
+    }
+    return jsonify(payload)
 
 
 @admin_bp.route("/settings", methods=["GET"])
@@ -262,9 +372,14 @@ def update_setting():
 
     overrides = load_overrides()
     if action == "clear":
-        overrides.pop(key, None)
-        save_overrides(overrides)
-        apply_overrides(settings, overrides)
+        updated_overrides = dict(overrides)
+        updated_overrides.pop(key, None)
+        try:
+            apply_overrides(settings, updated_overrides)
+        except ValueError as exc:
+            return jsonify({"error": f"Некорректное значение: {exc}"}), 400
+        save_overrides(updated_overrides)
+        _clear_overview_cache()
         if key == "MAX_FILE_SIZE":
             from flask import current_app
             current_app.config["MAX_CONTENT_LENGTH"] = int(settings.MAX_FILE_SIZE)
@@ -284,9 +399,14 @@ def update_setting():
         if max_v is not None and coerced > max_v:
             return jsonify({"error": f"Значение больше максимума ({max_v})"}), 400
 
-    overrides[key] = coerced
-    save_overrides(overrides)
-    apply_overrides(settings, overrides)
+    updated_overrides = dict(overrides)
+    updated_overrides[key] = coerced
+    try:
+        apply_overrides(settings, updated_overrides)
+    except ValueError as exc:
+        return jsonify({"error": f"Некорректное значение: {exc}"}), 400
+    save_overrides(updated_overrides)
+    _clear_overview_cache()
     if key == "MAX_FILE_SIZE":
         from flask import current_app
         current_app.config["MAX_CONTENT_LENGTH"] = int(settings.MAX_FILE_SIZE)

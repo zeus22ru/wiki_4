@@ -131,7 +131,7 @@
                     </button>
                     <div class="rag-toolbar-advanced" id="ragAdvancedPanel" hidden>
                         <label>Сколько источников искать
-                            <input id="topKInput" type="number" min="1" max="50" value="{{ rag_top_k }}">
+                            <input id="topKInput" type="number" min="1" max="10" value="{{ rag_top_k }}">
                         </label>
                         <label>Минимальная релевантность
                             <input id="minScoreInput" type="number" min="0" max="1" step="0.05" value="{{ rag_min_score }}">
@@ -139,7 +139,7 @@
                     </div>
                 </div>
                 <div class="messages" id="messages">
-                    <div class="message bot-message">
+                    <div class="message bot-message system-message welcome-message">
                         <div class="message-avatar">
                             <img src="{{ url_for('static', filename='img/assistant-avatar.svg') }}" alt="AI-ассистент">
                         </div>
@@ -165,6 +165,8 @@
                             id="messageInput" 
                             placeholder="Введите ваш вопрос..." 
                             autocomplete="off"
+                            minlength="1"
+                            maxlength="5000"
                         >
                         <button type="submit" class="send-button" id="sendButton">
                             <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">

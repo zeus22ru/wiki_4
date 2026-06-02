@@ -16,6 +16,8 @@ import os
 from pathlib import Path
 from typing import Any
 
+from .validation import validate_chunk_bounds
+
 
 def overrides_path() -> Path:
     raw = os.getenv("SETTINGS_OVERRIDES_PATH", "").strip()
@@ -47,6 +49,15 @@ def save_overrides(data: dict[str, Any]) -> None:
 
 def apply_overrides(settings_obj: Any, overrides: dict[str, Any]) -> None:
     """Применить overrides к уже созданному объекту settings (in-memory)."""
+    candidate = {
+        "CHUNK_SIZE": getattr(settings_obj, "CHUNK_SIZE", None),
+        "CHUNK_OVERLAP": getattr(settings_obj, "CHUNK_OVERLAP", None),
+    }
+    for key, value in (overrides or {}).items():
+        if key in candidate:
+            candidate[key] = value
+    validate_chunk_bounds(int(candidate["CHUNK_SIZE"]), int(candidate["CHUNK_OVERLAP"]))
+
     for key, value in (overrides or {}).items():
         if not isinstance(key, str) or not key:
             continue

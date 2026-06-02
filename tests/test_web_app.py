@@ -7,6 +7,7 @@ import pytest
 from werkzeug.security import generate_password_hash
 
 from core.rag import Citation, RAGResult
+from utils.embeddings import ChatCompletionError
 
 
 def login_admin(client):
@@ -43,6 +44,38 @@ def test_api_health_ok(mock_reachable, mock_init, client):
     assert body["database"] is True
     assert body["rag"] is True
     assert body["status"] == "ok"
+
+
+@patch("api.routes.admin._storage_sizes")
+@patch("api.routes.admin._chroma_status")
+@patch("api.routes.admin.fetch_remote_model_ids")
+@patch("api.routes.admin.inference_server_reachable")
+def test_admin_overview_includes_performance_diagnostics(
+    mock_reachable,
+    mock_models,
+    mock_chroma_status,
+    mock_storage_sizes,
+    client,
+):
+    login_admin(client)
+    mock_reachable.return_value = True
+    mock_models.return_value = []
+    mock_chroma_status.return_value = {"ok": True, "collection": "wiki", "count": 0}
+    mock_storage_sizes.return_value = {
+        "sqlite_db_bytes": 4096,
+        "chroma_dir_bytes": 8192,
+        "bm25_index_bytes": 1024,
+    }
+
+    rv = client.get("/api/admin/overview?refresh=1")
+
+    assert rv.status_code == 200
+    diagnostics = rv.get_json()["diagnostics"]
+    assert diagnostics["sizes"]["sqlite_db_bytes"] == 4096
+    assert diagnostics["sizes"]["bm25_index_bytes"] == 1024
+    timings = diagnostics["timings_ms"]
+    assert {"models_ms", "chroma_status_ms", "storage_sizes_ms", "total_ms"}.issubset(timings)
+    assert all(isinstance(timings[key], int) and timings[key] >= 0 for key in timings)
 
 
 @patch("web_app.initialize_database")
@@ -106,6 +139,96 @@ def test_api_chat_employee_instruction_mode(mock_reachable, mock_init, client):
 
 @patch("web_app.initialize_database")
 @patch("web_app.inference_server_reachable")
+def test_api_chat_normalizes_rag_options(mock_reachable, mock_init, client):
+    mock_reachable.return_value = True
+    rag = MagicMock()
+    mock_init.return_value = (MagicMock(), rag)
+    rag.query.return_value = RAGResult(answer="Ответ", citations=[], sources=[])
+
+    rv = client.post("/api/chat", json={
+        "message": "настрой принтер",
+        "top_k": 100000,
+        "min_score": -1,
+        "answer_mode": "unknown-mode",
+    })
+
+    assert rv.status_code == 200
+    assert rag.query.call_args.kwargs["top_k"] == 50
+    assert rag.query.call_args.kwargs["min_score"] == 0.0
+    assert rag.query.call_args.kwargs["answer_mode"] == "default"
+
+
+@patch("web_app.initialize_database")
+def test_api_chat_rejects_non_string_message_before_rag(mock_init, client):
+    rv = client.post("/api/chat", json={"message": 123})
+
+    assert rv.status_code == 400
+    assert "строкой" in rv.get_json()["error"]
+    mock_init.assert_not_called()
+
+
+@patch("web_app.initialize_database")
+def test_api_chat_rejects_long_message_before_rag(mock_init, client):
+    rv = client.post("/api/chat", json={"message": "x" * 1001})
+
+    assert rv.status_code == 400
+    assert "Слишком длинный" in rv.get_json()["error"]
+    mock_init.assert_not_called()
+
+
+@patch("web_app.initialize_database")
+def test_api_chat_stream_rejects_non_string_message_before_rag(mock_init, client):
+    rv = client.post("/api/chat/stream", json={"message": None})
+
+    assert rv.status_code == 400
+    assert "строкой" in rv.get_json()["error"]
+    mock_init.assert_not_called()
+
+
+@patch("web_app.initialize_database")
+@patch("web_app.inference_server_reachable")
+def test_api_chat_missing_chat_id_returns_404(mock_reachable, mock_init, client):
+    mock_reachable.return_value = True
+    rag = MagicMock()
+    mock_init.return_value = (MagicMock(), rag)
+
+    rv = client.post("/api/chat", json={"message": "вопрос тут", "chat_id": 999})
+
+    assert rv.status_code == 404
+    assert rv.get_json()["error"] == "Чат не найден"
+    rag.query.assert_not_called()
+
+
+@patch("web_app.initialize_database")
+@patch("web_app.inference_server_reachable")
+def test_api_chat_inaccessible_chat_id_returns_403(mock_reachable, mock_init, client):
+    mock_reachable.return_value = True
+    rag = MagicMock()
+    mock_init.return_value = (MagicMock(), rag)
+
+    rv = client.post(
+        "/api/auth/register",
+        json={"username": "alice", "email": "alice-chat@example.com", "password": "password123"},
+    )
+    alice_chat = client.post("/api/chats", json={"title": "Alice chat"}).get_json()
+    assert rv.status_code == 201
+
+    client.post("/api/auth/logout")
+    rv = client.post(
+        "/api/auth/register",
+        json={"username": "bob", "email": "bob-chat@example.com", "password": "password123"},
+    )
+    assert rv.status_code == 201
+
+    rv = client.post("/api/chat", json={"message": "вопрос тут", "chat_id": alice_chat["id"]})
+
+    assert rv.status_code == 403
+    assert rv.get_json()["error"] == "Нет доступа к чату"
+    rag.query.assert_not_called()
+
+
+@patch("web_app.initialize_database")
+@patch("web_app.inference_server_reachable")
 def test_api_chat_embedding_unavailable(mock_reachable, mock_init, client):
     mock_reachable.return_value = True
     rag = MagicMock()
@@ -117,8 +240,14 @@ def test_api_chat_embedding_unavailable(mock_reachable, mock_init, client):
         retrieve_error="embedding_unavailable",
     )
     rv = client.post("/api/chat", json={"message": "вопрос тут"})
-    assert rv.status_code == 200
-    assert rv.get_json()["sources"] == []
+    assert rv.status_code == 500
+    body = rv.get_json()
+    assert body["code"] == "embedding_unavailable"
+
+    from core.chat_history import get_chat_history
+
+    messages = get_chat_history().get_messages(body["chat_id"])
+    assert [message.role for message in messages] == ["user"]
 
 
 @patch("web_app.initialize_database")
@@ -135,6 +264,34 @@ def test_api_chat_search_error(mock_reachable, mock_init, client):
     )
     rv = client.post("/api/chat", json={"message": "вопрос тут"})
     assert rv.status_code == 500
+    body = rv.get_json()
+    assert body["code"] == "search_error"
+
+    from core.chat_history import get_chat_history
+
+    messages = get_chat_history().get_messages(body["chat_id"])
+    assert [message.role for message in messages] == ["user"]
+
+
+@patch("web_app.initialize_database")
+@patch("web_app.inference_server_reachable")
+def test_api_chat_generation_error_keeps_only_user_message(mock_reachable, mock_init, client):
+    mock_reachable.return_value = True
+    rag = MagicMock()
+    mock_init.return_value = (MagicMock(), rag)
+    rag.query.side_effect = ChatCompletionError("LLM недоступна", code="generation_unavailable")
+
+    rv = client.post("/api/chat", json={"message": "вопрос тут"})
+
+    assert rv.status_code == 500
+    body = rv.get_json()
+    assert body["code"] == "generation_unavailable"
+    assert body["message"] == "LLM недоступна"
+
+    from core.chat_history import get_chat_history
+
+    messages = get_chat_history().get_messages(body["chat_id"])
+    assert [message.role for message in messages] == ["user"]
 
 
 @patch("web_app.initialize_database")
@@ -143,10 +300,11 @@ def test_api_chat_stream_success(mock_reachable, mock_init, client):
     mock_reachable.return_value = True
     rag = MagicMock()
     mock_init.return_value = (MagicMock(), rag)
+    query = "как настроить пользователя в 1с"
     rag.retrieve_documents_auto.return_value = (
         [{"text": "x", "score": 1.0, "metadata": {}, "chunk_id": "c1"}],
         None,
-        {"rewritten": "привет мир", "dense_queries": ["привет мир"], "sparse_queries": ["привет мир"]},
+        {"rewritten": query, "dense_queries": [query], "sparse_queries": [query]},
         {},
     )
     rag.stream_rag_answer.side_effect = lambda *a, **kw: iter(
@@ -172,7 +330,7 @@ def test_api_chat_stream_success(mock_reachable, mock_init, client):
             },
         ]
     )
-    rv = client.post("/api/chat/stream", json={"message": "привет мир"})
+    rv = client.post("/api/chat/stream", json={"message": query})
     assert rv.status_code == 200
     text = rv.get_data(as_text=True)
     assert "Ищу релевантные документы" in text
@@ -180,9 +338,43 @@ def test_api_chat_stream_success(mock_reachable, mock_init, client):
     assert "Часть" in text
     assert "Полный ответ" in text
     rag.retrieve_documents_auto.assert_called_once()
-    assert rag.retrieve_documents_auto.call_args[0][0] == "привет мир"
+    assert rag.retrieve_documents_auto.call_args[0][0] == query
     rag.stream_rag_answer.assert_called_once()
     assert "conversation_history" in rag.stream_rag_answer.call_args.kwargs
+
+
+@patch("web_app.initialize_database")
+@patch("web_app.inference_server_reachable")
+def test_api_chat_stream_chitchat_success(mock_reachable, mock_init, client):
+    mock_reachable.return_value = True
+    rag = MagicMock()
+    mock_init.return_value = (MagicMock(), rag)
+    rag.stream_chitchat_answer.side_effect = lambda *a, **kw: iter(
+        [
+            {"type": "delta", "text": "Здравствуйте!"},
+            {
+                "type": "done",
+                "rag_result": RAGResult(
+                    answer="Здравствуйте! Задайте вопрос по документации.",
+                    citations=[],
+                    sources=[],
+                    diagnostics={"retrieval_status": "chitchat"},
+                ),
+            },
+        ]
+    )
+
+    rv = client.post("/api/chat/stream", json={"message": "привет мир"})
+
+    assert rv.status_code == 200
+    text = rv.get_data(as_text=True)
+    assert "Формирую ответ" in text
+    assert "Здравствуйте!" in text
+    assert "Задайте вопрос по документации" in text
+    rag.retrieve_documents_auto.assert_not_called()
+    rag.stream_rag_answer.assert_not_called()
+    rag.stream_chitchat_answer.assert_called_once()
+    assert rag.stream_chitchat_answer.call_args[0][0] == "привет мир"
 
 
 @patch("web_app.initialize_database")
@@ -194,8 +386,48 @@ def test_api_chat_stream_search_error(mock_reachable, mock_init, client):
     rag.retrieve_documents_auto.return_value = ([], "search_error", {}, {})
     rv = client.post("/api/chat/stream", json={"message": "вопрос тут"})
     assert rv.status_code == 200
-    assert "Ошибка поиска" in rv.get_data(as_text=True)
+    text = rv.get_data(as_text=True)
+    assert '"type": "error"' in text
+    assert '"code": "search_error"' in text
+    assert "Ошибка поиска" in text
     rag.stream_rag_answer.assert_not_called()
+
+    from core.chat_history import get_chat_history
+
+    chat_id = get_chat_history().get_sessions(limit=1)[0].id
+    messages = get_chat_history().get_messages(chat_id)
+    assert [message.role for message in messages] == ["user"]
+
+
+@patch("web_app.initialize_database")
+@patch("web_app.inference_server_reachable")
+def test_api_chat_stream_generation_error_keeps_only_user_message(mock_reachable, mock_init, client):
+    mock_reachable.return_value = True
+    rag = MagicMock()
+    mock_init.return_value = (MagicMock(), rag)
+    query = "как настроить пользователя в 1с"
+    rag.retrieve_documents_auto.return_value = (
+        [{"text": "x", "score": 1.0, "metadata": {}, "chunk_id": "c1"}],
+        None,
+        {"rewritten": query, "dense_queries": [query], "sparse_queries": [query]},
+        {},
+    )
+    rag.stream_rag_answer.side_effect = ChatCompletionError("LLM упала", code="generation_error")
+
+    rv = client.post("/api/chat/stream", json={"message": query})
+
+    assert rv.status_code == 200
+    text = rv.get_data(as_text=True)
+    assert '"type": "error"' in text
+    assert '"code": "generation_error"' in text
+    assert "LLM упала" in text
+    assert '"type": "done"' not in text
+
+    from core.chat_history import get_chat_history
+
+    chat_id = get_chat_history().get_sessions(limit=1)[0].id
+    messages = get_chat_history().get_messages(chat_id)
+    assert [message.role for message in messages] == ["user"]
 
 
 @patch("web_app.initialize_database")
@@ -350,6 +582,23 @@ def test_api_chats_delete_all(client):
     assert rv.status_code == 200
     assert rv.get_json() == {"success": True, "deleted": 3}
     manager.delete_all_sessions.assert_called_once_with(user_id=user_id)
+
+
+def test_api_chats_normalizes_limit_and_offset(client):
+    rv = client.post(
+        "/api/auth/register",
+        json={"username": "pager", "email": "pager@example.com", "password": "password123"},
+    )
+    user_id = rv.get_json()["user"]["id"]
+    manager = MagicMock()
+    manager.get_sessions.return_value = []
+    manager.get_session_count.return_value = 0
+
+    with patch("api.routes.chat.get_chat_history", return_value=manager):
+        rv = client.get("/api/chats?limit=-1&offset=-5")
+
+    assert rv.status_code == 200
+    manager.get_sessions.assert_called_once_with(user_id=user_id, limit=1, offset=0)
 
 
 def test_api_documents_open_serves_file_inside_data_dir(client, tmp_path, monkeypatch):

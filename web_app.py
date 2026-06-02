@@ -19,6 +19,7 @@ from config.chat_runtime import rag_chat_defaults, resolve_chat_rag_options
 # Импорт RAG системы
 from core.rag import RAGSystem, RAGResult, classify_out_of_kb_query
 from core.chat_history import get_chat_history
+from utils.embeddings import ChatCompletionError
 
 # Импорт общих функций для работы с эмбеддингами
 from api.routes.chat import chat_bp
@@ -78,18 +79,51 @@ def _int_or_none(value):
         return None
 
 
+def _normalize_chat_query(data: dict):
+    if not data or "message" not in data:
+        logger.warning("Получен запрос без сообщения")
+        return None, (jsonify({"error": "Не указано сообщение"}), 400)
+
+    raw_message = data["message"]
+    if not isinstance(raw_message, str):
+        logger.warning("Некорректный тип сообщения: %s", type(raw_message).__name__)
+        return None, (jsonify({"error": "Сообщение должно быть строкой"}), 400)
+
+    query = raw_message.strip()
+    if not query:
+        logger.warning("Получено пустое сообщение")
+        return None, (jsonify({"error": "Пустое сообщение"}), 400)
+    if len(query) < 3:
+        logger.warning(f"Слишком короткий запрос: {len(query)} символов")
+        return None, (jsonify({"error": "Слишком короткий запрос. Минимальная длина: 3 символа"}), 400)
+    if len(query) > 1000:
+        logger.warning(f"Слишком длинный запрос: {len(query)} символов")
+        return None, (jsonify({"error": "Слишком длинный запрос. Максимальная длина: 1000 символов"}), 400)
+
+    return query, None
+
+
 def _chat_options(data: dict) -> dict:
     return resolve_chat_rag_options(data)
 
 
+class ChatNotFoundError(Exception):
+    """Запрошенный чат отсутствует."""
+
+
 def _resolve_chat_session(data: dict, query: str):
     chat_history = get_chat_history()
-    chat_id = _int_or_none(data.get("chat_id"))
-    if chat_id:
+    raw_chat_id = data.get("chat_id")
+    chat_id = _int_or_none(raw_chat_id)
+    if raw_chat_id not in (None, ""):
+        if chat_id is None or chat_id <= 0:
+            raise ValueError("Некорректный chat_id")
         chat_session = chat_history.get_session(chat_id)
-        if chat_session and can_access_chat(chat_session):
-            return chat_history, chat_id
-        raise PermissionError("Нет доступа к чату")
+        if not chat_session:
+            raise ChatNotFoundError("Чат не найден")
+        if not can_access_chat(chat_session):
+            raise PermissionError("Нет доступа к чату")
+        return chat_history, chat_id
     title = (query[:60] + "...") if len(query) > 60 else query
     session = chat_history.create_session(user_id=current_user_id(), title=title or "Новый чат")
     if session.user_id is None:
@@ -122,6 +156,21 @@ def _maybe_update_chat_title(chat_history, chat_id: int, query: str) -> None:
 
 def _sse_event(payload: dict) -> str:
     return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+def _chat_error_payload(
+    code: str,
+    message: str,
+    *,
+    chat_id: int | None = None,
+    diagnostics: dict | None = None,
+) -> dict:
+    payload = {"error": message, "message": message, "code": code}
+    if chat_id is not None:
+        payload["chat_id"] = chat_id
+    if diagnostics:
+        payload["diagnostics"] = diagnostics
+    return payload
 
 
 app = Flask(__name__)
@@ -272,27 +321,12 @@ def health_check():
 def chat():
     """Обработка запроса чата с использованием RAG системы"""
     data = _get_json_body()
-    
-    if not data or 'message' not in data:
-        logger.warning("Получен запрос без сообщения")
-        return jsonify({"error": "Не указано сообщение"}), 400
-    
-    query = data['message'].strip()
+
+    query, error_response = _normalize_chat_query(data)
+    if error_response:
+        return error_response
     options = _chat_options(data)
     logger.info(f"Запрос чата: '{query[:100]}...'")
-    
-    if not query:
-        logger.warning("Получено пустое сообщение")
-        return jsonify({"error": "Пустое сообщение"}), 400
-    
-    # Валидация длины запроса
-    if len(query) < 3:
-        logger.warning(f"Слишком короткий запрос: {len(query)} символов")
-        return jsonify({"error": "Слишком короткий запрос. Минимальная длина: 3 символа"}), 400
-    
-    if len(query) > 1000:
-        logger.warning(f"Слишком длинный запрос: {len(query)} символов")
-        return jsonify({"error": "Слишком длинный запрос. Максимальная длина: 1000 символов"}), 400
     
     # Инициализируем базу данных и RAG систему
     coll, rag = initialize_database()
@@ -309,6 +343,10 @@ def chat():
     try:
         try:
             chat_history, chat_id = _resolve_chat_session(data, query)
+        except ValueError:
+            return jsonify({"error": "Некорректный chat_id"}), 400
+        except ChatNotFoundError:
+            return jsonify({"error": "Чат не найден"}), 404
         except PermissionError:
             return jsonify({"error": "Нет доступа к чату"}), 403
         conversation_history = _conversation_history_for_rag(chat_history, chat_id)
@@ -319,14 +357,18 @@ def chat():
             metadata={"answer_mode": options["answer_mode"]},
         )
         started = time.time()
-        rag_result = rag.query(
-            query,
-            top_k=options["top_k"],
-            min_score=options["min_score"],
-            max_citations=settings.RAG_MAX_CITATIONS,
-            answer_mode=options["answer_mode"],
-            conversation_history=conversation_history,
-        )
+        try:
+            rag_result = rag.query(
+                query,
+                top_k=options["top_k"],
+                min_score=options["min_score"],
+                max_citations=settings.RAG_MAX_CITATIONS,
+                answer_mode=options["answer_mode"],
+                conversation_history=conversation_history,
+            )
+        except ChatCompletionError as e:
+            logger.error("Ошибка генерации LLM для чата %s: %s", chat_id, e)
+            return jsonify(_chat_error_payload(e.code, e.message, chat_id=chat_id)), 500
         latency_ms = int((time.time() - started) * 1000)
         logger.info(f"Сгенерирован ответ длиной {len(rag_result.answer)} символов")
         logger.info(f"Извлечено {len(rag_result.citations)} цитат")
@@ -338,24 +380,21 @@ def chat():
         logger.error(
             "Эмбеддинг запроса не получен — в Chroma есть векторы, но поиск без эмбеддинга вопроса невозможен"
         )
-        payload = {
-            "answer": rag_result.answer,
-            "sources": [],
-            "citations": [],
-            "chat_id": chat_id,
-            "diagnostics": rag_result.diagnostics or {},
-        }
-        chat_history.add_message(
-            session_id=chat_id,
-            role="assistant",
-            content=rag_result.answer,
-            metadata={"retrieve_error": "embedding_unavailable", "latency_ms": latency_ms},
-        )
-        return jsonify(payload)
+        return jsonify(_chat_error_payload(
+            "embedding_unavailable",
+            rag_result.answer,
+            chat_id=chat_id,
+            diagnostics=rag_result.diagnostics or {},
+        )), 500
 
     if rag_result.retrieve_error == "search_error":
         logger.error("Ошибка Chroma при поиске")
-        return jsonify({"error": "Ошибка поиска в векторной базе"}), 500
+        return jsonify(_chat_error_payload(
+            "search_error",
+            "Ошибка поиска в векторной базе",
+            chat_id=chat_id,
+            diagnostics=rag_result.diagnostics or {},
+        )), 500
 
     payload = _rag_result_to_api_dict(rag_result)
     payload["chat_id"] = chat_id
@@ -390,18 +429,10 @@ def chat_stream():
     """RAG-чат с потоковой передачей текста (SSE). Итоговые sources/citations — в событии type=done."""
     data = _get_json_body()
 
-    if not data or 'message' not in data:
-        logger.warning("stream: запрос без сообщения")
-        return jsonify({"error": "Не указано сообщение"}), 400
-
-    query = data['message'].strip()
+    query, error_response = _normalize_chat_query(data)
+    if error_response:
+        return error_response
     options = _chat_options(data)
-    if not query:
-        return jsonify({"error": "Пустое сообщение"}), 400
-    if len(query) < 3:
-        return jsonify({"error": "Слишком короткий запрос. Минимальная длина: 3 символа"}), 400
-    if len(query) > 1000:
-        return jsonify({"error": "Слишком длинный запрос. Максимальная длина: 1000 символов"}), 400
 
     coll, rag = initialize_database()
     if not coll or not rag:
@@ -414,6 +445,10 @@ def chat_stream():
 
     try:
         chat_history, chat_id = _resolve_chat_session(data, query)
+    except ValueError:
+        return jsonify({"error": "Некорректный chat_id"}), 400
+    except ChatNotFoundError:
+        return jsonify({"error": "Чат не найден"}), 404
     except PermissionError:
         return jsonify({"error": "Нет доступа к чату"}), 403
     conversation_history = _conversation_history_for_rag(chat_history, chat_id)
@@ -472,33 +507,39 @@ def chat_stream():
             retrieval_query = expansion.get("rewritten") or query
 
             if retrieve_error == "embedding_unavailable":
-                rr = RAGResult(
-                    answer=(
-                        "Поиск по базе не выполнен: не удалось получить эмбеддинг для вашего вопроса. "
-                        "Индекс в Chroma уже заполнен, но для каждого запроса нужна работающая модель эмбеддингов "
-                        "(например, загрузите модель в LM Studio и проверьте OLLAMA_EMBEDDING_MODEL и INFERENCE_BACKEND=lmstudio)."
-                    ),
-                    citations=[],
-                    sources=[],
-                    retrieve_error="embedding_unavailable",
-                )
-                assistant_message = chat_history.add_message(
-                    session_id=chat_id,
-                    role="assistant",
-                    content=rr.answer,
-                    metadata={"retrieve_error": "embedding_unavailable"},
-                )
-                _maybe_update_chat_title(chat_history, chat_id, query)
                 yield _sse_event({
-                    "type": "done",
-                    "chat_id": chat_id,
-                    "message_id": assistant_message.id,
-                    **_rag_result_to_api_dict(rr),
+                    "type": "error",
+                    **_chat_error_payload(
+                        "embedding_unavailable",
+                        (
+                            "Поиск по базе не выполнен: не удалось получить эмбеддинг для вашего вопроса. "
+                            "Индекс в Chroma уже заполнен, но для каждого запроса нужна работающая модель эмбеддингов "
+                            "(например, загрузите модель в LM Studio и проверьте OLLAMA_EMBEDDING_MODEL и INFERENCE_BACKEND=lmstudio)."
+                        ),
+                        chat_id=chat_id,
+                        diagnostics={
+                            "retrieval_status": "embedding_unavailable",
+                            "retrieval": retrieve_diag,
+                            "expansion": expansion,
+                        },
+                    ),
                 })
                 return
 
             if retrieve_error == "search_error":
-                yield _sse_event({"type": "error", "message": "Ошибка поиска в векторной базе"})
+                yield _sse_event({
+                    "type": "error",
+                    **_chat_error_payload(
+                        "search_error",
+                        "Ошибка поиска в векторной базе",
+                        chat_id=chat_id,
+                        diagnostics={
+                            "retrieval_status": "search_error",
+                            "retrieval": retrieve_diag,
+                            "expansion": expansion,
+                        },
+                    ),
+                })
                 return
 
             if not documents:
@@ -574,6 +615,12 @@ def chat_stream():
                         "message_id": assistant_message.id,
                         **payload,
                     })
+        except ChatCompletionError as e:
+            logger.error("Ошибка генерации LLM в потоке для чата %s: %s", chat_id, e)
+            yield _sse_event({
+                "type": "error",
+                **_chat_error_payload(e.code, e.message, chat_id=chat_id),
+            })
         except Exception:
             logger.error("Ошибка в потоке /api/chat/stream:\n%s", traceback.format_exc())
             yield _sse_event({

@@ -981,12 +981,18 @@ class RAGSystem:
         rag_logger.debug("Параметры: top_k=%s, min_score=%s", top_k, min_score)
 
         start_time = time.time()
+        expansion_started = time.perf_counter()
         expansion = self.expand_retrieval_queries(user_query, conversation_history)
+        expansion_ms = int((time.perf_counter() - expansion_started) * 1000)
         rag_logger.debug("Переписанный/расширенный поиск: dense=%s", expansion.get("dense_queries"))
 
         documents, err, diag = self._retrieve_documents_inner(expansion, top_k, min_score)
         diag = dict(diag or {})
+        timings = dict(diag.get("timings_ms") or {})
+        timings["query_expansion_ms"] = expansion_ms
         diag["latency_retrieve_ms"] = int((time.time() - start_time) * 1000)
+        timings["retrieve_total_ms"] = diag["latency_retrieve_ms"]
+        diag["timings_ms"] = timings
         rag_logger.info(
             "Поиск завершён за %.3f с, документов: %s, код ошибки: %s",
             time.time() - start_time,
@@ -1689,13 +1695,20 @@ MERMAID:
         rag_logger.debug(f"Параметры: top_k={top_k}, min_score={min_score}, include_citations={include_citations}, max_citations={max_citations}")
         
         start_time = time.time()
+        query_perf_started = time.perf_counter()
+        query_timings_ms: Dict[str, int] = {}
+
+        def _query_elapsed_ms(stage_started: float) -> int:
+            return int((time.perf_counter() - stage_started) * 1000)
 
         skip_kind = classify_out_of_kb_query(query)
         if skip_kind:
             result = self._answer_chitchat(query, conversation_history, kind=skip_kind)
+            query_timings_ms["total_ms"] = _query_elapsed_ms(query_perf_started)
             result.diagnostics = {
                 **(result.diagnostics or {}),
                 "latency_ms": int((time.time() - start_time) * 1000),
+                "timings_ms": query_timings_ms,
                 "conversation_messages": len(conversation_history or []),
             }
             return result
@@ -1742,6 +1755,7 @@ MERMAID:
         
         if retrieve_error == "embedding_unavailable":
             elapsed = time.time() - start_time
+            query_timings_ms["total_ms"] = _query_elapsed_ms(query_perf_started)
             rag_logger.warning(f"RAG запрос за {elapsed:.3f} сек: эмбеддинг запроса недоступен")
             return RAGResult(
                 answer=(
@@ -1755,6 +1769,7 @@ MERMAID:
                 diagnostics={
                     "retrieval_status": "embedding_unavailable",
                     "latency_ms": int(elapsed * 1000),
+                    "timings_ms": query_timings_ms,
                     "retrieval": retrieve_diag,
                     "expansion": expansion,
                 },
@@ -1762,6 +1777,7 @@ MERMAID:
         
         if retrieve_error == "search_error":
             elapsed = time.time() - start_time
+            query_timings_ms["total_ms"] = _query_elapsed_ms(query_perf_started)
             rag_logger.warning(f"RAG запрос за {elapsed:.3f} сек: ошибка поиска в Chroma")
             return RAGResult(
                 answer="Ошибка при поиске по векторной базе. Проверьте логи и целостность Chroma.",
@@ -1771,6 +1787,7 @@ MERMAID:
                 diagnostics={
                     "retrieval_status": "search_error",
                     "latency_ms": int(elapsed * 1000),
+                    "timings_ms": query_timings_ms,
                     "retrieval": retrieve_diag,
                     "expansion": expansion,
                 },
@@ -1778,6 +1795,7 @@ MERMAID:
         
         if not documents:
             elapsed = time.time() - start_time
+            query_timings_ms["total_ms"] = _query_elapsed_ms(query_perf_started)
             rag_logger.warning(f"RAG запрос завершен за {elapsed:.3f} сек. Не найдено релевантных документов")
             return RAGResult(
                 answer="К сожалению, я не нашёл релевантной информации для ответа на ваш вопрос.",
@@ -1786,6 +1804,7 @@ MERMAID:
                 diagnostics={
                     "retrieval_status": "no_documents",
                     "latency_ms": int(elapsed * 1000),
+                    "timings_ms": query_timings_ms,
                     "retrieval": retrieve_diag,
                     "expansion": expansion,
                 },
@@ -1795,6 +1814,7 @@ MERMAID:
         
         # 2. Генерация промпта с контекстом
         rag_logger.debug("Шаг 2: Генерация промпта с контекстом")
+        prompt_started = time.perf_counter()
         prompt = self.generate_rag_prompt(
             query,
             documents,
@@ -1802,6 +1822,7 @@ MERMAID:
             conversation_history=conversation_history,
             retrieval_query=retrieval_query,
         )
+        query_timings_ms["prompt_ms"] = _query_elapsed_ms(prompt_started)
 
         _safe_json_log(
             {
@@ -1818,6 +1839,7 @@ MERMAID:
         gen_started = time.time()
         answer = self._generate_answer(prompt)
         gen_ms = int((time.time() - gen_started) * 1000)
+        query_timings_ms["llm_generation_ms"] = gen_ms
         answer = self._autofix_mermaid_blocks(answer)
 
         _safe_json_log(
@@ -1835,7 +1857,11 @@ MERMAID:
         
         # 4. Обогащение ответа цитатами
         rag_logger.debug("Шаг 4: Обогащение ответа цитатами")
+        enrich_started = time.perf_counter()
         rag_result = self.enrich_answer_with_citations(answer, documents, max_citations)
+        query_timings_ms["citation_enrich_ms"] = _query_elapsed_ms(enrich_started)
+        elapsed = time.time() - start_time
+        query_timings_ms["total_ms"] = _query_elapsed_ms(query_perf_started)
 
         _safe_json_log(
             {
@@ -1845,10 +1871,9 @@ MERMAID:
                 "citations_count": len(rag_result.citations or []),
                 "sources_count": len(rag_result.sources or []),
                 "latency_total_ms": int((time.time() - exchange_started) * 1000),
+                "timings_ms": query_timings_ms,
             }
         )
-        
-        elapsed = time.time() - start_time
         rag_result.diagnostics = {
             "retrieval_status": "ok",
             "document_count": len(documents),
@@ -1858,6 +1883,7 @@ MERMAID:
             "answer_mode": answer_mode,
             "conversation_messages": len(conversation_history or []),
             "latency_ms": int(elapsed * 1000),
+            "timings_ms": query_timings_ms,
             "retrieval": retrieve_diag,
             "expansion": {
                 "rewritten": expansion.get("rewritten"),
@@ -1866,7 +1892,7 @@ MERMAID:
                 "multi_variants": expansion.get("multi_variants"),
             },
         }
-        rag_logger.info(f"RAG запрос завершен за {elapsed:.3f} сек")
+        rag_logger.info("RAG запрос завершен за %.3f сек, timings_ms=%s", elapsed, query_timings_ms)
         rag_logger.debug(f"Результат: {len(documents)} документов, {len(rag_result.citations)} цитат")
         
         return rag_result
@@ -1892,6 +1918,12 @@ MERMAID:
 
         exchange_id = uuid.uuid4().hex
         exchange_started = time.time()
+        stream_perf_started = time.perf_counter()
+        stream_timings_ms: Dict[str, int] = {}
+
+        def _stream_elapsed_ms(stage_started: float) -> int:
+            return int((time.perf_counter() - stage_started) * 1000)
+
         _safe_json_log(
             {
                 "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -1915,6 +1947,7 @@ MERMAID:
             }
         )
 
+        prompt_started = time.perf_counter()
         prompt = self.generate_rag_prompt(
             query,
             documents,
@@ -1922,6 +1955,7 @@ MERMAID:
             conversation_history=conversation_history,
             retrieval_query=retrieval_query,
         )
+        stream_timings_ms["prompt_ms"] = _stream_elapsed_ms(prompt_started)
 
         _safe_json_log(
             {
@@ -1951,6 +1985,7 @@ MERMAID:
         raw_answer = "".join(raw_chunks)
         answer = "".join(parts)
         gen_ms = int((time.time() - gen_started) * 1000)
+        stream_timings_ms["llm_generation_ms"] = gen_ms
         disable_thinking = bool(getattr(settings, "CHAT_DISABLE_THINKING", True))
         if disable_thinking:
             answer = strip_model_reasoning(answer)
@@ -1973,13 +2008,18 @@ MERMAID:
             }
         )
 
+        enrich_started = time.perf_counter()
         rag_result = self.enrich_answer_with_citations(answer, documents, max_citations)
+        stream_timings_ms["citation_enrich_ms"] = _stream_elapsed_ms(enrich_started)
+        stream_timings_ms["total_ms"] = _stream_elapsed_ms(stream_perf_started)
         rag_result.diagnostics = {
             "retrieval_status": "ok",
             "document_count": len(documents),
             "score_distribution": [round(float(d.get("score", 0)), 4) for d in documents],
             "answer_mode": answer_mode,
             "conversation_messages": len(conversation_history or []),
+            "latency_ms": stream_timings_ms["total_ms"],
+            "timings_ms": stream_timings_ms,
         }
 
         _safe_json_log(
@@ -1991,6 +2031,7 @@ MERMAID:
                 "citations_count": len(rag_result.citations or []),
                 "sources_count": len(rag_result.sources or []),
                 "latency_total_ms": int((time.time() - exchange_started) * 1000),
+                "timings_ms": stream_timings_ms,
             }
         )
 
