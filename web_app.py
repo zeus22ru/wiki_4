@@ -17,7 +17,21 @@ from config import settings, get_logger, inference_server_reachable, fetch_remot
 from config.chat_runtime import rag_chat_defaults, resolve_chat_rag_options
 
 # Импорт RAG системы
-from core.rag import RAGSystem, RAGResult, classify_out_of_kb_query, fix_mermaid_block_code
+from core.rag import (
+    RAGSystem,
+    RAGResult,
+    classify_out_of_kb_query,
+    enrich_query_from_attachments,
+    ensure_attachments_inference_supported,
+    fix_mermaid_block_code,
+)
+from core.chat_attachments import (
+    AttachmentBundle,
+    ChatAttachmentError,
+    attachments_enabled,
+    load_attachments,
+    user_message_display_text,
+)
 from core.chat_history import get_chat_history
 from utils.embeddings import ChatCompletionError
 
@@ -26,6 +40,7 @@ from api.routes.chat import chat_bp
 from api.routes.documents import documents_bp
 from api.routes.admin import admin_bp
 from api.routes.auth import auth_bp
+from api.routes.chat_attachments import chat_attachments_bp
 from api.middleware.auth import can_access_chat, current_user_id, remember_guest_chat
 
 # Получаем логгер для этого модуля
@@ -79,28 +94,56 @@ def _int_or_none(value):
         return None
 
 
+def _parse_attachment_ids(data: dict) -> list:
+    raw = data.get("attachment_ids") if isinstance(data, dict) else None
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        return []
+    return [str(item).strip() for item in raw if str(item).strip()]
+
+
+def _load_chat_attachment_bundle(attachment_ids: list) -> AttachmentBundle | None:
+    if not attachment_ids:
+        return None
+    if not attachments_enabled():
+        raise ChatAttachmentError("Вложения к чату отключены")
+    bundle = load_attachments(attachment_ids)
+    ensure_attachments_inference_supported(bundle)
+    return bundle
+
+
 def _normalize_chat_query(data: dict):
-    if not data or "message" not in data:
-        logger.warning("Получен запрос без сообщения")
+    if not data:
+        logger.warning("Получен пустой запрос чата")
         return None, (jsonify({"error": "Не указано сообщение"}), 400)
 
-    raw_message = data["message"]
+    attachment_ids = _parse_attachment_ids(data)
+    if "message" in data and data.get("message") is None:
+        logger.warning("Некорректный тип сообщения: NoneType")
+        return None, (jsonify({"error": "Сообщение должно быть строкой"}), 400)
+
+    raw_message = data.get("message", "")
+    if raw_message is None:
+        raw_message = ""
     if not isinstance(raw_message, str):
         logger.warning("Некорректный тип сообщения: %s", type(raw_message).__name__)
         return None, (jsonify({"error": "Сообщение должно быть строкой"}), 400)
 
     query = raw_message.strip()
-    if not query:
-        logger.warning("Получено пустое сообщение")
-        return None, (jsonify({"error": "Пустое сообщение"}), 400)
-    if len(query) < 3:
+    has_attachments = bool(attachment_ids)
+
+    if not query and not has_attachments:
+        logger.warning("Получено пустое сообщение без вложений")
+        return None, (jsonify({"error": "Введите сообщение или прикрепите файл"}), 400)
+    if query and len(query) < 3 and not has_attachments:
         logger.warning(f"Слишком короткий запрос: {len(query)} символов")
         return None, (jsonify({"error": "Слишком короткий запрос. Минимальная длина: 3 символа"}), 400)
     if len(query) > 1000:
         logger.warning(f"Слишком длинный запрос: {len(query)} символов")
         return None, (jsonify({"error": "Слишком длинный запрос. Максимальная длина: 1000 символов"}), 400)
 
-    return query, None
+    return {"query": query, "attachment_ids": attachment_ids}, None
 
 
 def _chat_options(data: dict) -> dict:
@@ -111,7 +154,7 @@ class ChatNotFoundError(Exception):
     """Запрошенный чат отсутствует."""
 
 
-def _resolve_chat_session(data: dict, query: str):
+def _resolve_chat_session(data: dict, query: str, attachments: AttachmentBundle | None = None):
     chat_history = get_chat_history()
     raw_chat_id = data.get("chat_id")
     chat_id = _int_or_none(raw_chat_id)
@@ -124,7 +167,8 @@ def _resolve_chat_session(data: dict, query: str):
         if not can_access_chat(chat_session):
             raise PermissionError("Нет доступа к чату")
         return chat_history, chat_id
-    title = (query[:60] + "...") if len(query) > 60 else query
+    title_source = query or user_message_display_text(query, attachments)
+    title = (title_source[:60] + "...") if len(title_source) > 60 else title_source
     session = chat_history.create_session(user_id=current_user_id(), title=title or "Новый чат")
     if session.user_id is None:
         remember_guest_chat(session.id)
@@ -191,6 +235,7 @@ app.register_blueprint(chat_bp)
 app.register_blueprint(documents_bp)
 app.register_blueprint(admin_bp)
 app.register_blueprint(auth_bp)
+app.register_blueprint(chat_attachments_bp)
 
 if not settings.FLASK_DEBUG:
     settings.validate()
@@ -322,11 +367,13 @@ def chat():
     """Обработка запроса чата с использованием RAG системы"""
     data = _get_json_body()
 
-    query, error_response = _normalize_chat_query(data)
+    normalized, error_response = _normalize_chat_query(data)
     if error_response:
         return error_response
+    query = normalized["query"]
+    attachment_ids = normalized["attachment_ids"]
     options = _chat_options(data)
-    logger.info(f"Запрос чата: '{query[:100]}...'")
+    logger.info(f"Запрос чата: '{query[:100]}...' (вложений: {len(attachment_ids)})")
     
     # Инициализируем базу данных и RAG систему
     coll, rag = initialize_database()
@@ -342,7 +389,11 @@ def chat():
     logger.info(f"Выполнение RAG запроса: '{query}'")
     try:
         try:
-            chat_history, chat_id = _resolve_chat_session(data, query)
+            attachment_bundle = _load_chat_attachment_bundle(attachment_ids)
+        except ChatAttachmentError as e:
+            return jsonify({"error": str(e)}), 400
+        try:
+            chat_history, chat_id = _resolve_chat_session(data, query, attachment_bundle)
         except ValueError:
             return jsonify({"error": "Некорректный chat_id"}), 400
         except ChatNotFoundError:
@@ -350,11 +401,14 @@ def chat():
         except PermissionError:
             return jsonify({"error": "Нет доступа к чату"}), 403
         conversation_history = _conversation_history_for_rag(chat_history, chat_id)
+        user_metadata = {"answer_mode": options["answer_mode"]}
+        if attachment_bundle and attachment_bundle.items:
+            user_metadata["attachments"] = attachment_bundle.metadata_list()
         chat_history.add_message(
             session_id=chat_id,
             role="user",
-            content=query,
-            metadata={"answer_mode": options["answer_mode"]},
+            content=user_message_display_text(query, attachment_bundle),
+            metadata=user_metadata,
         )
         started = time.time()
         try:
@@ -365,6 +419,7 @@ def chat():
                 max_citations=settings.RAG_MAX_CITATIONS,
                 answer_mode=options["answer_mode"],
                 conversation_history=conversation_history,
+                attachments=attachment_bundle,
             )
         except ChatCompletionError as e:
             logger.error("Ошибка генерации LLM для чата %s: %s", chat_id, e)
@@ -429,9 +484,11 @@ def chat_stream():
     """RAG-чат с потоковой передачей текста (SSE). Итоговые sources/citations — в событии type=done."""
     data = _get_json_body()
 
-    query, error_response = _normalize_chat_query(data)
+    normalized, error_response = _normalize_chat_query(data)
     if error_response:
         return error_response
+    query = normalized["query"]
+    attachment_ids = normalized["attachment_ids"]
     options = _chat_options(data)
 
     coll, rag = initialize_database()
@@ -444,7 +501,11 @@ def chat_stream():
         }), 500
 
     try:
-        chat_history, chat_id = _resolve_chat_session(data, query)
+        attachment_bundle = _load_chat_attachment_bundle(attachment_ids)
+    except ChatAttachmentError as e:
+        return jsonify({"error": str(e)}), 400
+    try:
+        chat_history, chat_id = _resolve_chat_session(data, query, attachment_bundle)
     except ValueError:
         return jsonify({"error": "Некорректный chat_id"}), 400
     except ChatNotFoundError:
@@ -452,12 +513,21 @@ def chat_stream():
     except PermissionError:
         return jsonify({"error": "Нет доступа к чату"}), 403
     conversation_history = _conversation_history_for_rag(chat_history, chat_id)
+    user_metadata = {"answer_mode": options["answer_mode"]}
+    if attachment_bundle and attachment_bundle.items:
+        user_metadata["attachments"] = attachment_bundle.metadata_list()
     chat_history.add_message(
         session_id=chat_id,
         role="user",
-        content=query,
-        metadata={"answer_mode": options["answer_mode"]},
+        content=user_message_display_text(query, attachment_bundle),
+        metadata=user_metadata,
     )
+    has_attachments = bool(attachment_bundle and attachment_bundle.items)
+    try:
+        attachment_enrichment = enrich_query_from_attachments(query, attachment_bundle)
+    except ChatCompletionError as e:
+        return jsonify(_chat_error_payload(e.code, e.message, chat_id=chat_id)), 500
+    search_query = attachment_enrichment.get("search_query") or query
 
     stream_headers = {
         "Cache-Control": "no-cache, no-transform",
@@ -470,7 +540,7 @@ def chat_stream():
         yield ": stream-open\n\n"
         started = time.time()
         try:
-            skip_kind = classify_out_of_kb_query(query)
+            skip_kind = classify_out_of_kb_query(query, has_attachments=has_attachments)
             if skip_kind:
                 yield _sse_event({"type": "status", "message": "Формирую ответ..."})
                 for evt in rag.stream_chitchat_answer(query, conversation_history, kind=skip_kind):
@@ -502,9 +572,9 @@ def chat_stream():
 
             yield _sse_event({"type": "status", "message": "Ищу релевантные документы..."})
             documents, retrieve_error, expansion, retrieve_diag = rag.retrieve_documents_auto(
-                query, options["top_k"], options["min_score"], conversation_history
+                search_query, options["top_k"], options["min_score"], conversation_history
             )
-            retrieval_query = expansion.get("rewritten") or query
+            retrieval_query = expansion.get("rewritten") or search_query
 
             if retrieve_error == "embedding_unavailable":
                 yield _sse_event({
@@ -571,6 +641,8 @@ def chat_stream():
                 answer_mode=options["answer_mode"],
                 conversation_history=conversation_history,
                 retrieval_query=retrieval_query,
+                attachments=attachment_bundle,
+                attachment_enrichment=attachment_enrichment,
             ):
                 if evt.get("type") == "delta":
                     yield _sse_event({"type": "delta", "text": evt.get("text", "")})
@@ -588,6 +660,11 @@ def chat_stream():
                         "dense_queries": expansion.get("dense_queries"),
                         "hyde_used": bool(expansion.get("hyde_snippet")),
                         "multi_variants": expansion.get("multi_variants"),
+                    }
+                    diag["attachments"] = {
+                        "count": attachment_enrichment.get("attachment_count", 0),
+                        "kinds": attachment_enrichment.get("kinds", []),
+                        "enrichment_ms": attachment_enrichment.get("enrichment_ms", 0),
                     }
                     payload["diagnostics"] = diag
                     assistant_message = chat_history.add_message(

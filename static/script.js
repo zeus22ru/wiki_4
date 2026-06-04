@@ -8,6 +8,8 @@ const SOURCE_REFERENCE_PATTERN = /\[Источник:\s*([^\]]+)\]/g;
 const ACTIVE_CHAT_STORAGE_KEY = 'wiki4.activeChatId';
 const CHAT_MESSAGE_MIN_LENGTH = 1;
 const CHAT_MESSAGE_MAX_LENGTH = 5000;
+const CHAT_ATTACHMENT_MAX_COUNT = 3;
+const CHAT_ATTACHMENT_MAX_BYTES = 5 * 1024 * 1024;
 const CHAT_TOP_K_MIN = 1;
 const CHAT_TOP_K_MAX = 10;
 const CHAT_MIN_SCORE_MIN = 0;
@@ -44,6 +46,10 @@ const messagesContainer = document.getElementById('messages');
 const messageForm = document.getElementById('messageForm');
 const messageInput = document.getElementById('messageInput');
 const sendButton = document.getElementById('sendButton');
+const attachButton = document.getElementById('attachButton');
+const attachmentFileInput = document.getElementById('attachmentFileInput');
+const attachmentPreview = document.getElementById('attachmentPreview');
+let pendingAttachments = [];
 const statusDot = document.getElementById('statusDot');
 const statusText = document.getElementById('statusText');
 const sourcesPanel = document.getElementById('sourcesPanel');
@@ -640,6 +646,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (messageInput) {
         messageInput.maxLength = CHAT_MESSAGE_MAX_LENGTH;
     }
+    initAttachmentControls();
 
     messageInput.addEventListener('keydown', (e) => {
         if (e.key === 'Enter' && !e.shiftKey) {
@@ -1122,6 +1129,7 @@ async function openChat(chatId, options = {}) {
                 sources: msg.sources || [],
                 citations: msg.citations || [],
                 messageId: msg.id,
+                attachments: (msg.metadata && msg.metadata.attachments) || [],
             });
             if (type === 'bot' && ((msg.sources || []).length || (msg.citations || []).length)) {
                 addSourcesButton(messageEl, msg.sources || [], msg.citations || []);
@@ -1303,6 +1311,178 @@ async function sendChatClassic(message, payload = null) {
     }
 }
 
+function initAttachmentControls() {
+    if (attachButton && attachmentFileInput) {
+        attachButton.addEventListener('click', () => {
+            if (!isProcessing) {
+                attachmentFileInput.click();
+            }
+        });
+        attachmentFileInput.addEventListener('change', onAttachmentFilesSelected);
+    }
+    if (messageInput) {
+        messageInput.addEventListener('paste', onMessageInputPaste);
+    }
+}
+
+function clipboardImageFiles(clipboardData) {
+    if (!clipboardData || !clipboardData.items) {
+        return [];
+    }
+    const files = [];
+    for (const item of clipboardData.items) {
+        if (!item.type || !item.type.startsWith('image/')) {
+            continue;
+        }
+        const blob = item.getAsFile();
+        if (!blob) {
+            continue;
+        }
+        const subtype = (item.type.split('/')[1] || 'png').split('+')[0];
+        const ext = subtype === 'jpeg' ? 'jpg' : subtype;
+        const filename = `screenshot-${Date.now()}.${ext}`;
+        files.push(new File([blob], filename, {type: blob.type || item.type}));
+    }
+    return files;
+}
+
+async function onMessageInputPaste(event) {
+    if (isProcessing) {
+        return;
+    }
+    const imageFiles = clipboardImageFiles(event.clipboardData);
+    if (!imageFiles.length) {
+        return;
+    }
+    event.preventDefault();
+    await uploadAttachmentFiles(imageFiles);
+}
+
+function renderAttachmentPreview() {
+    if (!attachmentPreview) {
+        return;
+    }
+    attachmentPreview.innerHTML = '';
+    if (!pendingAttachments.length) {
+        attachmentPreview.hidden = true;
+        return;
+    }
+    attachmentPreview.hidden = false;
+    pendingAttachments.forEach((item) => {
+        const chip = document.createElement('div');
+        chip.className = 'attachment-chip';
+        chip.dataset.attachmentId = item.id;
+
+        if (item.kind === 'image') {
+            const img = document.createElement('img');
+            img.className = 'attachment-chip-thumb';
+            img.src = `/api/chat/attachments/${encodeURIComponent(item.id)}`;
+            img.alt = item.filename || 'Изображение';
+            chip.appendChild(img);
+        } else {
+            const label = document.createElement('span');
+            label.className = 'attachment-chip-name';
+            label.textContent = item.filename || 'Файл';
+            chip.appendChild(label);
+        }
+
+        const removeBtn = document.createElement('button');
+        removeBtn.type = 'button';
+        removeBtn.className = 'attachment-chip-remove';
+        removeBtn.setAttribute('aria-label', 'Удалить вложение');
+        removeBtn.textContent = '×';
+        removeBtn.addEventListener('click', () => {
+            pendingAttachments = pendingAttachments.filter((entry) => entry.id !== item.id);
+            renderAttachmentPreview();
+        });
+        chip.appendChild(removeBtn);
+        attachmentPreview.appendChild(chip);
+    });
+}
+
+async function onAttachmentFilesSelected(event) {
+    const files = Array.from(event.target.files || []);
+    event.target.value = '';
+    await uploadAttachmentFiles(files);
+}
+
+async function uploadAttachmentFiles(files) {
+    if (!files.length) {
+        return;
+    }
+
+    const slotsLeft = CHAT_ATTACHMENT_MAX_COUNT - pendingAttachments.length;
+    if (slotsLeft <= 0) {
+        showInlineError(`Можно прикрепить не более ${CHAT_ATTACHMENT_MAX_COUNT} файлов.`);
+        return;
+    }
+
+    const batch = files.slice(0, slotsLeft);
+    if (files.length > slotsLeft) {
+        showInlineError(`Добавлены первые ${slotsLeft} файла(ов): лимит ${CHAT_ATTACHMENT_MAX_COUNT}.`);
+    }
+
+    for (const file of batch) {
+        if (file.size > CHAT_ATTACHMENT_MAX_BYTES) {
+            showInlineError(`Файл «${file.name}» слишком большой (макс. 5 МБ).`);
+            continue;
+        }
+        const formData = new FormData();
+        formData.append('files', file);
+        try {
+            const response = await fetch('/api/chat/attachments', {
+                method: 'POST',
+                credentials: 'same-origin',
+                body: formData,
+            });
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok) {
+                showInlineError(data.error || `Не удалось загрузить «${file.name}»`);
+                continue;
+            }
+            (data.attachments || []).forEach((item) => pendingAttachments.push(item));
+        } catch (error) {
+            showInlineError(`Ошибка загрузки «${file.name}»: ${error.message}`);
+        }
+    }
+    renderAttachmentPreview();
+}
+
+function clearPendingAttachments() {
+    pendingAttachments = [];
+    renderAttachmentPreview();
+}
+
+function renderMessageAttachments(container, attachments) {
+    if (!attachments || !attachments.length) {
+        return;
+    }
+    const wrap = document.createElement('div');
+    wrap.className = 'message-attachments';
+    attachments.forEach((item) => {
+        if (!item || !item.id) {
+            return;
+        }
+        if (item.kind === 'image') {
+            const img = document.createElement('img');
+            img.className = 'message-attachment-image';
+            img.src = `/api/chat/attachments/${encodeURIComponent(item.id)}`;
+            img.alt = item.filename || 'Вложение';
+            img.loading = 'lazy';
+            wrap.appendChild(img);
+        } else {
+            const link = document.createElement('a');
+            link.className = 'message-attachment-file';
+            link.href = `/api/chat/attachments/${encodeURIComponent(item.id)}`;
+            link.target = '_blank';
+            link.rel = 'noopener noreferrer';
+            link.textContent = item.filename || 'Текстовый файл';
+            wrap.appendChild(link);
+        }
+    });
+    container.appendChild(wrap);
+}
+
 async function handleSubmit(e) {
     e.preventDefault();
     const message = messageInput.value.trim();
@@ -1317,8 +1497,12 @@ async function handleSubmit(e) {
     await ensureChat();
     payload.chat_id = currentChatId;
     removeWelcomeMessage();
-    addMessage(payload.message, 'user');
+    const sentAttachments = [...(payload.attachment_ids || [])].map((id) => {
+        return pendingAttachments.find((item) => item.id === id) || {id, kind: 'text'};
+    });
+    addMessage(payload.message, 'user', {attachments: sentAttachments});
     messageInput.value = '';
+    clearPendingAttachments();
     const requestId = startStreamRequest();
     showTypingIndicator();
     setProcessingState(true);
@@ -1378,23 +1562,31 @@ async function handleSubmit(e) {
 }
 
 function buildChatPayload(message, overrides = {}) {
+    const attachmentIds = pendingAttachments.map((item) => item.id).filter(Boolean);
     return {
         message,
         chat_id: currentChatId,
         answer_mode: answerModeSelect.value,
         top_k: Number(topKInput.value),
         min_score: Number(minScoreInput.value),
+        attachment_ids: attachmentIds,
         ...overrides,
     };
 }
 
 function validateChatPayload(message) {
-    if (!message) {
-        showInlineError('Введите сообщение перед отправкой.');
+    const hasAttachments = pendingAttachments.length > 0;
+    if (!message && !hasAttachments) {
+        showInlineError('Введите сообщение или прикрепите файл.');
         messageInput.focus();
         return null;
     }
-    if (message.length < CHAT_MESSAGE_MIN_LENGTH || message.length > CHAT_MESSAGE_MAX_LENGTH) {
+    if (message && message.length < CHAT_MESSAGE_MIN_LENGTH && !hasAttachments) {
+        showInlineError(`Сообщение должно быть не короче ${CHAT_MESSAGE_MIN_LENGTH} символа.`);
+        messageInput.focus();
+        return null;
+    }
+    if (message.length > CHAT_MESSAGE_MAX_LENGTH) {
         showInlineError(`Сообщение должно быть от ${CHAT_MESSAGE_MIN_LENGTH} до ${CHAT_MESSAGE_MAX_LENGTH} символов.`);
         messageInput.focus();
         return null;
@@ -1703,7 +1895,13 @@ function addMessage(text, type, details = {}) {
         content.innerHTML = formatMessage(text);
         renderMermaidIn(content);
     } else {
-        content.textContent = text;
+        if (text) {
+            const textNode = document.createElement('div');
+            textNode.className = 'message-text';
+            textNode.textContent = text;
+            content.appendChild(textNode);
+        }
+        renderMessageAttachments(content, details.attachments || []);
     }
 
     messageDiv.append(avatar, content);

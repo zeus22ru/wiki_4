@@ -22,8 +22,18 @@ from utils.embeddings import (
     get_embedding,
     chat_completion,
     chat_completion_stream,
+    chat_completion_messages,
+    chat_completion_messages_stream,
+    chat_completion_messages_stream_filtered,
+    build_multimodal_user_content,
     strip_model_reasoning,
     _filter_reasoning_stream,
+    ChatCompletionError,
+)
+from core.chat_attachments import (
+    AttachmentBundle,
+    format_text_excerpts,
+    image_to_data_url,
 )
 from core.retrieval import hybrid_retrieve, load_bm25_okapi
 
@@ -278,13 +288,144 @@ def should_skip_kb_retrieval(query: str) -> bool:
     return is_chitchat_query(query) or is_off_topic_query(query)
 
 
-def classify_out_of_kb_query(query: str) -> Optional[str]:
+def classify_out_of_kb_query(
+    query: str,
+    *,
+    has_attachments: bool = False,
+) -> Optional[str]:
     """Вернуть 'chitchat' | 'off_topic' или None, если нужен обычный RAG."""
+    if has_attachments:
+        return None
     if is_chitchat_query(query):
         return "chitchat"
     if is_off_topic_query(query):
         return "off_topic"
     return None
+
+
+def ensure_attachments_inference_supported(bundle: Optional[AttachmentBundle]) -> None:
+    """Проверить, что текущий бэкенд LLM поддерживает изображения во вложениях."""
+    if not bundle or not bundle.has_images:
+        return
+    mode = getattr(settings, "CHAT_API_MODE", "ollama") or "ollama"
+    if mode != "openai":
+        raise ChatCompletionError(
+            "Для скриншотов и изображений нужен OpenAI-совместимый чат (LM Studio): "
+            "INFERENCE_BACKEND=lmstudio или CHAT_API_MODE=openai.",
+            code="vision_unsupported",
+        )
+
+
+def _parse_attachment_enrichment(raw: str) -> Dict[str, str]:
+    parsed = _parse_json_object(raw)
+    search_query = str(parsed.get("search_query") or "").strip()
+    summary = str(parsed.get("summary") or "").strip()
+    return {"search_query": search_query, "summary": summary}
+
+
+def enrich_query_from_attachments(
+    user_query: str,
+    bundle: Optional[AttachmentBundle],
+) -> Dict[str, Any]:
+    """
+    Собрать контекст вложений для поиска и ответа.
+    Текстовые файлы читаются напрямую; изображения — через vision LLM.
+    """
+    user_query = (user_query or "").strip()
+    if not bundle or not bundle.items:
+        return {
+            "summary": "",
+            "search_query": user_query,
+            "text_excerpts": "",
+            "effective_query": user_query,
+            "enrichment_ms": 0,
+            "attachment_count": 0,
+            "kinds": [],
+        }
+
+    started = time.perf_counter()
+    text_excerpts = format_text_excerpts(bundle)
+    kinds = sorted({item.kind for item in bundle.items})
+    summary_parts: List[str] = []
+    search_parts: List[str] = []
+
+    if user_query:
+        search_parts.append(user_query)
+    if text_excerpts:
+        summary_parts.append(text_excerpts)
+        search_parts.append(text_excerpts[:4000])
+
+    if bundle.has_images:
+        ensure_attachments_inference_supported(bundle)
+        image_urls = [
+            image_to_data_url(item)
+            for item in bundle.items
+            if item.kind == "image"
+        ]
+        vision_prompt = f"""Пользователь приложил скриншот(ы) к вопросу в корпоративную wiki-поддержку.
+
+Текст пользователя:
+{user_query or "(без текста)"}
+
+Текстовые файлы (если есть):
+{text_excerpts[:8000] if text_excerpts else "(нет)"}
+
+Задача:
+1. Опиши, что видно на изображении (ошибки, коды, кнопки, формы, модули 1С).
+2. Сформулируй короткий поисковый запрос к базе знаний на русском.
+
+Верни только JSON:
+{{"search_query": "...", "summary": "..."}}"""
+        messages = [
+            {
+                "role": "user",
+                "content": build_multimodal_user_content(vision_prompt, image_urls),
+            }
+        ]
+        raw = chat_completion_messages(messages, timeout=120) or ""
+        parsed = _parse_attachment_enrichment(raw)
+        if parsed.get("summary"):
+            summary_parts.append(parsed["summary"])
+        if parsed.get("search_query"):
+            search_parts.insert(0, parsed["search_query"])
+        elif parsed.get("summary"):
+            search_parts.insert(0, parsed["summary"][:500])
+
+    summary = "\n\n".join(p for p in summary_parts if p).strip()
+    effective_parts = []
+    if user_query:
+        effective_parts.append(user_query)
+    if summary:
+        effective_parts.append(summary)
+    effective_query = "\n\n".join(effective_parts).strip() or user_query or text_excerpts[:2000]
+
+    search_query = " ".join(p for p in search_parts if p).strip() or effective_query
+    enrichment_ms = int((time.perf_counter() - started) * 1000)
+
+    return {
+        "summary": summary,
+        "search_query": search_query,
+        "text_excerpts": text_excerpts,
+        "effective_query": effective_query,
+        "enrichment_ms": enrichment_ms,
+        "attachment_count": len(bundle.items),
+        "kinds": kinds,
+    }
+
+
+def _attachment_context_section(enrichment: Optional[Dict[str, Any]]) -> str:
+    if not enrichment:
+        return ""
+    summary = (enrichment.get("summary") or "").strip()
+    excerpts = (enrichment.get("text_excerpts") or "").strip()
+    if not summary and not excerpts:
+        return ""
+    blocks = []
+    if summary:
+        blocks.append(f"Краткое описание вложений:\n{summary}")
+    if excerpts and excerpts not in summary:
+        blocks.append(f"Текст из приложенных файлов:\n{excerpts}")
+    return "\n\nВЛОЖЕНИЯ ПОЛЬЗОВАТЕЛЯ:\n" + "\n\n".join(blocks) + "\n"
 
 
 def _source_from_metadata(metadata: Optional[Dict[str, Any]]) -> str:
@@ -1413,6 +1554,7 @@ class RAGSystem:
         answer_mode: str = "default",
         conversation_history: Optional[List[Dict[str, str]]] = None,
         retrieval_query: Optional[str] = None,
+        attachment_enrichment: Optional[Dict[str, Any]] = None,
     ) -> str:
         """
         Генерация промпта для RAG с контекстом
@@ -1500,6 +1642,7 @@ class RAGSystem:
 ПОИСКОВЫЙ ЗАПРОС (только для понимания темы поиска, не отвечай на эту фразу как на вопрос):
 {retrieval_query}
 """ if retrieval_query and retrieval_query != query else ""
+        attachment_section = _attachment_context_section(attachment_enrichment)
 
         # Предыдущая версия промпта (v1) — оставлена для отката:
         # prompt = f"""Ты - полезный ассистент, который отвечает на вопросы на основе предоставленного контекста.
@@ -1530,7 +1673,7 @@ class RAGSystem:
 
 КОНТЕКСТ:
 {context}
-{history_section}{retrieval_section}
+{history_section}{retrieval_section}{attachment_section}
 
 ВОПРОС:
 {query}
@@ -1572,13 +1715,31 @@ class RAGSystem:
         
         return prompt
     
-    def _generate_answer(self, prompt: str) -> str:
+    def _generate_answer(
+        self,
+        prompt: str,
+        attachments: Optional[AttachmentBundle] = None,
+    ) -> str:
         """
         Генерация ответа через Ollama (/api/generate) или OpenAI-совместимый API (/v1/chat/completions).
         """
         mode = getattr(settings, "CHAT_API_MODE", "ollama") or "ollama"
         rag_logger.debug("Генерация ответа (CHAT_API_MODE=%s)...", mode)
-        answer = chat_completion(prompt, timeout=120)
+        if mode == "openai" and attachments and attachments.has_images:
+            image_urls = [
+                image_to_data_url(item)
+                for item in attachments.items
+                if item.kind == "image"
+            ]
+            messages = [
+                {
+                    "role": "user",
+                    "content": build_multimodal_user_content(prompt, image_urls),
+                }
+            ]
+            answer = chat_completion_messages(messages, timeout=120)
+        else:
+            answer = chat_completion(prompt, timeout=120)
         rag_logger.debug(f"Ответ сгенерирован, длина: {len(answer)} символов")
         return answer
 
@@ -1795,6 +1956,7 @@ class RAGSystem:
         max_citations: Optional[int] = None,
         answer_mode: str = "default",
         conversation_history: Optional[List[Dict[str, str]]] = None,
+        attachments: Optional[AttachmentBundle] = None,
     ) -> RAGResult:
         """
         Выполнение RAG запроса
@@ -1830,7 +1992,11 @@ class RAGSystem:
         def _query_elapsed_ms(stage_started: float) -> int:
             return int((time.perf_counter() - stage_started) * 1000)
 
-        skip_kind = classify_out_of_kb_query(query)
+        has_attachments = bool(attachments and attachments.items)
+        attachment_enrichment = enrich_query_from_attachments(query, attachments)
+        search_query = attachment_enrichment.get("search_query") or query
+
+        skip_kind = classify_out_of_kb_query(query, has_attachments=has_attachments)
         if skip_kind:
             result = self._answer_chitchat(query, conversation_history, kind=skip_kind)
             query_timings_ms["total_ms"] = _query_elapsed_ms(query_perf_started)
@@ -1839,15 +2005,20 @@ class RAGSystem:
                 "latency_ms": int((time.time() - start_time) * 1000),
                 "timings_ms": query_timings_ms,
                 "conversation_messages": len(conversation_history or []),
+                "attachments": {
+                    "count": attachment_enrichment.get("attachment_count", 0),
+                    "kinds": attachment_enrichment.get("kinds", []),
+                    "enrichment_ms": attachment_enrichment.get("enrichment_ms", 0),
+                },
             }
             return result
         
         # 1. Поиск релевантных документов
         rag_logger.debug("Шаг 1: Поиск релевантных документов")
         documents, retrieve_error, expansion, retrieve_diag = self.retrieve_documents_auto(
-            query, top_k, min_score, conversation_history
+            search_query, top_k, min_score, conversation_history
         )
-        retrieval_query = expansion.get("rewritten") or query
+        retrieval_query = expansion.get("rewritten") or search_query
 
         _safe_json_log(
             {
@@ -1950,6 +2121,7 @@ class RAGSystem:
             answer_mode=answer_mode,
             conversation_history=conversation_history,
             retrieval_query=retrieval_query,
+            attachment_enrichment=attachment_enrichment,
         )
         query_timings_ms["prompt_ms"] = _query_elapsed_ms(prompt_started)
 
@@ -1966,7 +2138,7 @@ class RAGSystem:
         # 3. Генерация ответа через Ollama
         rag_logger.debug("Шаг 3: Генерация ответа через Ollama")
         gen_started = time.time()
-        answer = self._generate_answer(prompt)
+        answer = self._generate_answer(prompt, attachments=attachments)
         gen_ms = int((time.time() - gen_started) * 1000)
         query_timings_ms["llm_generation_ms"] = gen_ms
         answer = self._autofix_mermaid_blocks(answer)
@@ -2021,6 +2193,11 @@ class RAGSystem:
                 "hyde_used": bool(expansion.get("hyde_snippet")),
                 "multi_variants": expansion.get("multi_variants"),
             },
+            "attachments": {
+                "count": attachment_enrichment.get("attachment_count", 0),
+                "kinds": attachment_enrichment.get("kinds", []),
+                "enrichment_ms": attachment_enrichment.get("enrichment_ms", 0),
+            },
         }
         rag_logger.info("RAG запрос завершен за %.3f сек, timings_ms=%s", elapsed, query_timings_ms)
         rag_logger.debug(f"Результат: {len(documents)} документов, {len(rag_result.citations)} цитат")
@@ -2035,6 +2212,8 @@ class RAGSystem:
         answer_mode: str = "default",
         conversation_history: Optional[List[Dict[str, str]]] = None,
         retrieval_query: Optional[str] = None,
+        attachments: Optional[AttachmentBundle] = None,
+        attachment_enrichment: Optional[Dict[str, Any]] = None,
     ) -> Iterator[Dict[str, Any]]:
         """
         Потоковая генерация ответа по уже найденным документам.
@@ -2084,6 +2263,7 @@ class RAGSystem:
             answer_mode=answer_mode,
             conversation_history=conversation_history,
             retrieval_query=retrieval_query,
+            attachment_enrichment=attachment_enrichment,
         )
         stream_timings_ms["prompt_ms"] = _stream_elapsed_ms(prompt_started)
 
@@ -2101,9 +2281,28 @@ class RAGSystem:
         parts: List[str] = []
         raw_chunks: List[str] = []
         gen_started = time.time()
+        mode = getattr(settings, "CHAT_API_MODE", "ollama") or "ollama"
+        use_multimodal = bool(
+            mode == "openai" and attachments and attachments.has_images
+        )
 
         def _live_llm_chunks() -> Iterator[str]:
-            for fragment in chat_completion_stream(prompt, timeout=120):
+            if use_multimodal:
+                image_urls = [
+                    image_to_data_url(item)
+                    for item in attachments.items
+                    if item.kind == "image"
+                ]
+                messages = [
+                    {
+                        "role": "user",
+                        "content": build_multimodal_user_content(prompt, image_urls),
+                    }
+                ]
+                iterator = chat_completion_messages_stream(messages, timeout=120)
+            else:
+                iterator = chat_completion_stream(prompt, timeout=120)
+            for fragment in iterator:
                 raw_chunks.append(fragment)
                 yield fragment
 

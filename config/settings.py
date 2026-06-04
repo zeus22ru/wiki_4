@@ -222,6 +222,19 @@ class Settings:
         "html,htm,txt,docx,doc,pdf,xlsx,xls,pptx"
     ).split(",")
 
+    # Вложения к вопросу в чате (скриншоты, текстовые файлы)
+    CHAT_ATTACHMENTS_ENABLED: bool = os.getenv("CHAT_ATTACHMENTS_ENABLED", "true").lower() in (
+        "1", "true", "yes", "on",
+    )
+    CHAT_ATTACHMENTS_DIR: str = os.getenv("CHAT_ATTACHMENTS_DIR", "./data/chat_attachments")
+    CHAT_ATTACHMENT_MAX_COUNT: int = int(os.getenv("CHAT_ATTACHMENT_MAX_COUNT", "3"))
+    CHAT_ATTACHMENT_MAX_BYTES: int = int(os.getenv("CHAT_ATTACHMENT_MAX_BYTES", "5242880"))
+    CHAT_ATTACHMENT_TEXT_MAX_CHARS: int = int(os.getenv("CHAT_ATTACHMENT_TEXT_MAX_CHARS", "32000"))
+    CHAT_ATTACHMENT_ALLOWED_EXTENSIONS: list = os.getenv(
+        "CHAT_ATTACHMENT_ALLOWED_EXTENSIONS",
+        "png,jpg,jpeg,webp,gif,txt,log,md,json,xml,csv,yaml,yml,ini,env",
+    ).split(",")
+
     def __init__(self):
         """Инициализация настроек и создание необходимых директорий"""
         validate_chunk_bounds(self.CHUNK_SIZE, self.CHUNK_OVERLAP)
@@ -235,6 +248,7 @@ class Settings:
             self.UPLOAD_DIR,
             self.LOG_DIR,
             self.CACHE_DIR,
+            self.CHAT_ATTACHMENTS_DIR,
         ]
 
         for directory in directories:

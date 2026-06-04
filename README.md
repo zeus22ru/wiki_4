@@ -150,6 +150,14 @@ python scripts/create_admin.py --username admin --email admin@example.com
 
 **Важно:** векторы в Chroma уже привязаны к модели и размерности, использованным при `create_vector_db.py`. Для каждого **нового** вопроса всё равно нужен **рабочий** сервис эмбеддингов той же размерности.
 
+### Вложения к вопросу в чате
+
+В веб-чате можно прикрепить **скриншот** (png, jpg, webp, gif) и **текстовые файлы** (txt, log, md, json и др.) к вопросу. Сначала файлы загружаются через `POST /api/chat/attachments`, затем их `id` передаются в `POST /api/chat` или `/api/chat/stream` в поле `attachment_ids`.
+
+Для анализа изображений нужна **vision-модель** и режим **`CHAT_API_MODE=openai`** (типично `INFERENCE_BACKEND=lmstudio` и `qwen/qwen3.5-9b` с поддержкой Vision в LM Studio). Текст вопроса может быть пустым, если приложено только изображение.
+
+Лимиты по умолчанию: до 3 файлов, до 5 МБ каждый (`CHAT_ATTACHMENT_MAX_COUNT`, `CHAT_ATTACHMENT_MAX_BYTES` в `.env`).
+
 ## Использование
 
 ### 0. Выгрузка статей из XWiki
