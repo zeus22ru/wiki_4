@@ -135,6 +135,9 @@ class Settings:
     )
     CONTEXTUAL_RETRIEVAL_MAX_CHUNKS: int = int(os.getenv("CONTEXTUAL_RETRIEVAL_MAX_CHUNKS", "80"))
 
+    # Зачёркнутый текст в HTML wiki: mark — [УСТАРЕЛО: …], exclude — не индексировать, keep — как раньше
+    STRIKETHROUGH_INDEX_MODE: str = os.getenv("STRIKETHROUGH_INDEX_MODE", "mark").strip().lower()
+
     # Память диалога: переписывание запроса, HyDE, multi-query
     CONVERSATIONAL_REWRITE_ENABLED: bool = os.getenv("CONVERSATIONAL_REWRITE_ENABLED", "true").lower() in (
         "1", "true", "yes", "on",

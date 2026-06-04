@@ -14,6 +14,7 @@ from bs4 import BeautifulSoup, NavigableString, Tag
 
 from config import settings, get_logger
 from config.validation import validate_chunk_bounds
+from core.html_text import get_index_text
 
 logger = get_logger(__name__)
 
@@ -176,7 +177,7 @@ def chunk_html_structural(html_content: str, page_title: str, relative_path: str
             if name in ("ul", "ol"):
                 items = []
                 for li in child.find_all("li", recursive=False):
-                    lit = li.get_text(separator=" ", strip=True)
+                    lit = get_index_text(li, separator=" ")
                     if lit:
                         items.append(f"• {lit}" if name == "ul" else lit)
                 if items:
@@ -192,7 +193,7 @@ def chunk_html_structural(html_content: str, page_title: str, relative_path: str
                 rows_out: List[str] = []
                 for tr in child.find_all("tr"):
                     cells = tr.find_all(["th", "td"])
-                    row = " | ".join(c.get_text(separator=" ", strip=True) for c in cells)
+                    row = " | ".join(get_index_text(c, separator=" ") for c in cells)
                     if row.strip():
                         rows_out.append(row)
                 if rows_out:
@@ -205,7 +206,7 @@ def chunk_html_structural(html_content: str, page_title: str, relative_path: str
                     })
                 continue
             if name in ("p", "div", "section", "article", "blockquote", "pre"):
-                txt = child.get_text(separator=" ", strip=True)
+                txt = get_index_text(child, separator=" ")
                 if txt:
                     kind = "code" if name == "pre" else "text"
                     ph = current_parent_headings()

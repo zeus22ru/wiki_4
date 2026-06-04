@@ -391,6 +391,8 @@ BM25_INDEX_FILENAME=bm25_corpus.pkl
 STRUCTURAL_CHUNKING_ENABLED=true
 STRUCTURAL_CHUNK_MAX_CHARS=1200
 STRUCTURAL_CHUNK_MIN_CHARS=80
+# Зачёркнутый текст в HTML wiki: mark — в чанке как [УСТАРЕЛО: …]; exclude — не индексировать; keep — без пометок
+STRIKETHROUGH_INDEX_MODE=mark
 RAG_CHITCHAT_SKIP_RETRIEVAL=true
 
 # Cache настройка
@@ -415,7 +417,7 @@ BITRIX24_INTERNAL_API_KEY=
 Система использует архитектуру RAG (Retrieval-Augmented Generation):
 
 1. **Извлечение текста**: обработчики читают HTML, TXT, DOCX, PDF, XLSX/XLS, PPTX и DOC
-2. **Чанкование**: структурное чанкирование сохраняет секции и метаданные `section_path`/`chunk_kind`, fallback — обычные чанки по `CHUNK_SIZE`
+2. **Чанкование**: структурное чанкирование сохраняет секции и метаданные `section_path`/`chunk_kind`, fallback — обычные чанки по `CHUNK_SIZE`. Зачёркнутый текст в HTML (`<del>` и аналоги) при `STRIKETHROUGH_INDEX_MODE=mark` попадает в чанк с пометкой `[УСТАРЕЛО: …]`; промпт RAG требует не использовать такие фрагменты как инструкцию и упоминать пользователю наличие устаревших сведений. После смены режима нужен reindex.
 3. **Индексация**: сервер инференса строит эмбеддинги для ChromaDB; рядом может сохраняться BM25-корпус для гибридного поиска
 4. **Retrieval**: `RAGSystem` использует режим `RETRIEVAL_MODE` (`hybrid`, `dense`, `sparse`), при hybrid объединяет dense/BM25 кандидатов через RRF и опциональный rerank
 5. **Query routing**: короткий chitchat/off-topic может отвечать без retrieval, чтобы не засорять поиск по базе знаний

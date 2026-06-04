@@ -26,6 +26,7 @@ from config import settings, get_logger, inference_server_reachable, fetch_remot
 from utils.embeddings import get_embedding, get_embeddings_batch, invalidate_embedding_cache, chat_completion
 
 from core.chunking import build_chunks_for_file, chunk_text_fixed_size
+from core.html_text import get_index_text
 from core.index_manifest import (
     build_index_manifest,
     file_signature,
@@ -118,12 +119,9 @@ def extract_text_from_html(html_path: Path) -> Optional[Dict[str, str]]:
         if h1_tag:
             h1 = h1_tag.get_text().strip()
         
-        # Получаем основной текст
-        text = soup.get_text(separator=' ', strip=True)
-        
-        # Очистка текста
-        text = re.sub(r'\s+', ' ', text)
-        text = text.strip()
+        # Основной текст (зачёркнутое → [УСТАРЕЛО: …] при STRIKETHROUGH_INDEX_MODE=mark)
+        content_root = soup.find("article") or soup.find(id="xwikicontent") or soup.body or soup
+        text = get_index_text(content_root, separator=" ")
         
         return {
             "title": title or h1 or Path(html_path).stem,
