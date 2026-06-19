@@ -41,6 +41,7 @@ from api.routes.documents import documents_bp
 from api.routes.admin import admin_bp
 from api.routes.auth import auth_bp
 from api.routes.chat_attachments import chat_attachments_bp
+from api.routes.issues import issues_bp
 from api.middleware.auth import can_access_chat, current_user_id, remember_guest_chat
 
 # Получаем логгер для этого модуля
@@ -236,6 +237,7 @@ app.register_blueprint(documents_bp)
 app.register_blueprint(admin_bp)
 app.register_blueprint(auth_bp)
 app.register_blueprint(chat_attachments_bp)
+app.register_blueprint(issues_bp)
 
 if not settings.FLASK_DEBUG:
     settings.validate()
@@ -817,7 +819,12 @@ def log_request_info():
     # Пропускаем логирование статических файлов
     if request.path.startswith('/static'):
         return
-    if settings.API_KEY and request.path.startswith('/api/') and not request.path.startswith('/api/auth'):
+    if (
+        settings.API_KEY
+        and request.path.startswith('/api/')
+        and not request.path.startswith('/api/auth')
+        and not request.path.startswith('/api/issues')
+    ):
         api_key = request.headers.get("X-API-Key") or request.args.get("api_key")
         admin_key = request.headers.get("X-Admin-Key") or request.args.get("admin_key")
         if request.path.startswith('/api/admin') and settings.ADMIN_API_KEY:

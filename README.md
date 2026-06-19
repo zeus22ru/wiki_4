@@ -11,6 +11,7 @@
 - [Установка на Linux-сервер](docs/production_setup.md)
 - [Установка на Windows Server](docs/windows_server_setup.md)
 - [Настройка чат-бота Битрикс24](docs/bitrix24_bot_setup.md)
+- [GitHub Issues: обратная связь из интерфейса](docs/github_issues_setup.md)
 
 ## Структура проекта
 

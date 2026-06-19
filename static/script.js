@@ -104,6 +104,22 @@ const registerUsername = document.getElementById('registerUsername');
 const registerEmail = document.getElementById('registerEmail');
 const registerPassword = document.getElementById('registerPassword');
 const authMessage = document.getElementById('authMessage');
+const issueReportOpenBtn = document.getElementById('issueReportOpenBtn');
+const issueModal = document.getElementById('issueModal');
+const issueBackdrop = document.getElementById('issueBackdrop');
+const issueCloseBtn = document.getElementById('issueCloseBtn');
+const issueCancelBtn = document.getElementById('issueCancelBtn');
+const issueForm = document.getElementById('issueForm');
+const issueType = document.getElementById('issueType');
+const issueTitleInput = document.getElementById('issueTitleInput');
+const issueDescription = document.getElementById('issueDescription');
+const issueContact = document.getElementById('issueContact');
+const issueWebsite = document.getElementById('issueWebsite');
+const issueMessage = document.getElementById('issueMessage');
+const issueModeHint = document.getElementById('issueModeHint');
+const issueSubmitBtn = document.getElementById('issueSubmitBtn');
+let issueStatus = {enabled: true, stub: true, types: []};
+let issueDraft = {sessionId: null, messageId: null};
 const assistantAvatarSrc = '/static/img/assistant-avatar.svg';
 
 function createMessageAvatar(type) {
@@ -597,6 +613,7 @@ function initMermaidLightboxClicks() {
 
 document.addEventListener('DOMContentLoaded', () => {
     initializeAuth();
+    initializeIssues();
     checkHealth();
     loadChats().then(restoreActiveChatAfterReload);
     syncRagToolbarDefaults();
@@ -1156,6 +1173,7 @@ async function openChat(chatId, options = {}) {
                     citations: msg.citations || [],
                 });
                 addFeedbackControls(messageEl, msg.id);
+                addIssueReportButton(messageEl, msg.id);
             }
         });
         updateActiveChatListItem();
@@ -1314,6 +1332,7 @@ async function sendChatClassic(message, payload = null) {
         citations: data.citations || [],
     });
     addFeedbackControls(botMessage, data.message_id);
+    addIssueReportButton(botMessage, data.message_id);
     if (!upsertChatListItem({
         id: data.chat_id || currentChatId,
         title: data.chat_title || data.title,
@@ -1825,6 +1844,7 @@ async function readStream(response, requestId) {
                     citations: payload.citations || [],
                 });
                 addFeedbackControls(streamShell, payload.message_id);
+                addIssueReportButton(streamShell, payload.message_id);
                 upsertChatListItem({
                     id: payload.chat_id || currentChatId,
                     title: payload.chat_title || payload.title,
@@ -2306,6 +2326,158 @@ async function sendFeedback(messageId, rating, controls) {
     } catch (error) {
         controls.textContent = error.message;
     }
+}
+
+function initializeIssues() {
+    if (!issueForm) {
+        return;
+    }
+    loadIssueStatus();
+    issueReportOpenBtn?.addEventListener('click', () => openIssueModal());
+    issueBackdrop?.addEventListener('click', closeIssueModal);
+    issueCloseBtn?.addEventListener('click', closeIssueModal);
+    issueCancelBtn?.addEventListener('click', closeIssueModal);
+    issueForm.addEventListener('submit', submitIssue);
+    document.addEventListener('keydown', (evt) => {
+        if (evt.key === 'Escape' && issueModal && !issueModal.hidden) {
+            closeIssueModal();
+        }
+    });
+}
+
+async function loadIssueStatus() {
+    try {
+        issueStatus = await apiJson('/api/issues/status');
+        if (issueModeHint && issueStatus.stub) {
+            issueModeHint.textContent = 'Демо-режим: GitHub не настроен, issue сохраняется как заглушка.';
+        }
+        if (issueType && Array.isArray(issueStatus.types)) {
+            issueType.innerHTML = issueStatus.types.map((item) => (
+                `<option value="${escapeHtml(item.id)}">${escapeHtml(item.label)}</option>`
+            )).join('');
+        }
+        if (issueReportOpenBtn) {
+            issueReportOpenBtn.hidden = issueStatus.enabled === false;
+        }
+    } catch (_) {
+        if (issueModeHint) {
+            issueModeHint.textContent = 'Не удалось проверить статус отправки issue.';
+        }
+    }
+}
+
+function openIssueModal(options = {}) {
+    if (!issueModal || issueStatus.enabled === false) {
+        return;
+    }
+    issueDraft = {
+        sessionId: options.sessionId ?? currentChatId ?? null,
+        messageId: options.messageId ?? null,
+    };
+    if (issueTitleInput) {
+        issueTitleInput.value = options.title || '';
+    }
+    if (issueDescription) {
+        issueDescription.value = options.description || '';
+    }
+    if (issueContact) {
+        issueContact.value = '';
+    }
+    if (issueWebsite) {
+        issueWebsite.value = '';
+    }
+    if (issueType && options.type) {
+        issueType.value = options.type;
+    } else if (issueType && options.messageId) {
+        issueType.value = 'wrong_answer';
+    }
+    if (issueMessage) {
+        issueMessage.textContent = '';
+    }
+    if (issueModeHint) {
+        issueModeHint.textContent = issueStatus.stub
+            ? 'Демо-режим: GitHub не настроен, issue сохраняется как заглушка.'
+            : (options.messageId ? 'К диалогу будет приложен контекст ответа.' : '');
+    }
+    issueModal.hidden = false;
+    issueTitleInput?.focus();
+}
+
+function closeIssueModal() {
+    if (!issueModal) {
+        return;
+    }
+    issueModal.hidden = true;
+    issueDraft = {sessionId: null, messageId: null};
+}
+
+async function submitIssue(evt) {
+    evt.preventDefault();
+    if (!issueSubmitBtn) {
+        return;
+    }
+    issueSubmitBtn.disabled = true;
+    if (issueMessage) {
+        issueMessage.textContent = 'Отправка...';
+    }
+    try {
+        const payload = {
+            type: issueType?.value || 'other',
+            title: issueTitleInput?.value?.trim() || '',
+            description: issueDescription?.value?.trim() || '',
+            contact: issueContact?.value?.trim() || '',
+            website: issueWebsite?.value || '',
+        };
+        if (issueDraft.sessionId != null) {
+            payload.session_id = issueDraft.sessionId;
+        }
+        if (issueDraft.messageId != null) {
+            payload.message_id = issueDraft.messageId;
+        }
+        const data = await apiJson('/api/issues', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(payload),
+        });
+        closeIssueModal();
+        const toastMessage = data.stub
+            ? `Обращение принято (демо) #${data.issue_number || ''}`.trim()
+            : `Issue #${data.issue_number || ''} создан`;
+        if (typeof showToast === 'function') {
+            showToast(toastMessage, 'success');
+        } else if (issueMessage) {
+            issueMessage.textContent = data.message || toastMessage;
+        }
+    } catch (error) {
+        if (issueMessage) {
+            issueMessage.textContent = error.message;
+        }
+    } finally {
+        issueSubmitBtn.disabled = false;
+    }
+}
+
+function addIssueReportButton(messageEl, messageId) {
+    if (!messageEl || !messageId) {
+        return;
+    }
+    const content = messageEl.querySelector('.message-content');
+    if (!content || content.querySelector('.report-issue-btn')) {
+        return;
+    }
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'report-issue-btn';
+    button.textContent = 'Сообщить об ошибке';
+    button.addEventListener('click', () => {
+        openIssueModal({
+            sessionId: currentChatId,
+            messageId,
+            type: 'wrong_answer',
+            title: 'Ошибка в ответе ассистента',
+        });
+    });
+    content.appendChild(button);
 }
 
 function openSourcesPanel(options = {}) {
@@ -3188,6 +3360,7 @@ function exportCurrentChat() {
         content.querySelectorAll([
             '.show-sources-btn',
             '.verify-answer-btn',
+            '.report-issue-btn',
             '.feedback-controls',
             '.followup-suggestions',
             '.related-documents',

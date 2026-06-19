@@ -84,6 +84,13 @@
                                 Выйти
                             </button>
                         </div>
+                        <button class="theme-toggle issue-report-btn" id="issueReportOpenBtn" type="button" title="Сообщить о проблеме" aria-label="Сообщить о проблеме">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+                                <line x1="12" y1="9" x2="12" y2="13"/>
+                                <line x1="12" y1="17" x2="12.01" y2="17"/>
+                            </svg>
+                        </button>
                         <button class="theme-toggle" id="themeToggle" type="button" title="Переключить тему" aria-label="Переключить тему">
                     <svg class="sun-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <circle cx="12" cy="12" r="5"></circle>
@@ -255,6 +262,45 @@
         </div>
     </div>
 
+    <div class="auth-modal issue-modal" id="issueModal" hidden>
+        <div class="auth-modal__backdrop" id="issueBackdrop"></div>
+        <div class="auth-modal__dialog issue-modal__dialog" role="dialog" aria-modal="true" aria-labelledby="issueTitle">
+            <div class="auth-modal__header">
+                <div>
+                    <h2 id="issueTitle">Сообщить о проблеме</h2>
+                    <p class="issue-modal__hint" id="issueModeHint"></p>
+                </div>
+                <button class="icon-btn" id="issueCloseBtn" type="button" aria-label="Закрыть">×</button>
+            </div>
+            <form class="issue-form" id="issueForm">
+                <label class="field">
+                    <span class="field__label">Тип</span>
+                    <select class="field__control" id="issueType" required></select>
+                </label>
+                <label class="field">
+                    <span class="field__label">Заголовок</span>
+                    <input class="field__control" id="issueTitleInput" type="text" maxlength="200" required placeholder="Кратко опишите проблему">
+                </label>
+                <label class="field">
+                    <span class="field__label">Описание</span>
+                    <textarea class="field__control issue-form__textarea" id="issueDescription" rows="5" minlength="10" maxlength="4000" required placeholder="Что произошло и чего вы ожидали?"></textarea>
+                </label>
+                <label class="field">
+                    <span class="field__label">Email для связи (необязательно)</span>
+                    <input class="field__control" id="issueContact" type="email" maxlength="200" autocomplete="email" placeholder="you@company.com">
+                </label>
+                <input class="issue-form__honeypot" id="issueWebsite" type="text" name="website" tabindex="-1" autocomplete="off" aria-hidden="true">
+                <div class="issue-form__actions">
+                    <button class="secondary-btn" id="issueCancelBtn" type="button">Отмена</button>
+                    <button class="new-chat-btn" id="issueSubmitBtn" type="submit">
+                        <span>Отправить</span>
+                    </button>
+                </div>
+            </form>
+            <div class="auth-message" id="issueMessage"></div>
+        </div>
+    </div>
+
     <div class="auth-modal" id="authModal" hidden>
         <div class="auth-modal__backdrop" id="authBackdrop"></div>
         <div class="auth-modal__dialog" role="dialog" aria-modal="true" aria-labelledby="authTitle">
@@ -309,6 +355,6 @@
     <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
     <!-- Clipboard -->
     <script src="{{ url_for('static', filename='js/clipboard.js') }}"></script>
-    <script src="{{ url_for('static', filename='script.js') }}?v=4"></script>
+    <script src="{{ url_for('static', filename='script.js') }}?v=5"></script>
 </body>
 </html>

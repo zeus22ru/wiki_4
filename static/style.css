@@ -1299,6 +1299,64 @@ body {
     font-size: 0.9rem;
 }
 
+.issue-modal__dialog {
+    width: min(520px, 100%);
+}
+
+.issue-modal__hint {
+    margin-top: 0.25rem;
+    color: var(--secondary-text);
+    font-size: 0.82rem;
+}
+
+.issue-form {
+    display: flex;
+    flex-direction: column;
+    gap: 0.85rem;
+}
+
+.issue-form__textarea {
+    min-height: 120px;
+    resize: vertical;
+    font-family: inherit;
+}
+
+.issue-form__actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.65rem;
+    flex-wrap: wrap;
+}
+
+.issue-form__honeypot {
+    position: absolute;
+    left: -9999px;
+    width: 1px;
+    height: 1px;
+    opacity: 0;
+    pointer-events: none;
+}
+
+.report-issue-btn {
+    border: 1px solid var(--border-color);
+    background: var(--copy-btn-bg);
+    color: var(--secondary-text);
+    border-radius: 999px;
+    padding: 0.25rem 0.6rem;
+    cursor: pointer;
+    font-size: 0.8rem;
+}
+
+.report-issue-btn:hover {
+    border-color: var(--primary-color);
+    color: var(--primary-color);
+}
+
+.issue-report-btn svg {
+    width: 18px;
+    height: 18px;
+}
+
 .chat-header .status-text {
     color: var(--secondary-text);
 }

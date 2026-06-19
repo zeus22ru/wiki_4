@@ -193,6 +193,15 @@ class Settings:
     API_KEY: str = os.getenv("API_KEY", "")
     ADMIN_API_KEY: str = os.getenv("ADMIN_API_KEY", "")
 
+    # GitHub Issues (user-reports из интерфейса; без токена — заглушка)
+    GITHUB_ISSUES_ENABLED: bool = os.getenv("GITHUB_ISSUES_ENABLED", "true").lower() in (
+        "1", "true", "yes", "on",
+    )
+    GITHUB_TOKEN: str = os.getenv("GITHUB_TOKEN", "")
+    GITHUB_REPO: str = os.getenv("GITHUB_REPO", "")
+    GITHUB_ISSUE_LABELS: str = os.getenv("GITHUB_ISSUE_LABELS", "user-report")
+    GITHUB_ISSUES_RATE_LIMIT_PER_HOUR: int = int(os.getenv("GITHUB_ISSUES_RATE_LIMIT_PER_HOUR", "3"))
+
     # Bitrix24 chatbot integration
     BITRIX24_ENABLED: bool = os.getenv("BITRIX24_ENABLED", "false").lower() == "true"
     BITRIX24_WEBHOOK_URL: str = os.getenv("BITRIX24_WEBHOOK_URL", "")
