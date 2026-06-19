@@ -47,6 +47,14 @@
     --radius-lg: 12px;
     --radius-xl: 14px;
 
+    --control-height: 2.375rem;
+    --control-height-lg: 2.75rem;
+    --btn-font-size: 0.875rem;
+    --btn-font-weight: 600;
+    --btn-padding-x: 0.85rem;
+    --btn-icon-size: 2.375rem;
+    --btn-shadow-primary: 0 4px 14px rgba(124, 90, 34, 0.22);
+
     --mono-font: 'Fira Code', 'JetBrains Mono', 'Consolas', 'Monaco', 'Courier New', monospace;
     --code-bg: #f5ead7;
     --code-text: #25211d;

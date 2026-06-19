@@ -509,27 +509,6 @@ body {
     display: none !important;
 }
 
-.rag-toolbar label {
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
-    font-size: 0.85rem;
-    color: var(--secondary-text);
-}
-
-.rag-toolbar input,
-.rag-toolbar select {
-    border: 1px solid var(--input-border);
-    border-radius: 6px;
-    background: var(--input-bg);
-    color: var(--text-color);
-    padding: 0.35rem 0.5rem;
-}
-
-.rag-toolbar input {
-    width: 78px;
-}
-
 .management-panel {
     padding: 1.5rem;
     gap: 1rem;
@@ -705,14 +684,54 @@ body {
 
 .admin-settings-toolbar {
     display: flex;
-    flex-wrap: wrap;
+    flex-direction: column;
+    align-items: stretch;
     gap: 0.75rem;
+    padding: 0.9rem 1rem;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-lg);
+    background: var(--surface-elevated);
+    box-shadow: var(--shadow-sm);
+}
+
+.admin-settings-toolbar__search,
+.admin-settings-toolbar > .sidebar-search {
+    width: 100%;
+    min-width: 0;
+}
+
+.admin-settings-toolbar__actions {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.65rem;
+}
+
+.admin-settings-toolbar__actions .secondary-btn,
+.admin-settings-toolbar > .secondary-btn {
+    width: auto;
+    flex: 0 0 auto;
+    max-width: none;
+}
+
+.admin-settings-toolbar__actions .admin-settings-draft {
+    margin-left: auto;
+}
+
+/* Старая разметка без __actions: кнопки в одну строку под поиском */
+.admin-settings-toolbar:not(:has(.admin-settings-toolbar__actions)) {
+    flex-direction: row;
+    flex-wrap: wrap;
     align-items: center;
 }
 
-.admin-settings-toolbar .sidebar-search {
-    flex: 1;
-    min-width: 240px;
+.admin-settings-toolbar:not(:has(.admin-settings-toolbar__actions)) > .sidebar-search {
+    flex: 1 1 100%;
+}
+
+.admin-settings-toolbar:not(:has(.admin-settings-toolbar__actions)) > .admin-settings-draft {
+    margin-left: auto;
 }
 
 .admin-settings {
@@ -732,18 +751,40 @@ body {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 0.75rem;
-    padding: 0.85rem 1rem;
+    gap: 1rem;
+    width: 100%;
+    min-height: 3.25rem;
+    padding: 0.95rem 1.15rem;
+    border: none;
     border-bottom: 1px solid var(--border-color);
     background: color-mix(in srgb, var(--surface-muted) 82%, transparent);
-}
-
-.admin-settings-group__header {
-    width: 100%;
     cursor: pointer;
-    border: none;
     font: inherit;
     text-align: left;
+}
+
+.admin-settings-group__title {
+    display: flex;
+    align-items: center;
+    gap: 0.65rem;
+    min-width: 0;
+}
+
+.admin-settings-group__header h3 {
+    margin: 0;
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--text-color);
+}
+
+.admin-settings-group__count {
+    flex-shrink: 0;
+    padding: 0.2rem 0.55rem;
+    border-radius: 999px;
+    background: var(--badge-bg);
+    color: var(--badge-text);
+    font-size: 0.78rem;
+    font-weight: 600;
 }
 
 .admin-settings-group__header:hover {
@@ -757,10 +798,12 @@ body {
 }
 
 .admin-settings-group__hint {
+    flex-shrink: 0;
     margin-left: auto;
     color: var(--secondary-text);
     font-size: 0.82rem;
     opacity: 0.85;
+    text-align: right;
 }
 
 .admin-settings-group.is-collapsed .admin-settings-group__chev {
@@ -769,15 +812,6 @@ body {
 
 .admin-settings-group.is-collapsed .admin-settings-group__list {
     display: none;
-}
-
-.admin-settings-group__header h3 {
-    font-size: 1rem;
-}
-
-.admin-settings-group__header span {
-    color: var(--secondary-text);
-    font-size: 0.85rem;
 }
 
 .admin-settings-group__list {
@@ -933,6 +967,98 @@ body {
     color: var(--secondary-text);
     font-size: 0.9rem;
     min-width: 120px;
+}
+
+.admin-settings-float {
+    position: fixed;
+    left: 50%;
+    bottom: 1.25rem;
+    z-index: 55;
+    transform: translateX(-50%) translateY(calc(100% + 1.5rem));
+    opacity: 0;
+    pointer-events: none;
+    transition: transform 0.28s cubic-bezier(0.34, 1.2, 0.64, 1), opacity 0.22s ease;
+}
+
+.admin-settings-float.is-visible {
+    transform: translateX(-50%) translateY(0);
+    opacity: 1;
+    pointer-events: auto;
+}
+
+.admin-settings-float__inner {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    padding: 0.65rem 0.85rem;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-xl);
+    background: color-mix(in srgb, var(--surface-elevated) 92%, transparent);
+    box-shadow: var(--shadow-md);
+    backdrop-filter: blur(16px);
+}
+
+.admin-settings-float__info {
+    color: var(--text-color);
+    font-size: 0.875rem;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.admin-settings-float__actions {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+#adminSettingsPanel.has-floating-draft .admin-settings {
+    padding-bottom: 5.5rem;
+}
+
+@media (max-width: 768px) {
+    .admin-settings-toolbar__actions .admin-settings-draft,
+    .admin-settings-toolbar > .admin-settings-draft {
+        margin-left: 0;
+        flex: 1 1 100%;
+    }
+
+    .admin-settings-group__header {
+        align-items: flex-start;
+        flex-direction: column;
+        gap: 0.45rem;
+    }
+
+    .admin-settings-group__hint {
+        margin-left: 0;
+        text-align: left;
+    }
+
+    .admin-settings-float {
+        left: 0.75rem;
+        right: 0.75rem;
+        bottom: 0.75rem;
+        transform: translateY(calc(100% + 1.5rem));
+    }
+
+    .admin-settings-float.is-visible {
+        transform: translateY(0);
+    }
+
+    .admin-settings-float__inner {
+        flex-direction: column;
+        align-items: stretch;
+        width: 100%;
+    }
+
+    .admin-settings-float__actions {
+        width: 100%;
+    }
+
+    .admin-settings-float__actions .secondary-btn,
+    .admin-settings-float__actions .new-chat-btn {
+        flex: 1;
+        justify-content: center;
+    }
 }
 
 .help-icon {
@@ -2047,8 +2173,6 @@ select:focus-visible {
 }
 
 .sidebar-search,
-.rag-toolbar input,
-.rag-toolbar select,
 .message-input {
     border-radius: var(--radius-md);
     border-color: var(--input-border);
@@ -2187,38 +2311,6 @@ select:focus-visible {
 
 .status-dot {
     box-shadow: 0 0 0 4px color-mix(in srgb, currentColor 16%, transparent);
-}
-
-.new-chat-btn {
-    border-radius: var(--radius-md);
-    background: var(--user-message-bg);
-    box-shadow: 0 14px 30px rgba(124, 90, 34, 0.24);
-}
-
-.new-chat-btn:hover {
-    background: var(--primary-hover);
-    box-shadow: var(--shadow-md);
-}
-
-.rag-toolbar {
-    padding: 0 1.5rem;
-    gap: 0;
-    background: color-mix(in srgb, var(--surface-muted) 82%, transparent);
-    border-bottom: 1px solid var(--border-color);
-}
-
-.rag-toolbar label {
-    padding: 0.4rem 0.55rem;
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-md);
-    background: var(--surface-elevated);
-    color: var(--secondary-text);
-}
-
-.rag-toolbar input,
-.rag-toolbar select {
-    min-height: 2rem;
-    box-shadow: none;
 }
 
 .management-panel {
@@ -2469,29 +2561,6 @@ a.data-card.data-card--link:focus-visible {
     gap: 0.75rem;
 }
 
-.message-input {
-    min-height: 52px;
-    padding: 0.9rem 1.1rem;
-    border-radius: var(--radius-lg);
-}
-
-.message-input:focus {
-    box-shadow: 0 0 0 4px var(--focus-ring);
-}
-
-.send-button {
-    width: 52px;
-    height: 52px;
-    border-radius: var(--radius-lg);
-    background: var(--primary-color);
-    box-shadow: var(--shadow-sm);
-}
-
-.send-button:hover {
-    background: var(--primary-hover);
-    box-shadow: var(--shadow-md);
-}
-
 .message-content code {
     background: var(--code-bg);
     color: var(--code-text);
@@ -2595,9 +2664,8 @@ a.data-card.data-card--link:focus-visible {
         justify-content: center;
     }
 
-    .rag-toolbar label {
+    .rag-toolbar .field--inline {
         flex: 1 1 220px;
-        justify-content: space-between;
     }
 
     .messages {
@@ -2624,16 +2692,6 @@ a.data-card.data-card--link:focus-visible {
 
     .message-form {
         gap: 0.55rem;
-    }
-
-    .message-input {
-        min-height: 48px;
-        font-size: 0.95rem;
-    }
-
-    .send-button {
-        width: 48px;
-        height: 48px;
     }
 
     .management-panel {
@@ -2668,7 +2726,7 @@ a.data-card.data-card--link:focus-visible {
         height: 38px;
     }
 
-    .rag-toolbar label {
+    .rag-toolbar .field--inline {
         flex-basis: 100%;
     }
 
