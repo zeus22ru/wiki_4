@@ -67,7 +67,7 @@ def test_create_issue_honeypot(client):
             "type": "bug",
             "title": "Спам",
             "description": "Это сообщение должно быть отклонено фильтром.",
-            "website": "http://spam.example",
+            "_gotcha": "http://spam.example",
         },
     )
     assert rv.status_code == 400

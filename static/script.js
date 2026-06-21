@@ -114,7 +114,7 @@ const issueType = document.getElementById('issueType');
 const issueTitleInput = document.getElementById('issueTitleInput');
 const issueDescription = document.getElementById('issueDescription');
 const issueContact = document.getElementById('issueContact');
-const issueWebsite = document.getElementById('issueWebsite');
+const issueHp = document.getElementById('issueHp');
 const issueMessage = document.getElementById('issueMessage');
 const issueModeHint = document.getElementById('issueModeHint');
 const issueSubmitBtn = document.getElementById('issueSubmitBtn');
@@ -2348,7 +2348,9 @@ function initializeIssues() {
 async function loadIssueStatus() {
     try {
         issueStatus = await apiJson('/api/issues/status');
-        if (issueModeHint && issueStatus.stub) {
+        if (issueModeHint && issueStatus.write_hint) {
+            issueModeHint.textContent = issueStatus.write_hint;
+        } else if (issueModeHint && issueStatus.stub) {
             issueModeHint.textContent = 'Демо-режим: GitHub не настроен, issue сохраняется как заглушка.';
         }
         if (issueType && Array.isArray(issueStatus.types)) {
@@ -2383,8 +2385,8 @@ function openIssueModal(options = {}) {
     if (issueContact) {
         issueContact.value = '';
     }
-    if (issueWebsite) {
-        issueWebsite.value = '';
+    if (issueHp) {
+        issueHp.value = '';
     }
     if (issueType && options.type) {
         issueType.value = options.type;
@@ -2426,7 +2428,7 @@ async function submitIssue(evt) {
             title: issueTitleInput?.value?.trim() || '',
             description: issueDescription?.value?.trim() || '',
             contact: issueContact?.value?.trim() || '',
-            website: issueWebsite?.value || '',
+            _gotcha: issueHp?.value || '',
         };
         if (issueDraft.sessionId != null) {
             payload.session_id = issueDraft.sessionId;

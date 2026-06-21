@@ -22,6 +22,7 @@ from integrations.github_issues import (
     GitHubIssuesError,
     create_github_issue,
     github_issues_configured,
+    probe_github_issue_write_access,
 )
 from utils.issue_rate_limit import IssueRateLimiter
 
@@ -147,10 +148,19 @@ def _build_issue_body(
 def issue_status():
     """Публичный статус интеграции (без секретов)."""
     configured = github_issues_configured(settings.GITHUB_TOKEN, settings.GITHUB_REPO)
+    stub = settings.GITHUB_ISSUES_ENABLED and not configured
+    write_access = {"writable": None, "hint": None}
+    if configured and not stub:
+        write_access = probe_github_issue_write_access(
+            settings.GITHUB_TOKEN,
+            settings.GITHUB_REPO,
+        )
     return jsonify({
         "enabled": settings.GITHUB_ISSUES_ENABLED,
         "configured": configured,
-        "stub": settings.GITHUB_ISSUES_ENABLED and not configured,
+        "stub": stub,
+        "writable": write_access.get("writable"),
+        "write_hint": write_access.get("hint"),
         "repo": settings.GITHUB_REPO if configured else None,
         "types": [{"id": key, "label": label} for key, label in _ISSUE_TYPES.items()],
     })
@@ -163,7 +173,8 @@ def create_issue():
 
     data = request.get_json(silent=True) or {}
 
-    if (data.get("website") or "").strip():
+    honeypot = (data.get("_gotcha") or data.get("website") or "").strip()
+    if honeypot:
         return jsonify({"error": "Запрос отклонён"}), 400
 
     issue_type = (data.get("type") or "other").strip().lower()
