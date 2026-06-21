@@ -1,23 +1,22 @@
 @echo off
 chcp 65001 >nul
+cd /d "%~dp0"
+
 echo ========================================
 echo Запуск/перезапуск Wiki QA проекта
 echo ========================================
 
-:: Проверяем, запущен ли процесс Python с web_app.py
-tasklist /FI "IMAGENAME eq python.exe" /FI "WINDOWTITLE eq *web_app.py*" 2>nul | find /I "python.exe" >nul
+:: Останавливаем предыдущий Telegram worker (если был запущен через start.bat)
+tasklist /FI "WINDOWTITLE eq Telegram Worker*" 2>nul | find /I "python.exe" >nul
 if %ERRORLEVEL% EQU 0 (
     echo.
-    echo [!] Найден запущенный процесс Python
-    echo [!] Остановка предыдущего процесса...
-    for /f "tokens=2" %%i in ('tasklist /FI "IMAGENAME eq python.exe" /FI "WINDOWTITLE eq *web_app.py*" /NH 2^>nul ^| find /I "python.exe"') do (
-        taskkill /F /PID %%i >nul 2>&1
-    )
-    echo [OK] Процесс остановлен
-    timeout /t 2 /nobreak >nul
+    echo [!] Остановка предыдущего Telegram worker...
+    taskkill /FI "WINDOWTITLE eq Telegram Worker*" /F >nul 2>&1
+    echo [OK] Telegram worker остановлен
+    timeout /t 1 /nobreak >nul
 )
 
-:: Проверяем, занят ли порт 5000
+:: Останавливаем предыдущее веб-приложение (порт 5000)
 netstat -ano | findstr :5000 | findstr LISTENING >nul
 if %ERRORLEVEL% EQU 0 (
     echo.
@@ -30,15 +29,33 @@ if %ERRORLEVEL% EQU 0 (
     timeout /t 2 /nobreak >nul
 )
 
-:: Запускаем приложение
+:: Запускаем веб-приложение в отдельном окне
 echo.
 echo [+] Запуск веб-приложения...
-echo [+] Приложение будет доступно по адресу: http://localhost:5000
+start "Wiki QA" python web_app.py
+echo [OK] Веб-приложение: http://localhost:5000
+
+:: Даём веб-приложению время подняться перед стартом worker
+timeout /t 3 /nobreak >nul
+
+:: Запуск Telegram worker, если включён в .env
+if exist .env (
+    findstr /i /r /c:"^TELEGRAM_ENABLED=true" .env >nul 2>&1
+    if not errorlevel 1 (
+        echo [+] TELEGRAM_ENABLED=true — запуск Telegram worker...
+        start "Telegram Worker" python scripts/telegram_bot_worker.py
+        echo [OK] Telegram worker запущен
+    ) else (
+        echo [i] Telegram worker не запущен (TELEGRAM_ENABLED не равен true в .env)
+    )
+) else (
+    echo [i] Telegram worker не запущен (файл .env не найден)
+)
+
 echo.
-echo Для остановки нажмите Ctrl+C
+echo ========================================
+echo Готово. Окна Wiki QA и Telegram Worker работают отдельно.
+echo Для остановки закройте соответствующие окна или нажмите Ctrl+C в них.
 echo ========================================
 echo.
-
-python web_app.py
-
 pause

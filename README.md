@@ -11,6 +11,7 @@
 - [Установка на Linux-сервер](docs/production_setup.md)
 - [Установка на Windows Server](docs/windows_server_setup.md)
 - [Настройка чат-бота Битрикс24](docs/bitrix24_bot_setup.md)
+- [Настройка Telegram-бота](docs/telegram_bot_setup.md)
 - [GitHub Issues: обратная связь из интерфейса](docs/github_issues_setup.md)
 
 ## Структура проекта
@@ -352,6 +353,34 @@ python scripts/bitrix24_bot_worker.py --once
 
 Подробная инструкция: [docs/bitrix24_bot_setup.md](docs/bitrix24_bot_setup.md).
 
+### 5. Telegram-бот
+
+Интеграция использует официальный Bot API Telegram: worker `scripts/telegram_bot_worker.py` забирает обновления через `getUpdates` и отвечает через `sendMessage`. Публичный HTTPS-адрес не требуется.
+
+Краткий запуск:
+
+```powershell
+# 1. Получите токен у @BotFather и заполните TELEGRAM_BOT_TOKEN в .env
+# TELEGRAM_ENABLED=true
+# TELEGRAM_BOT_TOKEN=123456789:ABCdefGHIjklMNOpqrsTUVwxyz
+
+# 2. Запустите веб-приложение
+python web_app.py
+
+# 3. Во втором терминале запустите worker
+python scripts/telegram_bot_worker.py
+```
+
+Для разовой проверки:
+
+```powershell
+python scripts/telegram_bot_worker.py --once
+```
+
+Привязка аккаунта: авторизуйтесь в веб-интерфейсе → сгенерируйте код → напишите боту `/start <код>`.
+
+Подробная инструкция: [docs/telegram_bot_setup.md](docs/telegram_bot_setup.md).
+
 ## Конфигурация
 
 Конфигурация централизована в [config/settings.py](config/settings.py) и загружается из `.env` файла. Вспомогательные функции: `inference_server_reachable()`, `fetch_remote_model_ids()`, `uses_openai_compatible_api()` (экспорт из пакета `config`).
@@ -566,6 +595,7 @@ pytest tests/test_web_app.py
 pytest tests/test_auth.py
 pytest tests/test_product_features.py
 pytest tests/test_bitrix24_integration.py
+pytest tests/test_telegram_integration.py
 ```
 
 ## Устранение неполадок
@@ -640,6 +670,10 @@ python -c "from utils.embeddings import invalidate_embedding_cache; invalidate_e
 ### Бот Битрикс24 не отвечает
 
 Проверьте, что `BITRIX24_ENABLED=true`, заданы `BITRIX24_WEBHOOK_URL`, `BITRIX24_BOT_ID`, `BITRIX24_BOT_TOKEN`, веб-приложение доступно по `BITRIX24_INTERNAL_API_URL`, а worker запущен командой `python scripts/bitrix24_bot_worker.py`. Для диагностики выполните `python scripts/bitrix24_bot_worker.py --once`.
+
+### Telegram-бот не отвечает
+
+Проверьте, что `TELEGRAM_ENABLED=true`, задан `TELEGRAM_BOT_TOKEN`, веб-приложение доступно по `TELEGRAM_INTERNAL_API_URL`, а worker запущен командой `python scripts/telegram_bot_worker.py`. Для диагностики выполните `python scripts/telegram_bot_worker.py --once`. Если бот не видит старые сообщения, удалите файл `data/telegram_update_offset.json`.
 
 ### Логи
 

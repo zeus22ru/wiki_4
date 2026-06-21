@@ -75,6 +75,12 @@
                                 </svg>
                                 Войти
                             </button>
+                            <button class="secondary-btn" id="telegramLinkBtn" type="button" hidden title="Привязать Telegram">
+                                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                    <path d="M21.198 2.433a2.242 2.242 0 0 0-1.022.215l-16.609 6.71a2.24 2.24 0 0 0 .124 4.214l3.609 1.207 1.667 5.439a2.24 2.24 0 0 0 4.006.553l1.922-3.2 3.606 1.202a2.24 2.24 0 0 0 2.928-2.043l1.403-9.366a2.242 2.242 0 0 0-2.658-2.505zM9.267 15.044l-.822 1.37a.239.239 0 0 1-.427-.058l-.73-2.384 1.979 1.072zm7.595-5.078l-5.84 2.36-2.898-1.565 8.738-3.795z"/>
+                                </svg>
+                                Telegram
+                            </button>
                             <button class="secondary-btn" id="logoutBtn" type="button" hidden>
                                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                                     <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
@@ -298,6 +304,28 @@
                 </div>
             </form>
             <div class="auth-message" id="issueMessage"></div>
+        </div>
+    </div>
+
+    <div class="auth-modal" id="telegramLinkModal" hidden>
+        <div class="auth-modal__backdrop" id="telegramLinkBackdrop"></div>
+        <div class="auth-modal__dialog" role="dialog" aria-modal="true" aria-labelledby="telegramLinkTitle">
+            <div class="auth-modal__header">
+                <div>
+                    <h2 id="telegramLinkTitle">Привязать Telegram</h2>
+                    <p>Отправьте код боту, чтобы связать аккаунт.</p>
+                </div>
+                <button class="icon-btn" id="telegramLinkCloseBtn" type="button" aria-label="Закрыть">×</button>
+            </div>
+            <div id="telegramLinkContent" style="text-align:center;">
+                <div id="telegramLinkLoading">Загрузка…</div>
+                <div id="telegramLinkResult" hidden>
+                    <p>Отправьте боту команду:</p>
+                    <code id="telegramLinkCode" style="display:inline-block;font-size:1.6rem;padding:0.5rem 1rem;background:var(--surface-3);border-radius:0.5rem;margin:0.5rem 0;"></code>
+                    <p style="font-size:0.9rem;color:var(--fg-muted);">Код действителен 10 минут.</p>
+                </div>
+                <div id="telegramLinkError" class="auth-message" hidden></div>
+            </div>
         </div>
     </div>
 

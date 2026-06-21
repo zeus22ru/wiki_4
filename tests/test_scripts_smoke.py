@@ -32,6 +32,7 @@ def test_script_modules_import_without_side_effects():
         "scripts.extract_long_paths",
         "scripts.test_ollama_api",
         "scripts.test_available_models",
+        "scripts.telegram_bot_worker",
     ]:
         importlib.import_module(module_name)
 

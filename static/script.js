@@ -657,6 +657,20 @@ document.addEventListener('DOMContentLoaded', () => {
     authOpenBtn.addEventListener('click', () => openAuthModal('login'));
     logoutBtn.addEventListener('click', logout);
     authBackdrop.addEventListener('click', closeAuthModal);
+
+    // Telegram link button
+    const telegramLinkBtn = document.getElementById('telegramLinkBtn');
+    if (telegramLinkBtn) {
+        telegramLinkBtn.addEventListener('click', openTelegramLinkModal);
+    }
+    const telegramLinkBackdrop = document.getElementById('telegramLinkBackdrop');
+    if (telegramLinkBackdrop) {
+        telegramLinkBackdrop.addEventListener('click', closeTelegramLinkModal);
+    }
+    const telegramLinkCloseBtn = document.getElementById('telegramLinkCloseBtn');
+    if (telegramLinkCloseBtn) {
+        telegramLinkCloseBtn.addEventListener('click', closeTelegramLinkModal);
+    }
     authCloseBtn.addEventListener('click', closeAuthModal);
     loginTabBtn.addEventListener('click', () => switchAuthForm('login'));
     registerTabBtn.addEventListener('click', () => switchAuthForm('register'));
@@ -798,6 +812,10 @@ function applyAuthState() {
         : 'Гость';
     authOpenBtn.hidden = currentAuth.authenticated;
     logoutBtn.hidden = !currentAuth.authenticated;
+    const telegramLinkBtn = document.getElementById('telegramLinkBtn');
+    if (telegramLinkBtn) {
+        telegramLinkBtn.hidden = !currentAuth.authenticated;
+    }
     document.querySelectorAll('.admin-only').forEach((node) => {
         node.hidden = !isAdminRole;
     });
@@ -818,6 +836,39 @@ function openAuthModal(mode = 'login') {
 
 function closeAuthModal() {
     authModal.hidden = true;
+}
+
+function openTelegramLinkModal() {
+    const modal = document.getElementById('telegramLinkModal');
+    if (!modal) return;
+    const loading = document.getElementById('telegramLinkLoading');
+    const result = document.getElementById('telegramLinkResult');
+    const error = document.getElementById('telegramLinkError');
+    const codeEl = document.getElementById('telegramLinkCode');
+    if (loading) loading.hidden = false;
+    if (result) result.hidden = true;
+    if (error) { error.hidden = true; error.textContent = ''; }
+    modal.hidden = false;
+
+    apiJson('/api/telegram/link', {method: 'POST'})
+        .then((data) => {
+            if (data && data.code) {
+                codeEl.textContent = `/start ${data.code}`;
+                if (loading) loading.hidden = true;
+                if (result) result.hidden = false;
+            } else {
+                throw new Error('Не удалось получить код');
+            }
+        })
+        .catch((err) => {
+            if (loading) loading.hidden = true;
+            if (error) { error.textContent = err.message || 'Ошибка'; error.hidden = false; }
+        });
+}
+
+function closeTelegramLinkModal() {
+    const modal = document.getElementById('telegramLinkModal');
+    if (modal) modal.hidden = true;
 }
 
 function switchAuthForm(mode) {

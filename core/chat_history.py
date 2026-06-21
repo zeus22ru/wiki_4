@@ -7,6 +7,7 @@
 import sqlite3
 import json
 import re
+import secrets
 from pathlib import Path
 from typing import List, Optional
 from datetime import datetime, timedelta
@@ -178,7 +179,32 @@ class ChatHistoryManager:
                 CREATE INDEX IF NOT EXISTS idx_feedback_rating_created_at
                 ON feedback(rating, created_at)
             ''')
-            
+
+            # Таблица привязки Telegram-аккаунтов
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS telegram_links (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    code TEXT NOT NULL UNIQUE,
+                    telegram_user_id INTEGER,
+                    telegram_username TEXT,
+                    created_at TEXT NOT NULL,
+                    expires_at TEXT NOT NULL,
+                    used_at TEXT,
+                    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+                )
+            ''')
+
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_telegram_links_code
+                ON telegram_links(code)
+            ''')
+
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_telegram_links_tg_user
+                ON telegram_links(telegram_user_id)
+            ''')
+
             conn.commit()
             logger.info("Таблицы истории чатов созданы или уже существуют")
 
@@ -269,7 +295,94 @@ class ChatHistoryManager:
             ''', (role, now, user_id))
             conn.commit()
             return cursor.rowcount > 0
-    
+
+    # ========== Методы для привязки Telegram ==========
+
+    def create_telegram_link(self, user_id: int) -> dict:
+        """Создать код привязки Telegram (6 цифр), инвалидируя старые."""
+        now = datetime.now()
+        expires_at = now + timedelta(seconds=settings.TELEGRAM_LINK_CODE_TTL_SECONDS)
+        code = f"{secrets.randbelow(1_000_000):06d}"
+
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            # Инвалидировать старые активные коды этого пользователя
+            cursor.execute('''
+                UPDATE telegram_links
+                SET expires_at = ?
+                WHERE user_id = ?
+                  AND used_at IS NULL
+                  AND expires_at > ?
+            ''', (now.isoformat(), user_id, now.isoformat()))
+
+            cursor.execute('''
+                INSERT INTO telegram_links (user_id, code, telegram_user_id, telegram_username, created_at, expires_at, used_at)
+                VALUES (?, ?, NULL, NULL, ?, ?, NULL)
+            ''', (user_id, code, now.isoformat(), expires_at.isoformat()))
+            conn.commit()
+
+        logger.info(f"Создан код привязки Telegram для user_id={user_id}")
+        return {"code": code, "expires_at": expires_at.isoformat()}
+
+    def verify_telegram_link(self, code: str, telegram_user_id: int, telegram_username: Optional[str] = None) -> Optional[dict]:
+        """Проверить код привязки и активировать связь с Telegram."""
+        now = datetime.now().isoformat()
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT id, user_id
+                FROM telegram_links
+                WHERE code = ?
+                  AND used_at IS NULL
+                  AND expires_at > ?
+            ''', (code, now))
+            row = cursor.fetchone()
+            if not row:
+                return None
+
+            link_id = row["id"]
+            user_id = row["user_id"]
+
+            cursor.execute('''
+                UPDATE telegram_links
+                SET used_at = ?, telegram_user_id = ?, telegram_username = ?
+                WHERE id = ?
+            ''', (now, telegram_user_id, telegram_username, link_id))
+
+            # Получить роль пользователя
+            cursor.execute('SELECT role FROM users WHERE id = ?', (user_id,))
+            user_row = cursor.fetchone()
+            conn.commit()
+
+        role = user_row["role"] if user_row else "user"
+        logger.info(f"Привязан Telegram user_id={telegram_user_id} к пользователю {user_id}")
+        return {"user_id": user_id, "role": role}
+
+    def get_telegram_link(self, telegram_user_id: int) -> Optional[dict]:
+        """Получить активную привязку по Telegram user_id."""
+        now = datetime.now().isoformat()
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT l.user_id, l.telegram_username, l.used_at, u.role
+                FROM telegram_links l
+                JOIN users u ON u.id = l.user_id
+                WHERE l.telegram_user_id = ?
+                  AND l.used_at IS NOT NULL
+                  AND l.expires_at > ?
+                ORDER BY l.used_at DESC
+                LIMIT 1
+            ''', (telegram_user_id, now))
+            row = cursor.fetchone()
+            if not row:
+                return None
+            return {
+                "user_id": row["user_id"],
+                "role": row["role"],
+                "telegram_username": row["telegram_username"],
+                "used_at": row["used_at"],
+            }
+
     # ========== Методы для работы с сессиями ==========
     
     def create_session(

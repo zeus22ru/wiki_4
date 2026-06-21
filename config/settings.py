@@ -216,6 +216,18 @@ class Settings:
     BITRIX24_INTERNAL_API_URL: str = os.getenv("BITRIX24_INTERNAL_API_URL", f"http://127.0.0.1:{API_PORT}")
     BITRIX24_INTERNAL_API_KEY: str = os.getenv("BITRIX24_INTERNAL_API_KEY", os.getenv("API_KEY", ""))
 
+    # Telegram bot integration
+    TELEGRAM_ENABLED: bool = os.getenv("TELEGRAM_ENABLED", "false").lower() == "true"
+    TELEGRAM_BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
+    TELEGRAM_POLL_INTERVAL_SECONDS: int = int(os.getenv("TELEGRAM_POLL_INTERVAL_SECONDS", "2"))
+    TELEGRAM_OFFSET_PATH: str = os.getenv("TELEGRAM_OFFSET_PATH", "./data/telegram_update_offset.json")
+    TELEGRAM_INTERNAL_API_URL: str = os.getenv("TELEGRAM_INTERNAL_API_URL", f"http://127.0.0.1:{API_PORT}")
+    TELEGRAM_INTERNAL_API_KEY: str = os.getenv("TELEGRAM_INTERNAL_API_KEY", os.getenv("API_KEY", "API_KEY"))
+    TELEGRAM_LINK_CODE_TTL_SECONDS: int = int(os.getenv("TELEGRAM_LINK_CODE_TTL_SECONDS", "600"))
+    TELEGRAM_STREAM_EDIT_INTERVAL_MS: int = int(os.getenv("TELEGRAM_STREAM_EDIT_INTERVAL_MS", "800"))
+    TELEGRAM_MAX_MESSAGE_LENGTH: int = int(os.getenv("TELEGRAM_MAX_MESSAGE_LENGTH", "4096"))
+    TELEGRAM_SHOW_SOURCES: bool = os.getenv("TELEGRAM_SHOW_SOURCES", "false").lower() == "true"
+
     # Database настройки
     DATABASE_PATH: str = os.getenv("DATABASE_PATH", "./data/wiki_qa.db")
 
@@ -263,6 +275,8 @@ class Settings:
         for directory in directories:
             Path(directory).mkdir(parents=True, exist_ok=True)
         Path(self.BITRIX24_EVENT_OFFSET_PATH).parent.mkdir(parents=True, exist_ok=True)
+        Path(self.TELEGRAM_OFFSET_PATH).parent.mkdir(parents=True, exist_ok=True)
+        Path(self.TELEGRAM_OFFSET_PATH).parent.mkdir(parents=True, exist_ok=True)
 
     def validate(self) -> bool:
         """Валидация настроек"""

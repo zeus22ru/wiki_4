@@ -42,6 +42,7 @@ from api.routes.admin import admin_bp
 from api.routes.auth import auth_bp
 from api.routes.chat_attachments import chat_attachments_bp
 from api.routes.issues import issues_bp
+from api.routes.telegram import telegram_bp
 from api.middleware.auth import can_access_chat, current_user_id, remember_guest_chat
 
 # Получаем логгер для этого модуля
@@ -168,6 +169,23 @@ def _resolve_chat_session(data: dict, query: str, attachments: AttachmentBundle 
         if not can_access_chat(chat_session):
             raise PermissionError("Нет доступа к чату")
         return chat_history, chat_id
+
+    # Telegram-идентификация (если передан telegram_user_id и нет web-сессии)
+    tg_user_id = data.get("telegram_user_id")
+    if tg_user_id is not None and not current_user_id():
+        try:
+            tg_user_id_int = int(tg_user_id)
+            link = chat_history.get_telegram_link(tg_user_id_int)
+            if link and link.get("user_id"):
+                title_source = query or user_message_display_text(query, attachments)
+                title = (title_source[:60] + "...") if len(title_source) > 60 else title_source
+                session = chat_history.create_session(
+                    user_id=link["user_id"], title=title or "Новый чат"
+                )
+                return chat_history, session.id
+        except (TypeError, ValueError):
+            pass
+
     title_source = query or user_message_display_text(query, attachments)
     title = (title_source[:60] + "...") if len(title_source) > 60 else title_source
     session = chat_history.create_session(user_id=current_user_id(), title=title or "Новый чат")
@@ -238,6 +256,7 @@ app.register_blueprint(admin_bp)
 app.register_blueprint(auth_bp)
 app.register_blueprint(chat_attachments_bp)
 app.register_blueprint(issues_bp)
+app.register_blueprint(telegram_bp)
 
 if not settings.FLASK_DEBUG:
     settings.validate()
