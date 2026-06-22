@@ -457,6 +457,28 @@ def test_telegram_link_code_generation(monkeypatch):
     assert link["role"] == "user"
 
 
+def test_get_telegram_link_survives_code_ttl_expiry(monkeypatch):
+    """После verify привязка не должна пропадать по истечении TTL кода."""
+    from core.chat_history import get_chat_history
+
+    monkeypatch.setattr("config.settings.TELEGRAM_LINK_CODE_TTL_SECONDS", 1)
+    chat_history = get_chat_history()
+    user = _create_test_user()
+    link_row = chat_history.create_telegram_link(user.id)
+    chat_history.verify_telegram_link(link_row["code"], telegram_user_id=333)
+
+    with chat_history._get_connection() as conn:
+        conn.execute(
+            "UPDATE telegram_links SET expires_at = ? WHERE code = ?",
+            ("2000-01-01T00:00:00", link_row["code"]),
+        )
+        conn.commit()
+
+    link = chat_history.get_telegram_link(333)
+    assert link is not None
+    assert link["user_id"] == user.id
+
+
 def test_telegram_link_verify_expired(monkeypatch):
     from core.chat_history import get_chat_history
 
@@ -556,3 +578,84 @@ def test_resolve_chat_session_with_telegram_user_id(mock_reachable, mock_init, c
 
     session = chat_history.get_session(chat_id)
     assert session.user_id == user.id
+
+    rv = client.post(
+        "/api/chat",
+        json={"message": "уточнение", "chat_id": chat_id, "telegram_user_id": 999},
+    )
+    assert rv.status_code == 200
+    assert rv.get_json()["chat_id"] == chat_id
+
+
+@patch("web_app.initialize_database")
+@patch("web_app.inference_server_reachable")
+def test_resolve_chat_session_telegram_cannot_access_foreign_chat(
+    mock_reachable, mock_init, client
+):
+    mock_reachable.return_value = True
+    rag = MagicMock()
+    mock_init.return_value = (MagicMock(), rag)
+    rag.query.return_value = RAGResult(answer="Ответ", citations=[], sources=[])
+
+    from core.chat_history import get_chat_history
+
+    chat_history = get_chat_history()
+    owner = _create_test_user()
+    other = chat_history.create_user(
+        username="otheruser",
+        email="other@example.com",
+        password_hash=generate_password_hash("password123"),
+        role="user",
+    )
+    foreign_chat = chat_history.create_session(user_id=other.id, title="Чужой чат")
+
+    link = chat_history.create_telegram_link(owner.id)
+    chat_history.verify_telegram_link(link["code"], telegram_user_id=888)
+
+    client.post("/api/auth/logout")
+
+    rv = client.post(
+        "/api/chat",
+        json={
+            "message": "вопрос",
+            "chat_id": foreign_chat.id,
+            "telegram_user_id": 888,
+        },
+    )
+    assert rv.status_code == 403
+    assert rv.get_json()["error"] == "Нет доступа к чату"
+
+
+@patch("web_app.initialize_database")
+@patch("web_app.inference_server_reachable")
+def test_resolve_chat_session_telegram_recovers_stale_guest_chat_id(
+    mock_reachable, mock_init, client
+):
+    mock_reachable.return_value = True
+    rag = MagicMock()
+    mock_init.return_value = (MagicMock(), rag)
+    rag.query.return_value = RAGResult(answer="Ответ", citations=[], sources=[])
+
+    from core.chat_history import get_chat_history
+
+    chat_history = get_chat_history()
+    user = _create_test_user()
+    guest_chat = chat_history.create_session(user_id=None, title="Гостевой чат")
+
+    link = chat_history.create_telegram_link(user.id)
+    chat_history.verify_telegram_link(link["code"], telegram_user_id=777)
+
+    client.post("/api/auth/logout")
+
+    rv = client.post(
+        "/api/chat",
+        json={
+            "message": "вопрос",
+            "chat_id": guest_chat.id,
+            "telegram_user_id": 777,
+        },
+    )
+    assert rv.status_code == 200
+    body = rv.get_json()
+    assert body["chat_id"] != guest_chat.id
+    assert chat_history.get_session(body["chat_id"]).user_id == user.id

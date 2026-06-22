@@ -198,6 +198,7 @@ def handle_start(code: str, tg_user_id: int, client: TelegramClient) -> str:
             data = resp.json()
             session = get_session(tg_user_id)
             session.user_id = data.get("user_id")
+            session.chat_id = None
             return (
                 f"✅ Аккаунт привязан! "
                 f"Ваш ID: {data['user_id']}, "

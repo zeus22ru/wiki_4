@@ -156,6 +156,28 @@ class ChatNotFoundError(Exception):
     """Запрошенный чат отсутствует."""
 
 
+def _telegram_linked_user_id(chat_history, telegram_user_id) -> int | None:
+    """user_id wiki_4, привязанный к telegram_user_id, или None."""
+    try:
+        tg_user_id_int = int(telegram_user_id)
+    except (TypeError, ValueError):
+        return None
+    link = chat_history.get_telegram_link(tg_user_id_int)
+    if not link or not link.get("user_id"):
+        return None
+    return link["user_id"]
+
+
+def _can_access_chat_for_request(chat_history, chat_session, data: dict) -> bool:
+    """Проверка доступа: веб-сессия, гостевые cookie или Telegram-привязка."""
+    if can_access_chat(chat_session):
+        return True
+    if current_user_id():
+        return False
+    linked_user_id = _telegram_linked_user_id(chat_history, data.get("telegram_user_id"))
+    return linked_user_id is not None and chat_session.user_id == linked_user_id
+
+
 def _resolve_chat_session(data: dict, query: str, attachments: AttachmentBundle | None = None):
     chat_history = get_chat_history()
     raw_chat_id = data.get("chat_id")
@@ -166,7 +188,19 @@ def _resolve_chat_session(data: dict, query: str, attachments: AttachmentBundle 
         chat_session = chat_history.get_session(chat_id)
         if not chat_session:
             raise ChatNotFoundError("Чат не найден")
-        if not can_access_chat(chat_session):
+        if not _can_access_chat_for_request(chat_history, chat_session, data):
+            linked_user_id = _telegram_linked_user_id(chat_history, data.get("telegram_user_id"))
+            if (
+                linked_user_id is not None
+                and not current_user_id()
+                and chat_session.user_id is None
+            ):
+                title_source = query or user_message_display_text(query, attachments)
+                title = (title_source[:60] + "...") if len(title_source) > 60 else title_source
+                session = chat_history.create_session(
+                    user_id=linked_user_id, title=title or "Новый чат"
+                )
+                return chat_history, session.id
             raise PermissionError("Нет доступа к чату")
         return chat_history, chat_id
 

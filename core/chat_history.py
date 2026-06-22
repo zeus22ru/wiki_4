@@ -359,8 +359,10 @@ class ChatHistoryManager:
         return {"user_id": user_id, "role": role}
 
     def get_telegram_link(self, telegram_user_id: int) -> Optional[dict]:
-        """Получить активную привязку по Telegram user_id."""
-        now = datetime.now().isoformat()
+        """Получить активную привязку по Telegram user_id.
+
+        expires_at относится только к неиспользованному коду; после verify привязка постоянная.
+        """
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute('''
@@ -369,10 +371,9 @@ class ChatHistoryManager:
                 JOIN users u ON u.id = l.user_id
                 WHERE l.telegram_user_id = ?
                   AND l.used_at IS NOT NULL
-                  AND l.expires_at > ?
                 ORDER BY l.used_at DESC
                 LIMIT 1
-            ''', (telegram_user_id, now))
+            ''', (telegram_user_id,))
             row = cursor.fetchone()
             if not row:
                 return None
