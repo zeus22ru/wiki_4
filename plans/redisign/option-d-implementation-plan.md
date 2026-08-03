@@ -1,6 +1,6 @@
 # Option D — подробный план реализации
 
-> Для реализации выполнять задачи по порядку. Никаких изменений production UI до появления падающего теста для соответствующего контракта. Прототип — источник визуальных решений, а не код для копирования: [`design-prototypes/option-d-diadoc-tile-workspace.html`](../../design-prototypes/option-d-diadoc-tile-workspace.html).
+> Для реализации выполнять задачи по порядку. Никаких изменений production UI до появления падающего теста для соответствующего контракта. Прототип — источник визуальных решений, а не код для копирования: [`option-d-diadoc-tile-workspace.html`](option-d-diadoc-tile-workspace.html).
 
 ## Цель
 
