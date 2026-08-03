@@ -933,6 +933,50 @@ body {
     color: var(--text-color);
 }
 
+.setting-select {
+    appearance: auto;
+    cursor: pointer;
+}
+
+.setting-model-picker {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.55rem;
+    width: min(640px, 100%);
+}
+
+.setting-model-picker .setting-text {
+    flex: 1 1 240px;
+    width: auto;
+    min-width: 0;
+}
+
+.setting-model-refresh {
+    flex: 0 0 auto;
+    padding: 0.5rem 0.75rem;
+    border: 1px solid var(--input-border);
+    border-radius: var(--radius-md);
+    background: var(--surface-elevated, var(--input-bg));
+    color: var(--text-color);
+    cursor: pointer;
+    font-size: 0.85rem;
+}
+
+.setting-model-refresh:hover:not(:disabled) {
+    border-color: var(--accent-color, var(--primary-color));
+}
+
+.setting-model-refresh:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+.setting-model-error {
+    color: var(--danger-color, #b42318);
+    font-size: 0.85rem;
+}
+
 .setting-textarea {
     width: min(640px, 100%);
     padding: 0.55rem 0.7rem;

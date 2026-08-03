@@ -325,6 +325,17 @@ def settings_schema():
     return jsonify(build_admin_settings_payload())
 
 
+@admin_bp.route("/models", methods=["GET"])
+def list_models():
+    """Список моделей с сервера инференса (Ollama / LM Studio) для админ-селектов."""
+    try:
+        models = fetch_remote_model_ids()
+        return jsonify({"models": models})
+    except Exception as exc:
+        logger.warning("Не удалось получить список моделей: %s", exc)
+        return jsonify({"error": "Не удалось получить список моделей."}), 500
+
+
 def _coerce_value(type_name: str, value):
     if type_name == "bool":
         if isinstance(value, bool):

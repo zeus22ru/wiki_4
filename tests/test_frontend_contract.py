@@ -406,3 +406,18 @@ def test_option_d_message_avatars_use_marks_not_legacy_art() -> None:
         components,
         flags=re.DOTALL,
     )
+
+
+def test_admin_model_select_wired_in_frontend() -> None:
+    """Chat/embedding model settings use /api/admin/models dropdown helpers."""
+    script = (ROOT / "static" / "script.js").read_text(encoding="utf-8")
+    style = (ROOT / "static" / "style.css").read_text(encoding="utf-8")
+
+    assert "ADMIN_MODEL_SETTING_KEYS" in script
+    assert "OLLAMA_CHAT_MODEL" in script
+    assert "OLLAMA_EMBEDDING_MODEL" in script
+    assert "/api/admin/models" in script
+    assert "enhanceAdminModelSelects" in script
+    assert "data-setting-models-refresh" in script
+    assert "setting-model-picker" in style
+    assert "setting-select" in style

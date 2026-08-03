@@ -2998,6 +2998,7 @@ async function loadAdminSettings() {
         return;
     }
     adminSettings.innerHTML = '<div class="empty-state">Загрузка настроек...</div>';
+    _adminModelsCache = null;
     try {
         const data = await apiJson('/api/admin/settings/schema');
         _adminSettingsCache = data;
@@ -3080,6 +3081,133 @@ function renderAdminSettings(payload, query) {
             </section>
         `;
     }).join('');
+
+    void enhanceAdminModelSelects();
+}
+
+const ADMIN_MODEL_SETTING_KEYS = ['OLLAMA_EMBEDDING_MODEL', 'OLLAMA_CHAT_MODEL'];
+let _adminModelsCache = null;
+let _adminModelsFetchPromise = null;
+
+function getAdminSettingControlValue(key) {
+    const input = adminSettings?.querySelector(`[data-setting-input="${CSS.escape(key)}"]`);
+    if (input && 'value' in input) {
+        return String(input.value || '');
+    }
+    if (Object.prototype.hasOwnProperty.call(_adminSettingsDraft, key)) {
+        return String(_adminSettingsDraft[key] ?? '');
+    }
+    return String(_adminSettingsBaseByKey[key]?.value ?? '');
+}
+
+function renderAdminModelPickerHtml(key, models, options = {}) {
+    const current = options.current !== undefined ? String(options.current || '') : getAdminSettingControlValue(key);
+    const loading = !!options.loading;
+    const error = options.error || '';
+    const ids = Array.isArray(models) ? [...models] : [];
+    if (current && !ids.includes(current)) {
+        ids.unshift(current);
+    }
+
+    let optionsHtml;
+    if (loading && !ids.length) {
+        optionsHtml = `<option value="">Загрузка моделей…</option>`;
+    } else if (!ids.length) {
+        optionsHtml = `<option value="${escapeHtml(current)}">${current ? escapeHtml(current) : 'Нет моделей'}</option>`;
+    } else {
+        optionsHtml = ids.map((id) => {
+            const selected = id === current ? ' selected' : '';
+            return `<option value="${escapeHtml(id)}"${selected}>${escapeHtml(id)}</option>`;
+        }).join('');
+    }
+
+    const errorHtml = error
+        ? `<div class="setting-model-error">${escapeHtml(error)}</div>`
+        : '';
+
+    if (error && !ids.length) {
+        return `
+            <div class="setting-model-picker" data-setting-model-picker="${escapeHtml(key)}">
+                <input class="setting-text" type="text" data-setting-input="${escapeHtml(key)}" value="${escapeHtml(current)}">
+                <button type="button" class="setting-model-refresh" data-setting-models-refresh="${escapeHtml(key)}" title="Обновить список моделей">Обновить</button>
+            </div>
+            ${errorHtml}
+        `;
+    }
+
+    return `
+        <div class="setting-model-picker" data-setting-model-picker="${escapeHtml(key)}">
+            <select class="setting-text setting-select" data-setting-input="${escapeHtml(key)}" ${loading ? 'disabled' : ''}>
+                ${optionsHtml}
+            </select>
+            <button type="button" class="setting-model-refresh" data-setting-models-refresh="${escapeHtml(key)}" title="Обновить список моделей" ${loading ? 'disabled' : ''}>Обновить</button>
+        </div>
+        ${errorHtml}
+    `;
+}
+
+function applyAdminModelPickers(models, options = {}) {
+    if (!adminSettings) return;
+    for (const key of ADMIN_MODEL_SETTING_KEYS) {
+        const control = adminSettings.querySelector(`[data-setting-row="${CSS.escape(key)}"] .setting-item__control`);
+        if (!control) continue;
+        const current = getAdminSettingControlValue(key);
+        control.innerHTML = renderAdminModelPickerHtml(key, models, {
+            current,
+            loading: !!options.loading,
+            error: options.error || '',
+        });
+    }
+}
+
+async function enhanceAdminModelSelects(options = {}) {
+    if (!adminSettings || currentAuth.role !== 'admin') {
+        return;
+    }
+    const force = !!options.force;
+    const hasTargets = ADMIN_MODEL_SETTING_KEYS.some((key) => (
+        adminSettings.querySelector(`[data-setting-row="${CSS.escape(key)}"]`)
+    ));
+    if (!hasTargets) {
+        return;
+    }
+
+    if (!force && Array.isArray(_adminModelsCache)) {
+        applyAdminModelPickers(_adminModelsCache);
+        return;
+    }
+
+    applyAdminModelPickers(_adminModelsCache || [], { loading: true });
+
+    if (!force && _adminModelsFetchPromise) {
+        try {
+            await _adminModelsFetchPromise;
+            if (Array.isArray(_adminModelsCache)) {
+                applyAdminModelPickers(_adminModelsCache);
+            }
+        } catch (_) {
+            /* error UI already applied by the in-flight fetch */
+        }
+        return;
+    }
+
+    _adminModelsFetchPromise = (async () => {
+        const data = await apiJson('/api/admin/models');
+        _adminModelsCache = Array.isArray(data.models) ? data.models : [];
+        return _adminModelsCache;
+    })();
+
+    try {
+        const models = await _adminModelsFetchPromise;
+        applyAdminModelPickers(models);
+    } catch (error) {
+        _adminModelsCache = null;
+        applyAdminModelPickers([], {
+            error: error?.message || 'Не удалось получить список моделей',
+        });
+    } finally {
+        _adminModelsFetchPromise = null;
+    }
 }
 
 function renderAdminSettingItem(item) {
@@ -3216,9 +3344,27 @@ function initAdminSettingsEditorEvents() {
         }
     });
 
+    adminSettings.addEventListener('change', (evt) => {
+        const target = evt.target;
+        if (!(target instanceof HTMLElement)) return;
+        if (target.matches('select[data-setting-input]')) {
+            const key = target.getAttribute('data-setting-input');
+            if (key) {
+                updateAdminSettingsDraftFromInput(key, target);
+            }
+        }
+    });
+
     adminSettings.addEventListener('click', async (evt) => {
         const target = evt.target;
         if (!(target instanceof HTMLElement)) return;
+
+        const refreshBtn = target.closest?.('[data-setting-models-refresh]');
+        if (refreshBtn) {
+            evt.preventDefault();
+            await enhanceAdminModelSelects({ force: true });
+            return;
+        }
 
         const header = target.closest?.('.admin-settings-group__header');
         if (header) {
@@ -3251,6 +3397,8 @@ function updateAdminSettingsDraftFromInput(key, el) {
     if (el instanceof HTMLInputElement && el.type === 'checkbox') {
         value = el.checked;
     } else if (el instanceof HTMLTextAreaElement) {
+        value = el.value;
+    } else if (el instanceof HTMLSelectElement) {
         value = el.value;
     } else if (el instanceof HTMLInputElement) {
         value = el.value;

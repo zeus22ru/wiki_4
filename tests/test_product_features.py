@@ -94,6 +94,34 @@ def test_admin_settings_schema(client):
     assert "items" in first
 
 
+@patch("api.routes.admin.fetch_remote_model_ids")
+def test_admin_models_lists_remote_ids(mock_models, client):
+    login_admin(client)
+    mock_models.return_value = ["text-embedding-bge-m3", "qwen/qwen3.5-9b"]
+
+    rv = client.get("/api/admin/models")
+
+    assert rv.status_code == 200
+    assert rv.get_json()["models"] == ["text-embedding-bge-m3", "qwen/qwen3.5-9b"]
+    mock_models.assert_called_once()
+
+
+@patch("api.routes.admin.fetch_remote_model_ids")
+def test_admin_models_error_when_unreachable(mock_models, client):
+    login_admin(client)
+    mock_models.side_effect = ConnectionError("refused")
+
+    rv = client.get("/api/admin/models")
+
+    assert rv.status_code == 500
+    assert "error" in rv.get_json()
+
+
+def test_admin_models_requires_admin(client):
+    rv = client.get("/api/admin/models")
+    assert rv.status_code in {401, 403}
+
+
 def test_optional_api_key_blocks_api_when_enabled(client, monkeypatch):
     from config import settings
 
