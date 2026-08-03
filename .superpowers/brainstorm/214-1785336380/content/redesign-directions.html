@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>БочкарИИ — направления редизайна</title>
+  <style>
+    :root { color-scheme: dark; font-family: Manrope, "Segoe UI", Arial, sans-serif; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #11151d; color: #f5f7fb; }
+    .page { max-width: 1500px; margin: 0 auto; padding: 48px 32px 72px; }
+    header { display: grid; grid-template-columns: minmax(0, 1fr) 310px; gap: 56px; margin-bottom: 48px; }
+    h1 { max-width: 780px; margin: 0; font-size: clamp(2.25rem, 4vw, 4.4rem); line-height: .99; letter-spacing: -.055em; }
+    .intro { margin: 20px 0 0; max-width: 680px; color: #b8c2d1; font-size: 1.06rem; line-height: 1.7; }
+    .rule { align-self: end; padding: 20px 0 0; border-top: 1px solid #64748b; color: #cbd5e1; font-size: .88rem; line-height: 1.55; }
+    .directions { display: grid; gap: 28px; }
+    .direction { display: grid; grid-template-columns: minmax(0, 1.56fr) minmax(280px, .74fr); min-height: 390px; overflow: hidden; cursor: pointer; outline: 1px solid transparent; transition: outline-color .2s ease, transform .2s ease; }
+    .direction:hover, .direction.selected { outline-color: #f8fafc; transform: translateY(-2px); }
+    .direction:focus-visible { outline: 3px solid #f8fafc; outline-offset: 4px; }
+    .copy { padding: 38px 40px 34px; display: flex; flex-direction: column; justify-content: space-between; }
+    .copy h2 { margin: 0; font-size: clamp(1.55rem, 2.5vw, 2.65rem); letter-spacing: -.045em; line-height: 1; }
+    .copy p { margin: 18px 0 0; max-width: 38ch; font-size: .98rem; line-height: 1.6; }
+    .facts { display: grid; grid-template-columns: 1fr 1fr; gap: 13px 24px; margin-top: 28px; font-size: .79rem; line-height: 1.45; }
+    .facts b { display: block; margin-bottom: 3px; font-size: .67rem; letter-spacing: .1em; text-transform: uppercase; }
+    .select { margin: 30px 0 0; display: inline-flex; align-items: center; gap: 9px; width: max-content; font-weight: 750; font-size: .84rem; }
+    .select::before { content: "→"; font-size: 1.15rem; }
+    .mock { position: relative; min-height: 390px; overflow: hidden; }
+    .tag { position: absolute; z-index: 2; top: 20px; right: 20px; padding: 7px 10px; font-size: .66rem; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; }
+
+    .ledger { background: #edf3fb; color: #172033; }
+    .ledger .copy { background: #f8fbff; border-right: 1px solid #cbd8e8; }
+    .ledger p { color: #45536a; }
+    .ledger .facts { color: #33445f; }
+    .ledger .facts b { color: #2c5dc1; }
+    .ledger .tag { background: #1d4ed8; color: white; }
+    .ledger-ui { display: grid; grid-template-columns: 92px minmax(0,1fr) 135px; gap: 10px; height: 100%; padding: 61px 18px 18px; }
+    .ledger-nav { padding: 16px 10px; background: #dce8f7; color: #466078; font-size: 9px; font-weight: 800; letter-spacing: .07em; text-transform: uppercase; }
+    .ledger-nav div { margin-bottom: 17px; }
+    .ledger-nav .active { color: #1047bb; }
+    .answer-sheet { padding: 21px; background: #fff; box-shadow: 0 18px 30px rgba(15, 44, 78, .16); }
+    .answer-sheet .ticket { color: #2757ba; font-size: 9px; font-weight: 800; letter-spacing: .11em; }
+    .answer-sheet h3 { margin: 13px 0 12px; font-size: 18px; letter-spacing: -.04em; line-height: 1.1; }
+    .answer-sheet p { margin: 0 0 11px; color: #45536a; font-size: 9px; line-height: 1.6; }
+    .claim { display: inline; padding: 2px 3px; background: #dceafe; color: #1749ac; font-weight: 800; }
+    .source-rail { display: grid; align-content: start; gap: 9px; }
+    .source { padding: 10px; background: #dfeaf5; color: #40546d; font-size: 8px; line-height: 1.45; }
+    .source strong { display: block; color: #1c3350; font-size: 8px; }
+
+    .command { background: #10151d; color: #eff5fc; }
+    .command .copy { background: #171e29; border-right: 1px solid #344253; }
+    .command p { color: #aebdce; }
+    .command .facts { color: #c5d1de; }
+    .command .facts b { color: #76a8e8; }
+    .command .tag { border: 1px solid #58789b; color: #bad7f5; }
+    .command-ui { display: grid; grid-template-columns: 76px minmax(0,1fr); height: 100%; padding: 61px 16px 16px; gap: 12px; }
+    .rail { padding: 12px 9px; background: #1c2633; color: #6f859d; font-size: 8px; text-transform: uppercase; letter-spacing: .1em; }
+    .rail div { width: 32px; height: 4px; margin: 11px 0; background: #405167; }
+    .rail div:first-child { background: #7eb3f2; }
+    .deck { display: grid; grid-template-rows: auto 1fr auto; gap: 10px; }
+    .deck-header { display: flex; justify-content: space-between; padding: 10px 11px; background: #202b38; font-size: 8px; color: #b6c4d4; }
+    .online { color: #80c5aa; }
+    .deck-main { display: grid; grid-template-columns: minmax(0, 1fr) 112px; gap: 10px; }
+    .thread { padding: 16px; background: #1a232f; }
+    .thread h3 { margin: 0 0 13px; font-size: 13px; letter-spacing: -.035em; }
+    .thread p { margin: 9px 0; color: #aebdce; font-size: 8px; line-height: 1.55; }
+    .thread .verified { color: #e7effa; border-bottom: 1px solid #5f88b8; }
+    .signals { display: grid; gap: 8px; align-content: start; }
+    .signal { min-height: 50px; padding: 9px; background: #253242; font-size: 7px; color: #9aaec3; }
+    .signal strong { display: block; margin-top: 6px; color: #d6e5f4; font-size: 12px; }
+    .compose { padding: 11px; border: 1px solid #3a4a5d; color: #8397ac; font-size: 8px; }
+
+    .studio { background: #f7f9fc; color: #16233a; }
+    .studio .copy { background: #eef3fb; border-right: 1px solid #c6d2e4; }
+    .studio p { color: #4a5c76; }
+    .studio .facts { color: #3e506a; }
+    .studio .facts b { color: #1645ad; }
+    .studio .tag { background: #122b59; color: #edf3ff; }
+    .studio-ui { display: grid; grid-template-columns: minmax(0, 1fr) 105px; height: 100%; padding: 61px 18px 18px; gap: 14px; }
+    .doc { padding: 22px; background: white; border-top: 4px solid #2457ca; }
+    .doc-top { display: flex; justify-content: space-between; color: #4a5c76; font-size: 8px; text-transform: uppercase; letter-spacing: .09em; }
+    .doc h3 { max-width: 16ch; margin: 20px 0 16px; font-size: 18px; line-height: 1.08; letter-spacing: -.045em; }
+    .doc p { margin: 0 0 12px; color: #52647e; font-size: 8px; line-height: 1.65; }
+    .note { padding: 7px 9px; border-left: 1px solid #2457ca; background: #edf3ff; color: #1845a6; font-size: 8px; }
+    .library { padding: 13px 10px; background: #dfe8f6; }
+    .library h4 { margin: 0 0 15px; color: #31507b; font-size: 8px; letter-spacing: .08em; text-transform: uppercase; }
+    .file { margin-bottom: 9px; padding: 9px 7px; background: #f6f9ff; color: #4b5f79; font-size: 7px; line-height: 1.4; }
+    .file.active { background: #2457ca; color: white; }
+    @media (max-width: 900px) {
+      .page { padding: 28px 18px 48px; }
+      header, .direction { grid-template-columns: 1fr; gap: 22px; }
+      .rule { max-width: 48ch; }
+      .copy { padding: 30px 25px; }
+      .mock { min-height: 340px; }
+    }
+    @media (max-width: 520px) {
+      .facts { grid-template-columns: 1fr; }
+      .ledger-ui { grid-template-columns: 62px minmax(0,1fr) 90px; padding: 56px 10px 10px; }
+      .command-ui { grid-template-columns: 52px minmax(0,1fr); padding: 56px 10px 10px; }
+      .studio-ui { grid-template-columns: minmax(0,1fr) 78px; padding: 56px 10px 10px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header>
+      <div>
+        <h1>Три визуальных мира для БочкарИИ</h1>
+        <p class="intro">Во всех вариантах ответ остаётся главным, а источник — не спрятанная «дополнительная информация», а равноправное доказательство. Отличается рабочая метафора: дело, пульт или документ.</p>
+      </div>
+      <div class="rule">Контекст использования: специалист техподдержки работает за столом, часто рядом с тикет-системой. Поэтому три направления остаются корпоративными, русскоязычными и ориентированными на быстрый проверяемый результат.</div>
+    </header>
+
+    <section class="directions" aria-label="Направления редизайна">
+      <article class="direction ledger" tabindex="0" data-choice="evidence-ledger" onclick="toggleSelect(this)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleSelect(this)}">
+        <div class="copy">
+          <div>
+            <h2>Контур доказательств</h2>
+            <p>Светлый, точный рабочий стол по логике инженерного досье. Каждый вывод в ответе связан с видимым фрагментом документа — пользователь проверяет факт без смены контекста.</p>
+            <div class="facts">
+              <div><b>Палитра</b>холодный белый, кобальт, графит, статусный зелёный</div>
+              <div><b>Композиция</b>история слева, ответ по центру, доказательства справа</div>
+              <div><b>Момент</b>подсветка утверждения одновременно открывает точный отрывок источника</div>
+              <div><b>Риск</b>нужна дисциплина плотности, чтобы интерфейс не стал бухгалтерским</div>
+            </div>
+          </div>
+          <span class="select">Выбрать этот мир</span>
+        </div>
+        <div class="mock">
+          <span class="tag">рекомендация</span>
+          <div class="ledger-ui">
+            <aside class="ledger-nav"><div class="active">Диалоги</div><div>Сегодня</div><div>Вчера</div><div>Архив</div></aside>
+            <section class="answer-sheet"><div class="ticket">ЗАПРОС · INC-4218</div><h3>Как восстановить доступ после смены учётной записи</h3><p>Проверьте принадлежность пользователя к целевой группе и выполните повторную синхронизацию.</p><p><span class="claim">Подтверждено регламентом доступа</span> — шаг не требует перезапуска сервиса.</p></section>
+            <aside class="source-rail"><div class="source"><strong>01 · Регламент доступа</strong>Раздел 4.2: повторная синхронизация…</div><div class="source"><strong>02 · База инцидентов</strong>INC-3896: причина и решение совпадают</div></aside>
+          </div>
+        </div>
+      </article>
+
+      <article class="direction command" tabindex="0" data-choice="ops-command" onclick="toggleSelect(this)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleSelect(this)}">
+        <div class="copy">
+          <div>
+            <h2>Пульт сопровождения</h2>
+            <p>Тёмный, собранный контур для интенсивной смены. Это не «AI-неон», а сдержанная диспетчерская: состояние сервиса, ответ и источники читаются как единый операционный поток.</p>
+            <div class="facts">
+              <div><b>Палитра</b>антрацит, стальной синий, ледяной белый, приглушённый mint</div>
+              <div><b>Композиция</b>маршрутизация слева, поток решения в центре, сигналы справа</div>
+              <div><b>Момент</b>источник меняет статус ответа с «гипотезы» на «подтверждено»</div>
+              <div><b>Риск</b>требует особенно строгой контрастности и чистой иерархии</div>
+            </div>
+          </div>
+          <span class="select">Выбрать этот мир</span>
+        </div>
+        <div class="mock">
+          <span class="tag">операционный</span>
+          <div class="command-ui">
+            <aside class="rail"><div></div><div></div><div></div><div></div></aside>
+            <section class="deck"><div class="deck-header"><span>БОЧКАРИИ · СЕССИЯ 23</span><span class="online">● СЕРВИС ДОСТУПЕН</span></div><div class="deck-main"><div class="thread"><h3>Решение по инциденту</h3><p>Определена последовательность восстановления доступа.</p><p class="verified">Проверено по 3 релевантным источникам</p><p>Следующий шаг: обновить группу и повторить синхронизацию.</p></div><aside class="signals"><div class="signal">ИСТОЧНИКИ<strong>03</strong></div><div class="signal">РЕЛЕВАНТНОСТЬ<strong>0.91</strong></div><div class="signal">РЕЖИМ<strong>ПО ШАГАМ</strong></div></aside></div><div class="compose">Задайте следующий вопрос или вставьте скриншот…</div></section>
+          </div>
+        </div>
+      </article>
+
+      <article class="direction studio" tabindex="0" data-choice="documentation-studio" onclick="toggleSelect(this)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleSelect(this)}">
+        <div class="copy">
+          <div>
+            <h2>Студия решения</h2>
+            <p>Белое пространство, построенное как живой служебный документ. Диалог превращается в читаемое решение, а чат, экспорт и база знаний ощущаются одной системой подготовки и хранения знаний.</p>
+            <div class="facts">
+              <div><b>Палитра</b>бумажный белый, глубокий синий, чернильный, холодный серый</div>
+              <div><b>Композиция</b>документ-ответ, прикреплённая библиотека, линейные пометки</div>
+              <div><b>Момент</b>развёрнутый ответ одним действием становится экспортируемой инструкцией</div>
+              <div><b>Риск</b>меньше ощущения «живого чата» для пользователей, ожидающих мессенджер</div>
+            </div>
+          </div>
+          <span class="select">Выбрать этот мир</span>
+        </div>
+        <div class="mock">
+          <span class="tag">документный</span>
+          <div class="studio-ui">
+            <section class="doc"><div class="doc-top"><span>Решение по инциденту</span><span>черновик</span></div><h3>Восстановление доступа после смены учётной записи</h3><p>Сначала проверьте группу пользователя. Затем выполните повторную синхронизацию и подтвердите вход.</p><div class="note">Источник 02 подтверждает: перезапуск не требуется.</div></section>
+            <aside class="library"><h4>Библиотека</h4><div class="file active">Регламент доступа<br>Раздел 4.2</div><div class="file">База инцидентов<br>INC-3896</div><div class="file">Настройки SSO<br>Актуально</div></aside>
+          </div>
+        </div>
+      </article>
+    </section>
+  </main>
+</body>
+</html>

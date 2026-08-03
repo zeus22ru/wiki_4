@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>БочкарИИ — движение как доказательство</title>
+  <style>
+    :root { --gold:#A88656; --ink:#212529; --muted:#68717b; --line:#dde1e5; --canvas:#f4f5f6; --white:#fff; --green:#317554; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--canvas); color:var(--ink); font:14px/1.45 "Segoe UI",Arial,sans-serif; }
+    .app { min-height:100vh; display:grid; grid-template-columns:238px minmax(0,1fr) 310px; background:var(--white); }
+    .sidebar { display:flex; flex-direction:column; padding:18px 14px; border-right:1px solid var(--line); }
+    .brand { margin:2px 3px 19px; font-size:20px; font-weight:900; letter-spacing:-.06em; }.brand b { color:var(--gold); }
+    button,input { font:inherit; }.new { padding:10px 12px; border:0; background:var(--gold); color:#fff; font-size:12px; font-weight:700; cursor:pointer; }
+    .search { width:100%; margin:13px 0; padding:9px; border:1px solid #cad2d9; font-size:11px; }.label { margin:5px 0 7px; color:var(--muted); font-size:10px; font-weight:800; letter-spacing:.07em; text-transform:uppercase; }
+    .dialog { padding:11px 9px; border-top:1px solid var(--line); font-size:11px; line-height:1.35; }.dialog.active { margin-left:-14px; padding-left:21px; background:#f8f1e7; box-shadow:inset 3px 0 0 var(--gold); }.dialog small { display:block; margin-top:4px; color:var(--muted); font-size:9px; }
+    .clear { margin-top:auto; padding:8px 0; border:0; background:transparent; color:var(--muted); font-size:10px; text-align:left; cursor:pointer; }
+    .workspace { display:grid; grid-template-rows:auto auto auto 1fr auto; min-width:0; background:#f5f6f7; }.top { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:15px 22px; background:#fff; border-bottom:1px solid var(--line); }.top h1 { margin:0; font-size:16px; letter-spacing:-.025em; }.status { color:var(--green); font-size:10px; font-weight:700; }
+    .tabs { display:flex; gap:22px; padding:0 22px; background:#fff; border-bottom:1px solid var(--line); }.tab { padding:12px 0 10px; border-bottom:2px solid transparent; color:var(--muted); font-size:11px; font-weight:650; }.tab.active { border-color:var(--gold); color:var(--ink); }
+    .toolbar { display:flex; align-items:center; justify-content:space-between; padding:11px 22px; background:#fafbfc; border-bottom:1px solid var(--line); color:var(--muted); font-size:11px; }.replay { padding:7px 9px; border:1px solid #c4ccd4; background:#fff; color:#45505b; font-size:10px; cursor:pointer; }
+    .chat { display:flex; flex-direction:column; min-height:0; padding:25px 27px; }.prompt { width:max-content; max-width:83%; padding:11px 13px; background:#e6eaee; font-size:12px; }.answer { max-width:720px; margin-top:17px; padding-left:16px; border-left:2px solid var(--gold); }.answer small { color:var(--gold); font-size:10px; font-weight:800; letter-spacing:.06em; text-transform:uppercase; }.answer h2 { margin:7px 0 9px; font-size:17px; letter-spacing:-.025em; }.answer p { margin:0 0 10px; color:#46505b; font-size:12px; line-height:1.55; }.citation { padding:2px 4px; background:#f8eddb; color:#694b24; font-weight:650; }
+    .composer { display:grid; grid-template-columns:1fr 39px; gap:8px; margin-top:auto; }.composer input { padding:11px; border:1px solid #b9c2cb; font-size:11px; }.composer button { border:0; background:var(--gold); color:#fff; font-size:16px; }
+    .sources { padding:19px 14px; border-left:1px solid var(--line); background:#fff; }.sources h2 { margin:0 0 13px; font-size:14px; }.source { padding:12px 10px; border-top:1px solid var(--line); }.source strong { display:block; font-size:11px; line-height:1.35; }.source span { display:block; margin-top:6px; color:var(--muted); font-size:9px; }.motion-note { margin-top:18px; padding:10px; background:#f8f1e7; color:#624822; font-size:10px; line-height:1.5; }
+    .dialog,.tab,.source { cursor:pointer; }.source.active-source { background:#fcfaf7; }.source:focus-visible,.dialog:focus-visible,.tab:focus-visible { outline:3px solid #7b9ac1; outline-offset:2px; }
+    .is-playing .prompt { animation:send .32s cubic-bezier(.16,1,.3,1) both; }.is-playing .answer { animation:answer .48s .18s cubic-bezier(.16,1,.3,1) both; }.is-playing .citation { animation:cite .35s .5s cubic-bezier(.16,1,.3,1) both; }.is-playing .sources { animation:panel .42s .36s cubic-bezier(.16,1,.3,1) both; }
+    @keyframes send { from { transform:translateY(14px); opacity:0; } to { transform:none; opacity:1; } } @keyframes answer { from { transform:translateY(11px); opacity:0; clip-path:inset(0 0 100% 0); } to { transform:none; opacity:1; clip-path:inset(0 0 0 0); } } @keyframes cite { from { background:#fff; color:transparent; } to { background:#f8eddb; color:#694b24; } } @keyframes panel { from { transform:translateX(24px); opacity:.25; } to { transform:none; opacity:1; } }
+    @media (prefers-reduced-motion:reduce) { *,*::before,*::after { animation:none !important; transition:none !important; } }
+    @media (max-width:850px) { .app { grid-template-columns:190px minmax(0,1fr); }.sources { display:none; } }.sidebar { min-width:0; }
+    @media (max-width:560px) { .app { grid-template-columns:1fr; }.sidebar { display:none; }.top,.tabs,.toolbar { padding-left:16px; padding-right:16px; }.chat { padding:20px 16px; } }
+  </style>
+</head>
+<body>
+  <main class="app is-playing" id="demo">
+    <aside class="sidebar">
+      <div class="brand">БОЧКАР<b>ИИ</b></div>
+      <button class="new" id="newChat">+ Новый чат</button>
+      <input class="search" id="historySearch" placeholder="Поиск по истории">
+      <div class="label">Диалоги</div>
+      <div class="dialog active" tabindex="0" data-question="Нет прав на выполнение отчёта (не формируется)" data-answer="Проверьте роль пользователя и обновите сессию">Недостаточно прав для работы с таблицей<small>Сегодня, 13:18</small></div>
+      <div class="dialog" tabindex="0" data-question="Почему расходится количество поддонов?" data-answer="Проверьте правило округления и дату последней синхронизации.">Расхождение количества поддонов<small>Сегодня, 13:17</small></div>
+      <div class="dialog" tabindex="0" data-question="Что означает ошибка в журнале регистрации?" data-answer="Сопоставьте код ошибки с регламентом и проверьте права сервиса.">Ошибка в журнале регистрации<small>Вчера, 16:40</small></div>
+      <button class="clear" id="clearChats">Очистить все чаты</button>
+    </aside>
+    <section class="workspace">
+      <header class="top"><h1>Рабочее пространство</h1><span class="status">● Сервис доступен · admin</span></header>
+      <nav class="tabs"><span class="tab active" role="button" tabindex="0">Чат</span><span class="tab" role="button" tabindex="0">База знаний</span><span class="tab" role="button" tabindex="0">Админка</span></nav>
+      <div class="toolbar"><span id="toolbarLabel">Стиль ответа: По шагам</span><button class="replay" type="button" onclick="replay()">Повторить движение</button></div>
+      <section class="chat">
+        <div class="prompt" id="questionText">Нет прав на выполнение отчёта (не формируется)</div>
+        <article class="answer"><small>Ответ по базе знаний · 3 источника</small><h2 id="answerTitle">Проверьте роль пользователя и обновите сессию</h2><p id="answerBody">Назначьте роль для работы с таблицей в выбранной организации и выполните повторный вход.</p><p><span class="citation" id="citationText">Источник подтверждает: перезапуск не требуется</span></p></article>
+        <form class="composer" id="messageForm"><input id="messageInput" placeholder="Введите следующий вопрос…"><button type="submit">↑</button></form>
+      </section>
+    </section>
+    <aside class="sources">
+      <h2>Источники</h2>
+      <article class="source active-source" tabindex="0" data-citation="Источник «Права для работы с таблицей» подтверждает: перезапуск не требуется"><strong>Права для работы с таблицей</strong><span>Релевантность 0.92 · html</span></article>
+      <article class="source" tabindex="0" data-citation="Источник «НСИ и администрирование» описывает повторный вход после изменения роли"><strong>НСИ и администрирование</strong><span>Релевантность 0.88 · html</span></article>
+      <div class="motion-note">Анимация показывает связь «вопрос → ответ → источник». Она короткая, не повторяется автоматически и отключается при Reduce Motion.</div>
+    </aside>
+  </main>
+  <script>
+    function replay() {
+      const demo = document.getElementById('demo');
+      demo.classList.remove('is-playing');
+      void demo.offsetWidth;
+      demo.classList.add('is-playing');
+    }
+    const listen = (element, callback) => {
+      element.addEventListener('click', callback);
+      element.addEventListener('keydown', (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); callback(); } });
+    };
+    const dialogs = [...document.querySelectorAll('.dialog')];
+    dialogs.forEach((dialog) => listen(dialog, () => {
+      dialogs.forEach((item) => item.classList.toggle('active', item === dialog));
+      document.getElementById('questionText').textContent = dialog.dataset.question;
+      document.getElementById('answerTitle').textContent = dialog.dataset.answer;
+      replay();
+    }));
+    document.querySelectorAll('.tab').forEach((tab) => listen(tab, () => {
+      document.querySelectorAll('.tab').forEach((item) => item.classList.toggle('active', item === tab));
+      document.getElementById('toolbarLabel').textContent = `Открыт раздел: ${tab.textContent}`;
+    }));
+    const sources = [...document.querySelectorAll('.source')];
+    sources.forEach((source) => listen(source, () => {
+      sources.forEach((item) => item.classList.toggle('active-source', item === source));
+      document.getElementById('citationText').textContent = source.dataset.citation;
+      replay();
+    }));
+    document.getElementById('messageForm').addEventListener('submit', (event) => {
+      event.preventDefault();
+      const input = document.getElementById('messageInput');
+      const question = input.value.trim();
+      if (!question) return;
+      document.getElementById('questionText').textContent = question;
+      document.getElementById('answerTitle').textContent = 'Черновик ответа сформирован';
+      document.getElementById('answerBody').textContent = 'В демонстрации отправка вопроса запускает последовательность появления ответа и подтверждающего источника.';
+      input.value = '';
+      replay();
+    });
+    document.getElementById('newChat').addEventListener('click', () => {
+      document.getElementById('questionText').textContent = 'Новый вопрос';
+      document.getElementById('answerTitle').textContent = 'Опишите ситуацию';
+      document.getElementById('answerBody').textContent = 'Введите вопрос или вставьте скриншот, чтобы начать демонстрационный диалог.';
+      replay();
+    });
+    document.getElementById('clearChats').addEventListener('click', () => dialogs.forEach((dialog) => dialog.hidden = true));
+    document.getElementById('historySearch').addEventListener('input', (event) => {
+      const query = event.target.value.toLowerCase();
+      dialogs.forEach((dialog) => dialog.hidden = !dialog.textContent.toLowerCase().includes(query));
+    });
+  </script>
+</body>
+</html>

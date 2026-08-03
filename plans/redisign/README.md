@@ -6,10 +6,10 @@
 
 ## Авторитетный визуальный источник
 
-- Основной: [`design-prototypes/option-d-diadoc-tile-workspace.html`](../../design-prototypes/option-d-diadoc-tile-workspace.html)
+- Основной: [`option-d-diadoc-tile-workspace.html`](option-d-diadoc-tile-workspace.html)
 - Дополнительные исследования, не являющиеся альтернативой выбранному дизайну:
-  - [`design-prototypes/option-e-motion-feedback-workspace.html`](../../design-prototypes/option-e-motion-feedback-workspace.html)
-  - [`design-prototypes/option-d-diadoc-tile-workspace.html`](../../design-prototypes/option-d-diadoc-tile-workspace.html) содержит интерактивные демонстрационные обработчики; их нельзя переносить в production вместо существующей логики `static/script.js`.
+  - [`option-e-motion-feedback-workspace.html`](option-e-motion-feedback-workspace.html)
+  - [`option-d-diadoc-tile-workspace.html`](option-d-diadoc-tile-workspace.html) содержит интерактивные демонстрационные обработчики; их нельзя переносить в production вместо существующей логики `static/script.js`.
 
 ## Неизменяемые продуктовые условия
 
@@ -24,6 +24,7 @@
 - Базовая композиция: внешний двухколоночный shell `250px | main`; внутри main — `workspace | 294px sources`.
 - На desktop источники видимы постоянно. До `980px` они превращаются в доступный drawer; до `620px` sidebar открывается по явной кнопке, а не исчезает без замены.
 - Плитки нужны только для пустого состояния и крупных навигационных действий. Ответы, таблицы, списки документов и настройки остаются плотными рабочими поверхностями.
+- Единое лёгкое скругление `--radius: 4px` на всех контролах и карточках — без «таблеток» и смешанных радиусов.
 - Тёмная тема сохраняется: все добавленные токены обязаны иметь `[data-theme="dark"]` аналоги.
 
 ## Старт в новом диалоге

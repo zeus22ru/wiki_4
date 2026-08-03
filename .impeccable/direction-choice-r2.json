@@ -1,0 +1,75 @@
+{
+  "title": "Корпоративные миры для БочкарИИ",
+  "question": "Ролль назначил «CAPA-форму». Оставь, возьми альтернативу или перебрось снова.",
+  "options": [
+    {
+      "id": "assigned",
+      "label": "CAPA-форма",
+      "kicker": "THE ROLL",
+      "lineage": "ISO/QMS бланки корректирующих действий / controlled documents",
+      "thesis": "Каждый чат — открытый кейс: вопрос в поле «проблема», ответ в «корректирующее действие», источники — связанные controlled docs с ревизией.",
+      "palette": ["#f4f5f7", "#1e3a5f", "#c62828", "#5c6670", "#ffffff"],
+      "materials": ["бланк с сеткой полей", "штамп статуса", "дырокол/регистратор", "номер ревизии"],
+      "viewport": "Шапка с ID кейса и статусом; слева очередь открытых кейсов (чаты); центр — бланк: проблема → действие (стрим ответа); справа — связанные документы с rev и score; админка читается как реестр controlled docs.",
+      "risk": "Легко утяжелить бюрократией; скорость тикета важнее «ISO-театра».",
+      "sketch": ".impeccable/sketches/r2-assigned.webp"
+    },
+    {
+      "id": "challenger-banknote",
+      "label": "Гравюра доверия",
+      "kicker": "CHALLENGER",
+      "lineage": "пробный стол банкнотной гравюры / guilloché",
+      "thesis": "Цитата — это машина доверия: ответ в рамке гильоше, источники как слои верификации под лупой.",
+      "palette": ["#f2ebe0", "#0d2b1e", "#1a1a1a", "#6b2d3c", "#d9e2d6"],
+      "materials": ["хлопковая бумага", "intaglio green", "микротекст", "латунная лупа"],
+      "viewport": "Кремовый лист: слева номиналы/кейсы; центр — ответ внутри гравированной рамки; справа — слои проверки источников (microtext IDs, score как «номинал»).",
+      "risk": "Орнамент может мешать сканированию длинных ответов.",
+      "case": "Сильно по ясности продукта (доверие/цитаты) и корпоративному опознанию; рядом с назначенным по аудитории.",
+      "sketch": ".impeccable/sketches/r2-banknote.webp",
+      "hero": "https://impeccable.style/worlds/cards/vernacular-ephemera-banknote-proof-table-hero.webp",
+      "board": "https://impeccable.style/worlds/cards/vernacular-ephemera-banknote-proof-table.webp"
+    },
+    {
+      "id": "challenger-datamatics",
+      "label": "Поле данных",
+      "kicker": "CHALLENGER",
+      "lineage": "Ryoji Ikeda / datamatics — barcode lattice",
+      "thesis": "База знаний как чёрно-белый поток колонок: чаты — полосы, источники — выборка чисел из поля.",
+      "palette": ["#000000", "#ffffff"],
+      "materials": ["hairline bars", "monospace numerics", "sine lattice", "frame invert"],
+      "viewport": "Чёрный экран: слева колонки-чаты; центр — ответ моноширинным блоком; справа — barcode-поле источников; выделение колонки вытягивает ID документа в фокус.",
+      "risk": "Медиаарт сильнее офиса; может оттолкнуть как «не рабочий» UI.",
+      "case": "Ясность данных высокая; опознание стола сопровождения слабее CAPA и гравюры — ближе к инсталляции.",
+      "sketch": ".impeccable/sketches/r2-datamatics.webp",
+      "hero": "https://impeccable.style/worlds/cards/ikeda-datamatics-hero.webp",
+      "board": "https://impeccable.style/worlds/cards/ikeda-datamatics.webp"
+    },
+    {
+      "id": "challenger-teletext",
+      "label": "Телетекст-сервис",
+      "kicker": "CHALLENGER",
+      "lineage": "broadcast teletext magazine 40×24",
+      "thesis": "Страницы базы по трёхзначным адресам: чат как журнал, источники за REVEAL.",
+      "palette": ["#000000", "#ffffff", "#ffff00", "#00ffff", "#ff0000"],
+      "materials": ["bitmap grid", "block mosaic", "double-height headers"],
+      "viewport": "Чёрный 40×24: header со счётчиком страниц; тело ответа; источники скрыты до REVEAL; навигация цифрами по «журналам» чатов.",
+      "risk": "Ретро-ТВ, не корпоративный workbench 2020-х.",
+      "case": "Слабо стыкуется со стиром «корпоративное приложение для работы».",
+      "sketch": ".impeccable/sketches/r2-teletext.webp",
+      "hero": "https://impeccable.style/worlds/cards/broadcast-programming-teletext-service-hero.webp",
+      "board": "https://impeccable.style/worlds/cards/broadcast-programming-teletext-service.webp"
+    }
+  ],
+  "reroll": true,
+  "steer": true,
+  "canon": true,
+  "canonCard": {
+    "label": "Стандарт категории",
+    "thesis": "Сайдбар + чат + мягкий корпоративный AI-chrome — знакомо и на полном крафте.",
+    "viewport": "Светлый shell, история слева, лента по центру, источники справа карточками, один спокойный акцент.",
+    "sketch": ".impeccable/sketches/r2-canon.webp",
+    "palette": ["#f7f7f5", "#1c1c1a", "#2f5d9f", "#ffffff"],
+    "materials": ["плоский soft UI", "скруглённые панели", "нейтральный sans"],
+    "risk": "Неотличим от соседних ассистентов; цитаты не становятся героем."
+  }
+}

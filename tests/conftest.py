@@ -4,8 +4,15 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
-def isolated_database(tmp_path, monkeypatch):
-    """Каждый тест получает отдельную SQLite-базу приложения."""
+def isolated_database(request, tmp_path, monkeypatch):
+    """Каждый тест получает отдельную SQLite-базу приложения.
+
+    Static DOM/CSS contract tests do not need the app database.
+    """
+    if request.node.get_closest_marker("no_db") or request.fspath.basename == "test_frontend_contract.py":
+        yield
+        return
+
     from config import settings
     import core.chat_history as chat_history
 

@@ -1,0 +1,886 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>БочкарИИ - визуальные примеры улучшений</title>
+    <style>
+        :root {
+            --bg: #f3f4f6;
+            --surface: #ffffff;
+            --surface-soft: #f8fafc;
+            --surface-warm: #fffaf1;
+            --line: #e3e7ee;
+            --line-strong: #cbd5e1;
+            --text: #1f2937;
+            --muted: #687385;
+            --faint: #929dae;
+            --brand: #7c5a22;
+            --brand-strong: #5d4218;
+            --brand-soft: #f4ead8;
+            --green: #16864b;
+            --green-soft: #e8f6ee;
+            --amber: #b7791f;
+            --red: #b84a3d;
+            --blue: #2563eb;
+            --shadow: 0 18px 46px rgba(15, 23, 42, 0.08);
+            --radius: 8px;
+            --radius-lg: 12px;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            min-height: 100vh;
+            color: var(--text);
+            background: var(--bg);
+            font-family: Inter, "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+        }
+
+        button,
+        input {
+            font: inherit;
+        }
+
+        .page {
+            width: min(1440px, calc(100% - 32px));
+            margin: 0 auto;
+            padding: 28px 0 42px;
+        }
+
+        .intro {
+            display: flex;
+            justify-content: space-between;
+            gap: 24px;
+            align-items: end;
+            margin-bottom: 20px;
+        }
+
+        .intro h1 {
+            margin: 0 0 8px;
+            font-size: clamp(28px, 4vw, 44px);
+            line-height: 1.05;
+            letter-spacing: 0;
+        }
+
+        .intro p {
+            max-width: 760px;
+            margin: 0;
+            color: var(--muted);
+            line-height: 1.55;
+        }
+
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 7px;
+            min-height: 30px;
+            padding: 5px 10px;
+            border: 1px solid var(--line);
+            border-radius: 999px;
+            background: var(--surface);
+            color: var(--muted);
+            font-size: 13px;
+            font-weight: 650;
+            white-space: nowrap;
+        }
+
+        .dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: currentColor;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 18px;
+        }
+
+        .example {
+            overflow: hidden;
+            border: 1px solid var(--line);
+            border-radius: var(--radius-lg);
+            background: var(--surface);
+            box-shadow: var(--shadow);
+        }
+
+        .example--wide {
+            grid-column: 1 / -1;
+        }
+
+        .example-head {
+            display: flex;
+            justify-content: space-between;
+            gap: 16px;
+            padding: 16px 18px;
+            border-bottom: 1px solid var(--line);
+            background: var(--surface-soft);
+        }
+
+        .example-head h2 {
+            margin: 0;
+            font-size: 18px;
+        }
+
+        .example-head p {
+            margin: 4px 0 0;
+            color: var(--muted);
+            font-size: 14px;
+            line-height: 1.45;
+        }
+
+        .mock {
+            padding: 18px;
+        }
+
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            min-height: 38px;
+            padding: 8px 13px;
+            border: 1px solid var(--line);
+            border-radius: var(--radius);
+            background: var(--surface);
+            color: var(--text);
+            font-weight: 650;
+        }
+
+        .btn--primary {
+            border-color: transparent;
+            background: var(--brand);
+            color: #fff;
+            box-shadow: 0 8px 18px rgba(124, 90, 34, 0.18);
+        }
+
+        .btn--ghost {
+            background: var(--surface-soft);
+            color: var(--muted);
+        }
+
+        .icon-btn {
+            display: grid;
+            place-items: center;
+            width: 38px;
+            height: 38px;
+            border: 1px solid var(--line);
+            border-radius: var(--radius);
+            background: var(--surface);
+            color: var(--muted);
+            font-weight: 800;
+        }
+
+        .topbar {
+            display: grid;
+            grid-template-columns: auto minmax(360px, 1fr) auto;
+            align-items: center;
+            gap: 18px;
+            min-height: 74px;
+            padding: 13px 16px;
+            border: 1px solid var(--line);
+            border-radius: var(--radius-lg);
+            background: var(--surface);
+        }
+
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .brand-mark {
+            display: grid;
+            place-items: center;
+            width: 42px;
+            height: 42px;
+            border-radius: var(--radius);
+            background: var(--brand);
+            color: #fff;
+            font-weight: 850;
+        }
+
+        .brand strong {
+            display: block;
+            font-size: 20px;
+            color: var(--brand-strong);
+        }
+
+        .brand span,
+        .small {
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        .tabs {
+            display: flex;
+            justify-content: center;
+            gap: 4px;
+            width: fit-content;
+            margin: 0 auto;
+            padding: 4px;
+            border: 1px solid var(--line);
+            border-radius: var(--radius-lg);
+            background: var(--surface-soft);
+        }
+
+        .tab {
+            min-height: 36px;
+            padding: 7px 13px;
+            border: 0;
+            border-radius: var(--radius);
+            background: transparent;
+            color: var(--muted);
+            font-weight: 650;
+        }
+
+        .tab.active {
+            background: var(--surface);
+            color: var(--brand);
+            box-shadow: 0 2px 7px rgba(15, 23, 42, 0.08);
+        }
+
+        .user-menu {
+            display: flex;
+            justify-content: end;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .sources {
+            display: grid;
+            gap: 10px;
+        }
+
+        .source-card {
+            display: grid;
+            gap: 9px;
+            padding: 13px;
+            border: 1px solid var(--line);
+            border-radius: var(--radius-lg);
+            background: var(--surface);
+        }
+
+        .source-title {
+            display: -webkit-box;
+            overflow: hidden;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            font-weight: 750;
+            line-height: 1.25;
+        }
+
+        .source-path {
+            overflow: hidden;
+            color: var(--muted);
+            font-size: 13px;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .score-row {
+            display: grid;
+            grid-template-columns: 1fr auto;
+            gap: 10px;
+            align-items: center;
+        }
+
+        .meter {
+            height: 7px;
+            overflow: hidden;
+            border-radius: 999px;
+            background: #edf1f6;
+        }
+
+        .meter span {
+            display: block;
+            height: 100%;
+            border-radius: inherit;
+            background: linear-gradient(90deg, var(--green), #60b982);
+        }
+
+        .chips {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+        }
+
+        .chip {
+            min-height: 26px;
+            padding: 4px 8px;
+            border-radius: 999px;
+            background: var(--surface-soft);
+            color: var(--muted);
+            font-size: 12px;
+            font-weight: 650;
+        }
+
+        .dropzone {
+            display: grid;
+            grid-template-columns: 52px minmax(0, 1fr) auto;
+            gap: 14px;
+            align-items: center;
+            padding: 18px;
+            border: 1.5px dashed var(--line-strong);
+            border-radius: var(--radius-lg);
+            background: linear-gradient(180deg, #fff, var(--surface-soft));
+        }
+
+        .file-icon {
+            display: grid;
+            place-items: center;
+            width: 52px;
+            height: 52px;
+            border-radius: var(--radius);
+            background: var(--brand-soft);
+            color: var(--brand);
+            font-weight: 900;
+        }
+
+        .dropzone strong {
+            display: block;
+            margin-bottom: 4px;
+        }
+
+        .drop-actions {
+            display: flex;
+            gap: 8px;
+        }
+
+        .history {
+            display: grid;
+            gap: 8px;
+            max-width: 390px;
+        }
+
+        .history-item {
+            position: relative;
+            display: grid;
+            grid-template-columns: 1fr auto;
+            gap: 10px;
+            align-items: start;
+            min-height: 72px;
+            padding: 11px 12px 11px 16px;
+            border: 1px solid var(--line);
+            border-radius: var(--radius);
+            background: var(--surface);
+        }
+
+        .history-item::before {
+            content: "";
+            position: absolute;
+            left: -1px;
+            top: 10px;
+            bottom: 10px;
+            width: 3px;
+            border-radius: 999px;
+            background: transparent;
+        }
+
+        .history-item.active {
+            background: var(--surface-warm);
+            border-color: #dfcfae;
+        }
+
+        .history-item.active::before {
+            background: var(--brand);
+        }
+
+        .history-title {
+            overflow: hidden;
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            font-weight: 740;
+            line-height: 1.25;
+        }
+
+        .history-actions {
+            display: flex;
+            gap: 4px;
+            opacity: 0.55;
+        }
+
+        .empty {
+            display: grid;
+            place-items: center;
+            min-height: 260px;
+            border: 1px solid var(--line);
+            border-radius: var(--radius-lg);
+            background:
+                linear-gradient(180deg, rgba(255, 255, 255, 0.88), rgba(248, 250, 252, 0.88)),
+                repeating-linear-gradient(90deg, transparent, transparent 31px, #eef2f7 32px);
+            text-align: center;
+        }
+
+        .empty-card {
+            width: min(420px, 100%);
+            padding: 22px;
+            border: 1px solid var(--line);
+            border-radius: var(--radius-lg);
+            background: rgba(255, 255, 255, 0.92);
+            box-shadow: 0 12px 34px rgba(15, 23, 42, 0.07);
+        }
+
+        .empty-icon {
+            display: grid;
+            place-items: center;
+            width: 54px;
+            height: 54px;
+            margin: 0 auto 14px;
+            border-radius: var(--radius-lg);
+            background: var(--brand-soft);
+            color: var(--brand);
+            font-size: 24px;
+            font-weight: 900;
+        }
+
+        .empty-card h3 {
+            margin: 0 0 8px;
+            font-size: 20px;
+        }
+
+        .empty-card p {
+            margin: 0 0 16px;
+            color: var(--muted);
+            line-height: 1.5;
+        }
+
+        .dashboard {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 12px;
+        }
+
+        .metric {
+            padding: 14px;
+            border: 1px solid var(--line);
+            border-radius: var(--radius-lg);
+            background: var(--surface);
+        }
+
+        .metric-value {
+            display: block;
+            margin: 4px 0;
+            font-size: 28px;
+            font-weight: 850;
+            color: var(--brand);
+        }
+
+        .metric.good .metric-value {
+            color: var(--green);
+        }
+
+        .metric.warn .metric-value {
+            color: var(--amber);
+        }
+
+        .chat-layout {
+            display: grid;
+            grid-template-columns: 310px minmax(0, 1fr) 330px;
+            gap: 14px;
+            min-height: 470px;
+        }
+
+        .panel {
+            border: 1px solid var(--line);
+            border-radius: var(--radius-lg);
+            background: var(--surface);
+            overflow: hidden;
+        }
+
+        .panel-title {
+            padding: 13px 14px;
+            border-bottom: 1px solid var(--line);
+            background: var(--surface-soft);
+            font-weight: 750;
+        }
+
+        .messages {
+            display: grid;
+            align-content: start;
+            gap: 12px;
+            height: 348px;
+            padding: 16px;
+            overflow: hidden;
+        }
+
+        .message {
+            display: grid;
+            grid-template-columns: 34px minmax(0, 1fr);
+            gap: 10px;
+            max-width: 720px;
+        }
+
+        .message.user {
+            grid-template-columns: minmax(0, 1fr) 34px;
+            justify-self: end;
+        }
+
+        .avatar {
+            display: grid;
+            place-items: center;
+            width: 34px;
+            height: 34px;
+            border-radius: var(--radius);
+            background: var(--brand-soft);
+            color: var(--brand);
+            font-size: 12px;
+            font-weight: 850;
+        }
+
+        .bubble {
+            padding: 12px 13px;
+            border: 1px solid var(--line);
+            border-radius: var(--radius-lg);
+            background: var(--surface);
+            line-height: 1.5;
+        }
+
+        .user .bubble {
+            border-color: transparent;
+            background: var(--brand);
+            color: #fff;
+        }
+
+        .composer {
+            display: flex;
+            gap: 8px;
+            padding: 12px;
+            border-top: 1px solid var(--line);
+            background: var(--surface-soft);
+        }
+
+        .composer input {
+            flex: 1;
+            min-height: 40px;
+            padding: 9px 12px;
+            border: 1px solid var(--line);
+            border-radius: var(--radius);
+        }
+
+        @media (max-width: 1100px) {
+            .grid,
+            .chat-layout {
+                grid-template-columns: 1fr;
+            }
+
+            .topbar {
+                grid-template-columns: 1fr;
+            }
+
+            .tabs {
+                margin: 0;
+            }
+
+            .dashboard {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+        }
+
+        @media (max-width: 680px) {
+            .page {
+                width: min(100% - 20px, 1440px);
+                padding-top: 16px;
+            }
+
+            .intro,
+            .dropzone,
+            .drop-actions {
+                align-items: stretch;
+                flex-direction: column;
+            }
+
+            .dropzone,
+            .dashboard {
+                grid-template-columns: 1fr;
+            }
+
+            .user-menu {
+                justify-content: start;
+                flex-wrap: wrap;
+            }
+        }
+    </style>
+</head>
+<body>
+    <main class="page">
+        <section class="intro">
+            <div>
+                <h1>Визуальные улучшения БочкарИИ</h1>
+                <p>Ниже не новая архитектура приложения, а конкретные UI-паттерны, которые можно перенести в текущий интерфейс: более спокойная палитра, компактная шапка, читабельные источники, нормальная загрузка файлов и ясные пустые состояния.</p>
+            </div>
+            <span class="badge"><span class="dot" style="color:var(--green)"></span> прикладные примеры</span>
+        </section>
+
+        <section class="grid">
+            <article class="example example--wide">
+                <div class="example-head">
+                    <div>
+                        <h2>1. Шапка: меньше кнопок, больше структуры</h2>
+                        <p>Telegram, выход и тема лучше живут в компактной зоне пользователя, а вкладки остаются главным навигационным центром.</p>
+                    </div>
+                    <span class="badge">Header</span>
+                </div>
+                <div class="mock">
+                    <header class="topbar">
+                        <div class="brand">
+                            <div class="brand-mark">БИ</div>
+                            <div>
+                                <strong>БочкарИИ</strong>
+                                <span>AI-ассистент базы знаний</span>
+                            </div>
+                        </div>
+                        <nav class="tabs" aria-label="Разделы">
+                            <button class="tab active">Чат</button>
+                            <button class="tab">База знаний</button>
+                            <button class="tab">Админка</button>
+                        </nav>
+                        <div class="user-menu">
+                            <span class="badge" style="color:var(--green)"><span class="dot"></span> Онлайн</span>
+                            <button class="btn btn--ghost">ai · admin</button>
+                            <button class="icon-btn">?</button>
+                            <button class="icon-btn">☼</button>
+                        </div>
+                    </header>
+                </div>
+            </article>
+
+            <article class="example">
+                <div class="example-head">
+                    <div>
+                        <h2>2. Источники: длинные названия под контролем</h2>
+                        <p>Карточка источника должна быстро отвечать: что за документ, откуда фрагмент, насколько он релевантен.</p>
+                    </div>
+                    <span class="badge">Sources</span>
+                </div>
+                <div class="mock sources">
+                    <div class="source-card">
+                        <div class="source-title">Нет прав на выполнение отчета: недостаточно прав для работы с таблицей</div>
+                        <div class="source-path">wiki_pars/faq/НСИ и администрирование/права/отчеты.html</div>
+                        <div class="score-row">
+                            <div class="meter"><span style="width: 94%"></span></div>
+                            <strong>94%</strong>
+                        </div>
+                        <div class="chips">
+                            <span class="chip">HTML</span>
+                            <span class="chip">Чанк 1 из 3</span>
+                            <span class="chip">НСИ</span>
+                        </div>
+                    </div>
+                    <div class="source-card">
+                        <div class="source-title">Создание пользователя и назначение роли доступа в 1С</div>
+                        <div class="source-path">wiki_pars/1c/users/access_roles.html</div>
+                        <div class="score-row">
+                            <div class="meter"><span style="width: 82%"></span></div>
+                            <strong>82%</strong>
+                        </div>
+                        <div class="chips">
+                            <span class="chip">HTML</span>
+                            <span class="chip">Чанк 2 из 5</span>
+                        </div>
+                    </div>
+                </div>
+            </article>
+
+            <article class="example">
+                <div class="example-head">
+                    <div>
+                        <h2>3. Загрузка документов: вместо нативного file input</h2>
+                        <p>Dropzone выглядит цельно, объясняет поддерживаемые форматы и оставляет место для предпросмотра.</p>
+                    </div>
+                    <span class="badge">Upload</span>
+                </div>
+                <div class="mock">
+                    <div class="dropzone">
+                        <div class="file-icon">DOC</div>
+                        <div>
+                            <strong>Перетащите документ сюда или выберите файл</strong>
+                            <div class="small">PDF, DOCX, XLSX, HTML, TXT. До индексации можно открыть предпросмотр.</div>
+                        </div>
+                        <div class="drop-actions">
+                            <button class="btn">Предпросмотр</button>
+                            <button class="btn btn--primary">Загрузить</button>
+                        </div>
+                    </div>
+                </div>
+            </article>
+
+            <article class="example">
+                <div class="example-head">
+                    <div>
+                        <h2>4. История диалогов: плотнее и спокойнее</h2>
+                        <p>Активный чат выделяется полосой, а действия не спорят с названием диалога.</p>
+                    </div>
+                    <span class="badge">Sidebar</span>
+                </div>
+                <div class="mock history">
+                    <div class="history-item active">
+                        <div>
+                            <div class="history-title">Недостаточно прав для работы с таблицей</div>
+                            <div class="small">Сегодня, 01:47 · 10 источников</div>
+                        </div>
+                        <div class="history-actions">
+                            <button class="icon-btn" style="width:30px;height:30px">✎</button>
+                            <button class="icon-btn" style="width:30px;height:30px">×</button>
+                        </div>
+                    </div>
+                    <div class="history-item">
+                        <div>
+                            <div class="history-title">Расхождение количества подобранного товара</div>
+                            <div class="small">Сегодня, 01:46 · 4 источника</div>
+                        </div>
+                        <div class="history-actions">
+                            <button class="icon-btn" style="width:30px;height:30px">✎</button>
+                            <button class="icon-btn" style="width:30px;height:30px">×</button>
+                        </div>
+                    </div>
+                    <div class="history-item">
+                        <div>
+                            <div class="history-title">Добавление пользователя в 1С</div>
+                            <div class="small">Сегодня, 01:46 · инструкция</div>
+                        </div>
+                        <div class="history-actions">
+                            <button class="icon-btn" style="width:30px;height:30px">✎</button>
+                            <button class="icon-btn" style="width:30px;height:30px">×</button>
+                        </div>
+                    </div>
+                </div>
+            </article>
+
+            <article class="example">
+                <div class="example-head">
+                    <div>
+                        <h2>5. Пустое состояние: не просто “Загрузка...”</h2>
+                        <p>Пока нет документов или идет проверка, интерфейс должен объяснять состояние и следующий шаг.</p>
+                    </div>
+                    <span class="badge">Empty state</span>
+                </div>
+                <div class="mock">
+                    <div class="empty">
+                        <div class="empty-card">
+                            <div class="empty-icon">↥</div>
+                            <h3>База знаний пока пуста</h3>
+                            <p>Загрузите первый документ, проверьте предпросмотр и запустите индексацию. После этого чат начнет отвечать со ссылками на источники.</p>
+                            <button class="btn btn--primary">Добавить документ</button>
+                        </div>
+                    </div>
+                </div>
+            </article>
+
+            <article class="example example--wide">
+                <div class="example-head">
+                    <div>
+                        <h2>6. Как это может смотреться вместе</h2>
+                        <p>Компактный рабочий экран: история не перетягивает внимание, чат читабелен, источники справа дают быстрый контроль качества ответа.</p>
+                    </div>
+                    <span class="badge">Full layout</span>
+                </div>
+                <div class="mock">
+                    <div class="chat-layout">
+                        <aside class="panel">
+                            <div class="panel-title">Диалоги</div>
+                            <div class="mock history" style="padding:14px">
+                                <button class="btn btn--primary" style="width:100%">Новый чат</button>
+                                <input style="width:100%;min-height:38px;padding:8px 10px;border:1px solid var(--line);border-radius:var(--radius)" placeholder="Поиск по истории">
+                                <div class="history-item active">
+                                    <div>
+                                        <div class="history-title">Недостаточно прав для работы с таблицей</div>
+                                        <div class="small">Сегодня · 10 источников</div>
+                                    </div>
+                                    <div class="history-actions"><button class="icon-btn" style="width:30px;height:30px">×</button></div>
+                                </div>
+                                <div class="history-item">
+                                    <div>
+                                        <div class="history-title">Ошибка в журнале регистрации</div>
+                                        <div class="small">Сегодня · 6 источников</div>
+                                    </div>
+                                    <div class="history-actions"><button class="icon-btn" style="width:30px;height:30px">×</button></div>
+                                </div>
+                            </div>
+                        </aside>
+                        <section class="panel">
+                            <div class="panel-title">Чат · стиль ответа: инструкция</div>
+                            <div class="messages">
+                                <article class="message user">
+                                    <div class="bubble">Что делать, если нет прав на выполнение отчета?</div>
+                                    <div class="avatar">Вы</div>
+                                </article>
+                                <article class="message">
+                                    <div class="avatar">AI</div>
+                                    <div class="bubble">
+                                        <strong>Передайте данные администратору и не выдавайте права самостоятельно.</strong>
+                                        <p style="margin:8px 0 0">Соберите ссылку на отчет, имя пользователя и скриншот ошибки. Затем отправьте заявку ответственному администратору.</p>
+                                    </div>
+                                </article>
+                            </div>
+                            <form class="composer">
+                                <input placeholder="Введите вопрос...">
+                                <button class="btn btn--primary" type="button">Отправить</button>
+                            </form>
+                        </section>
+                        <aside class="panel">
+                            <div class="panel-title">Источники</div>
+                            <div class="mock sources" style="padding:14px">
+                                <div class="source-card">
+                                    <div class="source-title">Нет прав на выполнение отчета</div>
+                                    <div class="source-path">wiki_pars/faq/report_permissions.html</div>
+                                    <div class="score-row">
+                                        <div class="meter"><span style="width:94%"></span></div>
+                                        <strong>94%</strong>
+                                    </div>
+                                </div>
+                                <div class="source-card">
+                                    <div class="source-title">Регламент обращения к администратору</div>
+                                    <div class="source-path">wiki_pars/admin/request_flow.html</div>
+                                    <div class="score-row">
+                                        <div class="meter"><span style="width:79%"></span></div>
+                                        <strong>79%</strong>
+                                    </div>
+                                </div>
+                            </div>
+                        </aside>
+                    </div>
+                </div>
+            </article>
+
+            <article class="example example--wide">
+                <div class="example-head">
+                    <div>
+                        <h2>7. Админка: метрики вместо пустого полотна</h2>
+                        <p>Даже диагностический экран становится понятнее, если вверху есть ключевые показатели и статусы сервисов.</p>
+                    </div>
+                    <span class="badge">Admin</span>
+                </div>
+                <div class="mock dashboard">
+                    <div class="metric good">
+                        <span class="small">Flask API</span>
+                        <span class="metric-value">OK</span>
+                        <span class="small">200 · healthcheck</span>
+                    </div>
+                    <div class="metric good">
+                        <span class="small">Индекс</span>
+                        <span class="metric-value">18k</span>
+                        <span class="small">чанков в Chroma</span>
+                    </div>
+                    <div class="metric warn">
+                        <span class="small">LLM latency</span>
+                        <span class="metric-value">1.4s</span>
+                        <span class="small">среднее за 15 минут</span>
+                    </div>
+                    <div class="metric">
+                        <span class="small">Документы</span>
+                        <span class="metric-value">42</span>
+                        <span class="small">последнее обновление 3 мин</span>
+                    </div>
+                </div>
+            </article>
+        </section>
+    </main>
+</body>
+</html>

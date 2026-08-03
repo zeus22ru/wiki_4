@@ -1,6 +1,6 @@
 # Option D — подробный план реализации
 
-> Для реализации выполнять задачи по порядку. Никаких изменений production UI до появления падающего теста для соответствующего контракта. Прототип — источник визуальных решений, а не код для копирования: [`option-d-diadoc-tile-workspace.html`](option-d-diadoc-tile-workspace.html).
+>Никаких изменений production UI до появления падающего теста для соответствующего контракта. Прототип — источник визуальных решений, а не код для копирования: [`option-d-diadoc-tile-workspace.html`](option-d-diadoc-tile-workspace.html).
 
 ## Цель
 
@@ -56,18 +56,49 @@ flowchart LR
 |---|---:|---|
 | Brand gold | `#A88656` | primary CTA, active underline, metadata |
 | Brand sand | `#D6BC8A` | soft brand field, answer metadata |
-| Graphite | `#212529` | primary text, answer-card background |
+| Graphite | `#212529` | primary text |
+| Answer surface | `#FFFFFF` | assistant answer card (light, long-read friendly) |
 | Workspace canvas | `#F4F5F6` | neutral work background |
 | Line | `#DDE1E5` | separators, control borders |
 | Muted | `#68717B` | secondary labels |
 | Mint | `#D9F2EB` | secondary tile/icon emphasis only |
 
-- Compact controls and history cards: `12–14px` radius; CTA pills only for small actions.
+- One small corner radius everywhere: `--radius: 4px`. No pills, no mixed 12/18/999 values.
+- Type scale (readable floor from review §3): `--text-xs: 12px` (UI labels, source meta, timestamps, actions), `--text-sm: 13px`, `--text-md: 14px` (body), `--text-lg: 16px`, `--text-xl: 20px`, `--text-2xl: 28px`. No readable UI text below 12px.
+- Primary gold CTA keeps white label text (brand look); send control is labeled «Отправить».
+- Icons: Lucide-style stroke SVG sprite (16–18px). Icon + text for actions; never icon-only for primary controls. Same family as existing production stroke SVGs.
 - The active sidebar item uses full-field fill/border, not a thick colored side stripe.
-- Tabs are underline navigation, not pill tabs.
-- User messages are neutral. Assistant answers are dark graphitic panels while preserving normal markdown semantics.
+- Tabs are underline navigation, not rounded tab chips.
+- User messages are neutral and right-aligned. Assistant answers are light panels (white + line border), left-aligned — readable for long ops text, not dark graphitic blocks.
 - Sources are compact cards, not a generic dashboard. The selected source changes full card state and connected citation state.
 - Tiles only appear in a truly empty/new chat state. Documents, settings and admin cards remain data-dense.
+- Health/role status: muted text; status dot is green when available (`data-state="ok"`), red when down (`data-state="down"`). Role label stays secondary.
+
+## Доработки после ревью прототипа
+
+Приоритеты, зафиксированные при разборе [`option-d-diadoc-tile-workspace.html`](option-d-diadoc-tile-workspace.html). Вкладки «База знаний» / «Админка» в прототипе могут оставаться заглушками — в production они уже рабочие.
+
+### 1. Адаптив источников — условно
+
+- На полном desktop колонка источников справа **уже ок** и остаётся каноном Option D.
+- Drawer / fallback для узких окон и телефона нужен **только если** продукт реально используют в половинном окне рядом с тикетной системой или с телефона.
+- Если аудитория — почти всегда широкий монитор, Task 4 / мобильный sources-path можно отложить; desktop-колонку не ломать.
+- Если узкие окна нужны — источники не должны «пропадать в никуда»: кнопка «Источники» / citation открывает drawer с close, Escape и focus restore (см. Task 4 и breakpoints выше).
+
+### 2. Пустой экран с плитками ↔ чат
+
+- Option D должен быть виден целиком: два честных состояния, а не только «диалог уже открыт».
+- Пустой / новый чат → плитки «С чего начнём?» (и связанные CTA).
+- Есть сообщения → обычный чат с ответом и источниками; плитки скрыты.
+- «+ Новый чат» очищает сообщения и возвращает плиточный empty state (см. Task 6).
+- В прототипе это тоже стоит показать явно: сейчас плитки CSS-скрыты, из-за чего сигнатура Option D не читается.
+
+### 3. Читаемость
+
+- Мелкий текст: метаданные источников, timestamps, action pills — не ниже ~12px для читаемых UI-подписей (сейчас в прототипе местами 9–10px).
+- Кнопка отправки: не только «↑» — видимый текст «Отправить» и/или явный `aria-label`.
+- Контраст золотой кнопки: белый текст на `#A88656` слабоват (~3.4:1). Для primary CTA — более тёмный gold, тёмный текст на gold, или отдельный token для текста на brand-fill, с проверкой AA.
+- Зафиксировать в `theme.css` / компонентах при Task 2 и Task 5; в прототипе можно поправить заранее как визуальный эталон.
 
 ## Production file map
 
@@ -77,7 +108,7 @@ flowchart LR
 | [`static/css/theme.css`](../../static/css/theme.css) | light/dark tokens | Add Option D semantic token pairs |
 | [`static/style.css`](../../static/style.css) | shell, sidebar, chat, sources, responsive | Consolidate duplicate/competing layout blocks |
 | [`static/css/components.css`](../../static/css/components.css) | controls, tabs, toolbar, composer | Apply Option D component geometry |
-| [`static/css/markdown.css`](../../static/css/markdown.css) | answer typography | Ensure markdown/table/code readability in dark answer panel |
+| [`static/css/markdown.css`](../../static/css/markdown.css) | answer typography | Ensure markdown/table/code readability in light answer panel |
 | [`static/script.js`](../../static/script.js) | all interactions | Minimal changes for empty state and adaptive source state |
 | [`static/js/theme.js`](../../static/js/theme.js) | `data-theme` toggle | Preserve behavior |
 | [`static/js/clipboard.js`](../../static/js/clipboard.js) | copy observer | Keep `.message-content` on copyable bot content |
@@ -168,24 +199,26 @@ flowchart LR
 
 ## Task 4 — Adaptive source experience
 
+> **Приоритет:** desktop-колонка обязательна. Узкие окна / телефон — только если продукт там реально нужен (см. «Доработки после ревью прототипа» §1). Иначе отложить drawer-часть, не блокируя Tasks 5–6.
+
 **Files:** modify `static/style.css`, `static/script.js`, `templates/index.html`; create `tests/e2e/test_sources_panel.py`.
 
 1. Write browser tests for:
    - desktop sources column appears once an answer has sources;
    - source-button/citation focuses the matching source;
    - source document-open hint keeps working;
-   - at `980px` drawer fallback opens and `#closeSources` closes it;
-   - at `390px` sources remain reachable.
+   - *(если адаптив в scope)* at `980px` drawer fallback opens and `#closeSources` closes it;
+   - *(если адаптив в scope)* at `390px` sources remain reachable.
 2. Run them and confirm initial failure.
 3. Keep existing source data functions and API paths. Change only presentation state:
    - desktop `#sourcesPanel` is visible grid context;
    - `.open`/a new data attribute marks populated/focused state;
-   - narrow viewports recover existing translated drawer behavior.
+   - narrow viewports recover existing translated drawer behavior *(если в scope)*.
 4. Add focus restoration and Escape/close behavior only for drawer mode.
-5. Map production `.source-item--active`, `.source-title`, `.source-snippet`, `.source-relevance`, `.source-badge` to the approved compact card system.
-6. Verify stream answer → citation link → source list → document opening at desktop and mobile.
+5. Map production `.source-item--active`, `.source-title`, `.source-snippet`, `.source-relevance`, `.source-badge` to the approved compact card system; bump meta text to readable size (≥12px where labels must be read).
+6. Verify stream answer → citation link → source list → document opening at desktop and *(если в scope)* mobile.
 
-**Exit condition:** The accepted desktop column does not remove source access on mobile.
+**Exit condition:** Desktop sources column is the primary verify surface. If adaptive is in scope, compact widths never lose source access without a drawer replacement.
 
 ## Task 5 — Sidebar, chat and composer styling
 
@@ -197,37 +230,43 @@ flowchart LR
    - 250px desktop width;
    - brand masthead;
    - gold `#sidebarNewChatBtn`;
-   - rounded search and `.chat-list-item` cards;
+   - sharp-corner search and `.chat-list-item` cards;
    - full selected-card state;
    - footer clear action.
 4. Preserve dynamically emitted `.chat-list-item`, `.chat-title`, `.chat-date`, `.chat-actions` selectors.
 5. Restyle chat without changing semantic content:
-   - `.user-message` neutral compact surface;
-   - `.bot-message .message-content` graphitic answer panel;
-   - `markdown-content`, code/table/Mermaid/error blocks readable inside that panel;
-   - source/verify/feedback/export actions remain discoverable.
-6. Retune `.rag-toolbar`, advanced retrieval options, `.input-area`, `.message-form`, attachments and `#sendButton`.
+   - `.user-message` neutral compact surface, right-aligned;
+   - `.bot-message .message-content` light answer panel (white / line), left-aligned — not a dark reading surface;
+   - `markdown-content`, code/table/Mermaid/error blocks readable inside that light panel;
+   - source/verify/feedback/export actions remain discoverable; one primary action (e.g. sources);
+   - readable type scale: UI labels / source meta ≥12px where they must be read (см. «Доработки…» §3).
+6. Retune `.rag-toolbar`, advanced retrieval options, `.input-area`, `.message-form`, attachments and `#sendButton`:
+   - send control has visible «Отправить» text and/or explicit `aria-label` (not icon-only «↑»);
+   - primary gold CTA meets AA contrast (adjust fill and/or on-gold text token).
 7. Exercise long markdown, tables, code, Mermaid, typing, error and feedback states.
 
-**Exit condition:** The populated chat is the primary work surface, not a dashboard, and all streaming/clipboard semantics remain intact.
+**Exit condition:** The populated chat is the primary work surface, not a dashboard; streaming/clipboard semantics remain intact; readability fixes from §3 are in place.
 
 ## Task 6 — Empty state tiles with real routing
 
-**Files:** modify `templates/index.html`, `static/script.js`, `static/style.css`; create `tests/e2e/test_option_d_tiles.py`.
+> **Приоритет:** обязательно для «Option D целиком» — пустой экран с плитками ↔ populated chat (см. «Доработки после ревью прототипа» §2). Имеет смысл сначала починить переключение состояний и в прототипе.
+
+**Files:** modify `templates/index.html`, `static/script.js`, `static/style.css`; create `tests/e2e/test_option_d_tiles.py`. Also update the prototype so empty ↔ chat is demonstrable, not CSS-hidden by default.
 
 1. Write tests for a new/empty chat:
    - tile state appears only if there are no messages;
    - “Задать вопрос” focuses `#messageInput`;
    - “Продолжить диалог” calls `openChat(lastChatId)`;
    - “Управление базой” invokes `switchPanel('documentsPanel')` for admin and current access error for non-admin;
-   - “Найти источник” opens/focuses the available source discovery UI.
+   - “Найти источник” opens/focuses the available source discovery UI;
+   - “+ Новый чат” returns to the tile empty state (clears the visible conversation).
 2. Run tests and confirm fail.
 3. Add an accessible tile container with buttons/labels; do not use prototype inline `alert()` or text-only demo mutation.
 4. Wire tiles to `startNewChat`, `openChat`, `switchPanel` and source functions.
 5. Update `resetMessages`, `removeWelcomeMessage`, `loadChats`, `openChat` and export filtering so the tile state is not serialised as a chat message.
 6. Re-run tile and auth e2e tests.
 
-**Exit condition:** Tiles support real workflows and disappear for a populated conversation.
+**Exit condition:** Empty/new shows tiles; populated chat hides them; both states are reachable from the UI. Tiles support real workflows.
 
 ## Task 7 — Documents, admin and modal coherence
 
@@ -286,17 +325,18 @@ flowchart LR
 | Area | Required coverage |
 |---|---|
 | Chat | new/list/search/rename/delete/clear, active restore, stream abort, fallback, markdown/Mermaid, feedback, verify, export |
-| Sources | desktop column, citation focus, document opening, ≤980 drawer, ≤620 reachability |
+| Sources | desktop column, citation focus, document opening; ≤980/≤620 drawer only if adaptive in scope |
 | Roles | guest, user, admin; document/admin access guards |
 | Attachments | browse, paste image, preview/remove, send with no text |
 | Admin | upload, preview, reindex, overview, settings draft controls |
-| Accessibility | keyboard, focus, labels, contrast, `hidden`, reduced motion |
+| Accessibility | keyboard, focus, labels, contrast (incl. gold CTA), send label, `hidden`, reduced motion |
 | Viewports | 1440, 1024, 980, 768, 620, 390; light and dark |
 
 ## Definition of done
 
 1. Production UI matches the established Option D composition and palette.
 2. No API route, JS-bound DOM hook or current user workflow regresses.
-3. Sources are immediate on desktop and reachable at all compact widths.
-4. Backend suite, DOM contract, e2e and visual tests pass.
-5. Final screenshots are reviewed and `DESIGN.md` records the built system.
+3. Sources are immediate on desktop; on compact widths they stay reachable **if** adaptive scope is enabled (otherwise desktop-first is accepted).
+4. Empty/new chat shows tiles; populated chat does not; readability (type size, send label, gold CTA contrast) matches the visual contract.
+5. Backend suite, DOM contract, e2e and visual tests pass.
+6. Final screenshots are reviewed and `DESIGN.md` records the built system.

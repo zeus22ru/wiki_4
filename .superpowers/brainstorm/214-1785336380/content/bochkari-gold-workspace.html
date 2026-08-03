@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>БочкарИИ — рабочий интерфейс</title>
+  <style>
+    :root {
+      --gold: #A88656;
+      --sand: #D6BC8A;
+      --graphite: #212529;
+      --ink: #29313a;
+      --muted: #6c757d;
+      --line: #dfe3e8;
+      --line-dark: #cbd1d8;
+      --canvas: #f3f5f7;
+      --soft: #f8f9fa;
+      --white: #fff;
+      --green: #2d825e;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #13171c; color: var(--ink); font-family: "Segoe UI", Arial, sans-serif; }
+    .page { max-width: 1520px; margin: 0 auto; padding: 38px 26px 72px; }
+    .page > h1 { max-width: 820px; margin: 0; color: #f7f8fa; font-size: clamp(2rem, 4vw, 3.75rem); line-height: 1; letter-spacing: -.05em; }
+    .page > p { max-width: 72ch; margin: 17px 0 30px; color: #b9c0c9; line-height: 1.6; }
+    .notes { display: flex; gap: 9px; margin-bottom: 18px; color: #e7ebef; font-size: 12px; }
+    .notes span { padding: 6px 9px; border: 1px solid #4a535d; }
+    .app { min-height: 690px; display: grid; grid-template-columns: 246px minmax(0, 1fr) 320px; background: var(--white); border: 1px solid #cfd4da; box-shadow: 0 24px 55px rgba(0,0,0,.26); }
+    .sidebar { display: flex; flex-direction: column; min-width: 0; background: #fff; border-right: 1px solid var(--line); }
+    .sidebar-header { padding: 21px 16px 15px; border-bottom: 1px solid var(--line); }
+    .wordmark { margin: 0 0 19px; color: var(--graphite); font-size: 19px; font-weight: 900; letter-spacing: -.055em; }
+    .wordmark b { color: var(--gold); }
+    .new-chat { width: 100%; padding: 10px 12px; border: 1px solid var(--gold); background: var(--gold); color: #fff; font: inherit; font-size: 12px; font-weight: 700; cursor: pointer; }
+    .search-wrap { padding: 14px 16px; border-bottom: 1px solid var(--line); }
+    .search { width: 100%; padding: 9px 10px; border: 1px solid var(--line-dark); color: var(--ink); font: inherit; font-size: 12px; }
+    .history-label { padding: 15px 16px 8px; color: var(--muted); font-size: 10px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; }
+    .chat-list { display: grid; }
+    .chat { padding: 12px 16px; border-top: 1px solid var(--line); cursor: pointer; }
+    .chat.active { background: #f7f2eb; box-shadow: inset 3px 0 0 var(--gold); }
+    .chat strong { display: block; font-size: 12px; font-weight: 650; line-height: 1.35; }
+    .chat small { display: block; margin-top: 5px; color: var(--muted); font-size: 10px; }
+    .sidebar-footer { margin-top: auto; padding: 14px 16px; border-top: 1px solid var(--line); }
+    .clear { padding: 8px 0; border: 0; background: transparent; color: var(--muted); font: inherit; font-size: 11px; cursor: pointer; }
+
+    .workspace { display: grid; grid-template-rows: auto auto auto 1fr auto; min-width: 0; background: var(--canvas); }
+    .top { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 15px 22px; background: #fff; border-bottom: 1px solid var(--line); }
+    .title { margin: 0; font-size: 16px; letter-spacing: -.02em; }
+    .top-actions { display: flex; align-items: center; gap: 13px; color: var(--muted); font-size: 11px; }
+    .online { display: flex; align-items: center; gap: 6px; color: var(--green); font-weight: 650; }
+    .online::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--green); }
+    .user { padding-left: 13px; border-left: 1px solid var(--line); }
+    .sections { display: flex; gap: 23px; padding: 0 22px; background: #fff; border-bottom: 1px solid var(--line); }
+    .section { padding: 13px 0 11px; border-bottom: 2px solid transparent; color: var(--muted); font-size: 12px; font-weight: 650; }
+    .section.active { border-color: var(--gold); color: var(--graphite); }
+    .toolbar { display: flex; align-items: center; justify-content: space-between; gap: 15px; padding: 11px 22px; border-bottom: 1px solid var(--line); background: #f9fafb; }
+    .toolbar-left, .toolbar-right { display: flex; align-items: center; gap: 8px; }
+    .control-label { color: var(--muted); font-size: 11px; }
+    select, .ghost { height: 32px; padding: 0 10px; border: 1px solid var(--line-dark); background: #fff; color: var(--ink); font: inherit; font-size: 11px; }
+    .ghost { display: inline-flex; align-items: center; cursor: pointer; }
+    .advanced { display: flex; align-items: center; padding: 9px 22px; color: #69727d; background: #fff; border-bottom: 1px solid var(--line); font-size: 11px; }
+    .advanced::after { content: "⌄"; margin-left: auto; color: var(--gold); font-size: 15px; }
+    .chat-stage { min-height: 0; padding: 26px 30px; overflow: hidden; }
+    .message-user { width: fit-content; max-width: 78%; padding: 11px 13px; background: #e9ecef; font-size: 13px; line-height: 1.45; }
+    .message-assistant { max-width: 760px; margin-top: 16px; padding: 0 0 0 17px; border-left: 2px solid var(--gold); }
+    .answer-meta { margin-bottom: 9px; color: var(--gold); font-size: 10px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
+    .message-assistant h3 { margin: 0 0 10px; font-size: 17px; letter-spacing: -.025em; }
+    .message-assistant p { margin: 0 0 11px; color: #3e4853; font-size: 13px; line-height: 1.55; }
+    .citation { padding: 1px 3px; background: #f5ede1; color: #6b4f28; font-weight: 650; }
+    .answer-controls { display: flex; gap: 8px; margin-top: 16px; }
+    .answer-controls button { padding: 7px 9px; border: 1px solid var(--line-dark); background: #fff; color: #4b5661; font: inherit; font-size: 10px; }
+    .composer { display: grid; grid-template-columns: auto 1fr auto; gap: 9px; padding: 14px 22px; background: #fff; border-top: 1px solid var(--line); }
+    .attach, .send { width: 38px; border: 1px solid var(--line-dark); background: #fff; color: #68727d; font-size: 17px; }
+    .send { border-color: var(--gold); background: var(--gold); color: #fff; }
+    .composer input { min-width: 0; padding: 11px 12px; border: 1px solid #aeb8c4; color: var(--ink); font: inherit; font-size: 12px; }
+
+    .sources { min-width: 0; background: #fff; border-left: 1px solid var(--line); }
+    .sources-header { display: flex; align-items: center; justify-content: space-between; padding: 18px 17px 14px; border-bottom: 1px solid var(--line); }
+    .sources-header h2 { margin: 0; font-size: 14px; }
+    .sources-header span { color: var(--muted); font-size: 16px; }
+    .sources-note { padding: 12px 17px; color: var(--muted); border-bottom: 1px solid var(--line); font-size: 10px; line-height: 1.45; }
+    .source-item { padding: 15px 17px; border-bottom: 1px solid var(--line); }
+    .source-item h3 { margin: 0; color: #3b434c; font-size: 12px; line-height: 1.35; }
+    .source-item p { margin: 8px 0 10px; color: #69727d; font-size: 10px; line-height: 1.45; }
+    .source-meta { display: flex; flex-wrap: wrap; gap: 5px; }
+    .source-meta span { padding: 4px 6px; background: #f5f6f7; color: #6b747d; font-size: 9px; }
+    .source-meta .relevance { background: #f5ede1; color: #72532a; }
+    .source-item.active-source { background: #fcfaf7; box-shadow: inset 2px 0 0 var(--gold); }
+    @media (max-width: 1100px) { .app { grid-template-columns: 215px minmax(0,1fr) 285px; } }
+    @media (max-width: 820px) {
+      .page { padding: 28px 16px 52px; }
+      .app { grid-template-columns: 195px minmax(0,1fr); min-height: 650px; }
+      .sources { display: none; }
+      .chat-stage { padding: 22px; }
+    }
+    @media (max-width: 560px) {
+      .app { grid-template-columns: 1fr; }
+      .sidebar { display: none; }
+      .top { padding: 14px 16px; }
+      .sections, .toolbar, .advanced { padding-left: 16px; padding-right: 16px; }
+      .toolbar-right { display: none; }
+      .chat-stage { padding: 20px 16px; }
+      .composer { padding: 13px 16px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <h1>БочкарИИ: деловая рабочая среда в фирменной палитре</h1>
+    <p>Переработанный макет сохраняет реальное устройство продукта, но собирает его по принципам делового документооборота: плотная иерархия, единые панели, понятные состояния и источники как рабочий контекст ответа.</p>
+    <div class="notes"><span>Фирменное золото #A88656</span><span>Графит #212529</span><span>Светлая рабочая поверхность</span></div>
+
+    <section class="app" aria-label="Макет рабочего экрана БочкарИИ">
+      <aside class="sidebar">
+        <div class="sidebar-header">
+          <div class="wordmark">БОЧКАР<b>ИИ</b></div>
+          <button class="new-chat">+ Новый чат</button>
+        </div>
+        <div class="search-wrap"><input class="search" placeholder="Поиск по истории"></div>
+        <div class="history-label">Диалоги</div>
+        <div class="chat-list">
+          <div class="chat active"><strong>Недостаточно прав для работы с таблицей</strong><small>Сегодня, 13:18</small></div>
+          <div class="chat"><strong>Расхождение количества поддонов товара</strong><small>Сегодня, 13:17</small></div>
+          <div class="chat"><strong>Ошибка в журнале регистрации</strong><small>Сегодня, 13:17</small></div>
+          <div class="chat"><strong>Добавление пользователя в 1С</strong><small>Сегодня, 13:17</small></div>
+          <div class="chat"><strong>Состояние сертификации</strong><small>Вчера, 16:40</small></div>
+        </div>
+        <div class="sidebar-footer"><button class="clear">Очистить все чаты</button></div>
+      </aside>
+
+      <section class="workspace">
+        <header class="top">
+          <h2 class="title">Рабочее пространство</h2>
+          <div class="top-actions"><span class="online">Сервис доступен</span><span class="user">admin · admin</span><span>Выйти</span></div>
+        </header>
+        <nav class="sections" aria-label="Разделы">
+          <span class="section active">Чат</span>
+          <span class="section">База знаний</span>
+          <span class="section">Админка</span>
+        </nav>
+        <div class="toolbar">
+          <div class="toolbar-left"><span class="control-label">Стиль ответа</span><select><option>По шагам</option></select></div>
+          <div class="toolbar-right"><button class="ghost">Скачать диалог</button><button class="ghost">Сообщить о проблеме</button></div>
+        </div>
+        <div class="advanced">Дополнительно: поиск по базе</div>
+        <div class="chat-stage">
+          <div class="message-user">Нет прав на выполнение отчёта (не формируется)</div>
+          <article class="message-assistant">
+            <div class="answer-meta">Ответ по базе знаний · 3 источника</div>
+            <h3>Проверьте роль пользователя и обновите сессию</h3>
+            <p>У пользователя должна быть назначена роль для работы с таблицей в выбранной организации. После изменения роли завершите текущую сессию и войдите повторно.</p>
+            <p><span class="citation">Перезапуск сервиса не требуется</span> — это подтверждено в регламенте доступа и в аналогичных инцидентах.</p>
+            <div class="answer-controls"><button>Источники (3)</button><button>Проверить ответ</button><button>Копировать</button></div>
+          </article>
+        </div>
+        <form class="composer"><button class="attach" type="button" aria-label="Прикрепить файл">+</button><input placeholder="Введите вопрос… Ctrl+V — вставить скриншот"><button class="send" type="button" aria-label="Отправить">↑</button></form>
+      </section>
+
+      <aside class="sources">
+        <header class="sources-header"><h2>Источники</h2><span>×</span></header>
+        <div class="sources-note">Фрагменты, на которых основан ответ. Откройте источник для проверки контекста.</div>
+        <article class="source-item active-source">
+          <h3>Нет прав на выполнение отчёта (не формируется)</h3>
+          <p>Проверьте настройку прав в выбранной организации. Для работы с таблицей требуется назначенная роль…</p>
+          <div class="source-meta"><span class="relevance">Релевантность: 0.92</span><span>html</span><span>НСИ и администрирование</span></div>
+        </article>
+        <article class="source-item">
+          <h3>Права для работы с таблицей</h3>
+          <p>После изменения прав необходимо завершить текущую сессию пользователя и выполнить повторный вход…</p>
+          <div class="source-meta"><span class="relevance">Релевантность: 0.88</span><span>html</span></div>
+        </article>
+        <article class="source-item">
+          <h3>Инцидент INC-3896</h3>
+          <p>Причина: роль не применена к выбранной организации. Решение: назначить роль и обновить сессию…</p>
+          <div class="source-meta"><span class="relevance">Релевантность: 0.81</span><span>история инцидентов</span></div>
+        </article>
+      </aside>
+    </section>
+  </main>
+</body>
+</html>

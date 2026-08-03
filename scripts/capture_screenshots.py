@@ -96,7 +96,19 @@ class Config:
     scenarios: list[str]
 
 
-SCENARIOS = ["login", "new-chat", "answer-sources", "chat-list", "documents", "admin"]
+SCENARIOS = [
+    "login",
+    "new-chat",
+    "answer-sources",
+    "chat-list",
+    "documents",
+    "admin",
+    "option-d-empty",
+    "option-d-answer-sources",
+    "option-d-documents",
+    "option-d-admin",
+]
+DEFAULT_SCENARIOS = ["login", "new-chat", "answer-sources", "chat-list", "documents", "admin"]
 SCENARIO_FILES = {
     "login": "01-login.png",
     "new-chat": "02-new-chat.png",
@@ -104,6 +116,10 @@ SCENARIO_FILES = {
     "chat-list": "04-chat-list.png",
     "documents": "05-documents-admin.png",
     "admin": "06-admin-overview.png",
+    "option-d-empty": "option-d-empty.png",
+    "option-d-answer-sources": "option-d-answer-sources.png",
+    "option-d-documents": "option-d-documents.png",
+    "option-d-admin": "option-d-admin.png",
 }
 
 
@@ -135,7 +151,7 @@ def parse_args() -> Config:
         headed=args.headed,
         slow_mo=args.slow_mo,
         keep_data=args.keep_data,
-        scenarios=args.scenario or SCENARIOS,
+        scenarios=args.scenario or DEFAULT_SCENARIOS,
     )
 
 
@@ -376,6 +392,33 @@ def scenario_admin(page: Page, cfg: Config, _chat_ids: dict[str, int]) -> None:
     screenshot_to(page, cfg.output_dir / SCENARIO_FILES["admin"])
 
 
+def scenario_option_d_empty(page: Page, cfg: Config, chat_ids: dict[str, int]) -> None:
+    log("[option-d-empty] Пустой экран с плитками Option D")
+    page.goto(f"{cfg.base_url}/")
+    force_light_theme(page)
+    wait_for_logged_in_ui(page)
+    page.click("#sidebarNewChatBtn")
+    page.wait_for_selector("#emptyTiles:not([hidden])", timeout=10_000)
+    wait_overlays_gone(page)
+    screenshot_to(page, cfg.output_dir / SCENARIO_FILES["option-d-empty"])
+
+
+def scenario_option_d_answer_sources(page: Page, cfg: Config, chat_ids: dict[str, int]) -> None:
+    scenario_answer_sources(page, cfg, chat_ids)
+    # Re-save under Option D filename after the classic capture path.
+    screenshot_to(page, cfg.output_dir / SCENARIO_FILES["option-d-answer-sources"])
+
+
+def scenario_option_d_documents(page: Page, cfg: Config, chat_ids: dict[str, int]) -> None:
+    scenario_documents(page, cfg, chat_ids)
+    screenshot_to(page, cfg.output_dir / SCENARIO_FILES["option-d-documents"])
+
+
+def scenario_option_d_admin(page: Page, cfg: Config, chat_ids: dict[str, int]) -> None:
+    scenario_admin(page, cfg, chat_ids)
+    screenshot_to(page, cfg.output_dir / SCENARIO_FILES["option-d-admin"])
+
+
 SCENARIO_FUNCS = {
     "login": scenario_login,
     "new-chat": scenario_new_chat,
@@ -383,6 +426,10 @@ SCENARIO_FUNCS = {
     "chat-list": scenario_chat_list,
     "documents": scenario_documents,
     "admin": scenario_admin,
+    "option-d-empty": scenario_option_d_empty,
+    "option-d-answer-sources": scenario_option_d_answer_sources,
+    "option-d-documents": scenario_option_d_documents,
+    "option-d-admin": scenario_option_d_admin,
 }
 
 

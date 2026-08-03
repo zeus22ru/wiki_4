@@ -52,10 +52,18 @@ const attachmentPreview = document.getElementById('attachmentPreview');
 let pendingAttachments = [];
 const statusDot = document.getElementById('statusDot');
 const statusText = document.getElementById('statusText');
+const serviceStatus = document.getElementById('serviceStatus');
 const sourcesPanel = document.getElementById('sourcesPanel');
 const sourcesList = document.getElementById('sourcesList');
+const SOURCES_EMPTY_IDLE = 'Источники появятся после ответа';
+const SOURCES_EMPTY_NONE = 'Источники не найдены';
 const closeSources = document.getElementById('closeSources');
 const sidebarNewChatBtn = document.getElementById('sidebarNewChatBtn');
+const workspaceSidebar = document.getElementById('workspaceSidebar');
+const sidebarToggle = document.getElementById('sidebarToggle');
+const emptyTiles = document.getElementById('emptyTiles');
+const chatContainer = document.querySelector('.chat-container');
+const continueTileHint = document.getElementById('continueTileHint');
 const ragAdvancedToggle = document.getElementById('ragAdvancedToggle');
 const ragAdvancedPanel = document.getElementById('ragAdvancedPanel');
 const clearChatsBtn = document.getElementById('clearChatsBtn');
@@ -67,6 +75,7 @@ const minScoreInput = document.getElementById('minScoreInput');
 const exportChatBtn = document.getElementById('exportChatBtn');
 const uploadForm = document.getElementById('uploadForm');
 const documentFileInput = document.getElementById('documentFileInput');
+let _sourcesFocusRestore = null;
 const documentsList = document.getElementById('documentsList');
 const refreshDocumentsBtn = document.getElementById('refreshDocumentsBtn');
 const previewDocumentBtn = document.getElementById('previewDocumentBtn');
@@ -120,21 +129,30 @@ const issueModeHint = document.getElementById('issueModeHint');
 const issueSubmitBtn = document.getElementById('issueSubmitBtn');
 let issueStatus = {enabled: true, stub: true, types: []};
 let issueDraft = {sessionId: null, messageId: null};
-const assistantAvatarSrc = '/static/img/assistant-avatar.svg';
+/**
+ * Option D avatars — Lucide-style stroke SVGs (16–18px), square 36×36 / radius 4px.
+ * User: person outline. Assistant: book-open (KB answers) — not robot art / not AI sparkle fill.
+ */
+const USER_AVATAR_GLYPH = `
+<svg class="message-avatar__glyph" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+  <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/>
+  <circle cx="12" cy="7" r="4"/>
+</svg>`;
+const BOT_AVATAR_GLYPH = `
+<svg class="message-avatar__glyph" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+  <path d="M12 7v14"/>
+  <path d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"/>
+</svg>`;
 
 function createMessageAvatar(type) {
     const avatar = document.createElement('div');
-    avatar.className = 'message-avatar';
-
-    if (type === 'bot') {
-        const image = document.createElement('img');
-        image.src = assistantAvatarSrc;
-        image.alt = 'AI-ассистент';
-        avatar.appendChild(image);
-    } else {
-        avatar.textContent = 'Вы';
-    }
-
+    const isBot = type === 'bot';
+    avatar.className = isBot
+        ? 'message-avatar message-avatar--bot'
+        : 'message-avatar message-avatar--user';
+    avatar.setAttribute('role', 'img');
+    avatar.setAttribute('aria-label', isBot ? 'AI-ассистент' : 'Вы');
+    avatar.innerHTML = isBot ? BOT_AVATAR_GLYPH : USER_AVATAR_GLYPH;
     return avatar;
 }
 
@@ -615,12 +633,29 @@ document.addEventListener('DOMContentLoaded', () => {
     initializeAuth();
     initializeIssues();
     checkHealth();
+    initEmptyTiles();
+    initSidebarToggle();
+    // Start on Option D empty tiles (welcome bubble is legacy).
+    if (messagesContainer) {
+        const onlyWelcome = [...messagesContainer.querySelectorAll('.message')].every(
+            (node) => node.classList.contains('welcome-message') || node.classList.contains('system-message')
+        );
+        if (onlyWelcome) {
+            messagesContainer.innerHTML = '';
+        }
+        syncEmptyTilesState();
+    }
     loadChats().then(restoreActiveChatAfterReload);
     syncRagToolbarDefaults();
     setInterval(checkHealth, 30000);
 
     messageForm.addEventListener('submit', handleSubmit);
     closeSources.addEventListener('click', closeSourcesPanel);
+    document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape' && sourcesPanel?.classList.contains('open') && isSourcesDrawerMode()) {
+            closeSourcesPanel();
+        }
+    });
     if (sidebarNewChatBtn) {
         sidebarNewChatBtn.addEventListener('click', startNewChat);
     }
@@ -1016,15 +1051,121 @@ async function checkHealth() {
         const data = await apiJson('/api/health');
         if (data.ollama && data.database) {
             statusDot.className = 'status-dot online';
-            statusText.textContent = 'Онлайн';
+            statusText.textContent = 'Сервис доступен';
+            if (serviceStatus) serviceStatus.setAttribute('data-state', 'ok');
         } else {
             statusDot.className = 'status-dot offline';
             statusText.textContent = 'Ошибка подключения';
+            if (serviceStatus) serviceStatus.setAttribute('data-state', 'down');
         }
     } catch (error) {
         statusDot.className = 'status-dot offline';
         statusText.textContent = 'Ошибка подключения';
+        if (serviceStatus) serviceStatus.setAttribute('data-state', 'down');
     }
+}
+
+function conversationHasUserContent() {
+    if (!messagesContainer) return false;
+    const nodes = [...messagesContainer.querySelectorAll('.message')];
+    return nodes.some((node) => {
+        if (node.classList.contains('welcome-message') || node.classList.contains('system-message')) {
+            return false;
+        }
+        if (node.classList.contains('typing-indicator')) {
+            return false;
+        }
+        return true;
+    });
+}
+
+function syncEmptyTilesState() {
+    if (!emptyTiles || !chatContainer) return;
+    const isEmpty = !conversationHasUserContent();
+    emptyTiles.hidden = !isEmpty;
+    chatContainer.classList.toggle('is-empty', isEmpty);
+    chatContainer.classList.toggle('has-empty-tiles', isEmpty);
+    if (continueTileHint) {
+        const last = _chatListCache[0];
+        continueTileHint.textContent = last?.title
+            ? last.title
+            : 'Откройте последний диалог из истории.';
+    }
+}
+
+function handleEmptyTileAction(action) {
+    switch (action) {
+        case 'question':
+            messageInput?.focus();
+            break;
+        case 'source':
+            if ((currentSources && currentSources.length) || (currentCitations && currentCitations.length)) {
+                openSourcesPanel();
+            } else {
+                messageInput.value = messageInput.value || '';
+                messageInput.focus();
+                messageInput.placeholder = 'Уточните тему или название документа…';
+            }
+            break;
+        case 'continue': {
+            const last = _chatListCache[0];
+            if (last?.id) {
+                openChat(last.id);
+            } else {
+                showInlineError('Нет сохранённых диалогов для продолжения');
+            }
+            break;
+        }
+        case 'library':
+            if (currentAuth.role === 'admin') {
+                switchPanel('documentsPanel');
+            } else {
+                showInlineError('Раздел «База знаний» доступен только администратору');
+            }
+            break;
+        default:
+            break;
+    }
+}
+
+function initEmptyTiles() {
+    if (!emptyTiles) return;
+    emptyTiles.querySelectorAll('[data-tile]').forEach((tile) => {
+        tile.addEventListener('click', () => handleEmptyTileAction(tile.dataset.tile));
+    });
+    syncEmptyTilesState();
+}
+
+function initSidebarToggle() {
+    if (!sidebarToggle || !workspaceSidebar) return;
+    const closeSidebar = () => {
+        workspaceSidebar.classList.remove('is-open');
+        sidebarToggle.setAttribute('aria-expanded', 'false');
+        sidebarToggle.setAttribute('aria-label', 'Открыть список диалогов');
+    };
+    const openSidebar = () => {
+        workspaceSidebar.classList.add('is-open');
+        sidebarToggle.setAttribute('aria-expanded', 'true');
+        sidebarToggle.setAttribute('aria-label', 'Закрыть список диалогов');
+        chatSearchInput?.focus();
+    };
+    sidebarToggle.addEventListener('click', () => {
+        if (workspaceSidebar.classList.contains('is-open')) {
+            closeSidebar();
+        } else {
+            openSidebar();
+        }
+    });
+    document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape' && workspaceSidebar.classList.contains('is-open')) {
+            closeSidebar();
+            sidebarToggle.focus();
+        }
+    });
+}
+
+function isSourcesDrawerMode() {
+    return window.matchMedia('(max-width: 980px)').matches;
 }
 
 async function loadChats(search = '') {
@@ -1160,6 +1301,7 @@ function renderChatList(chats) {
     chatList.innerHTML = '';
     if (!chats.length) {
         chatList.innerHTML = '<div class="empty-state">История пуста</div>';
+        syncEmptyTilesState();
         return;
     }
     chats.forEach((chat) => {
@@ -1195,6 +1337,7 @@ function renderChatList(chats) {
         item.appendChild(actions);
         chatList.appendChild(item);
     });
+    syncEmptyTilesState();
 }
 
 async function openChat(chatId, options = {}) {
@@ -1229,6 +1372,7 @@ async function openChat(chatId, options = {}) {
         });
         updateActiveChatListItem();
         switchPanel('chatPanel');
+        syncEmptyTilesState();
         messageInput.focus();
     } catch (error) {
         if (options.restore) {
@@ -1341,21 +1485,25 @@ function resetMessages(withWelcome) {
     currentCitations = [];
     closeSourcesPanel();
     if (withWelcome) {
-        addMessage(WELCOME_MESSAGE, 'bot', {system: true, welcome: true});
+        // Option D: empty/new chat shows tiles instead of a welcome bubble.
+        syncEmptyTilesState();
+        return;
     }
+    syncEmptyTilesState();
 }
 
 function removeWelcomeMessage() {
     const welcome = messagesContainer.querySelector('.welcome-message');
     if (welcome) {
         welcome.remove();
-        return;
+    } else {
+        const first = messagesContainer.querySelector('.message.bot-message');
+        const text = first?.querySelector('.message-content')?.innerText?.trim();
+        if (text === WELCOME_MESSAGE) {
+            first.remove();
+        }
     }
-    const first = messagesContainer.querySelector('.message.bot-message');
-    const text = first?.querySelector('.message-content')?.innerText?.trim();
-    if (text === WELCOME_MESSAGE) {
-        first.remove();
-    }
+    syncEmptyTilesState();
 }
 
 async function sendChatClassic(message, payload = null) {
@@ -1992,6 +2140,7 @@ function addMessage(text, type, details = {}) {
     if (type === 'bot') {
         linkifySourceReferences(messageDiv, details.sources || [], details.citations || []);
     }
+    syncEmptyTilesState();
     scrollToBottom();
     return messageDiv;
 }
@@ -2143,10 +2292,10 @@ function showTypingIndicator() {
     const typingDiv = document.createElement('div');
     typingDiv.className = 'message bot-message';
     typingDiv.id = 'typingIndicator';
-    typingDiv.innerHTML = `
-        <div class="message-avatar"><img src="${assistantAvatarSrc}" alt="AI-ассистент"></div>
-        <div class="message-content"><div class="typing-indicator"><span></span><span></span><span></span></div></div>
-    `;
+    const content = document.createElement('div');
+    content.className = 'message-content';
+    content.innerHTML = '<div class="typing-indicator"><span></span><span></span><span></span></div>';
+    typingDiv.append(createMessageAvatar('bot'), content);
     messagesContainer.appendChild(typingDiv);
     scrollToBottom();
 }
@@ -2533,8 +2682,19 @@ function addIssueReportButton(messageEl, messageId) {
     content.appendChild(button);
 }
 
-function openSourcesPanel(options = {}) {
+function showSourcesEmpty(message = SOURCES_EMPTY_IDLE) {
+    if (!sourcesList) {
+        return;
+    }
     sourcesList.innerHTML = '';
+    const empty = document.createElement('p');
+    empty.className = 'empty-state';
+    empty.id = 'sourcesEmpty';
+    empty.textContent = message;
+    sourcesList.appendChild(empty);
+}
+
+function openSourcesPanel(options = {}) {
     const citations = currentCitations || [];
     const sources = currentSources || [];
     const max = Math.max(citations.length, sources.length);
@@ -2542,7 +2702,9 @@ function openSourcesPanel(options = {}) {
         ? options.focusIndex
         : findSourceIndexByTitle(options.focusTitle, sources, citations);
     if (!max) {
-        sourcesList.innerHTML = '<div class="empty-state">Источники не найдены</div>';
+        showSourcesEmpty(SOURCES_EMPTY_NONE);
+    } else {
+        sourcesList.innerHTML = '';
     }
     for (let i = 0; i < max; i += 1) {
         const source = sources[i] || {};
@@ -2585,6 +2747,11 @@ function openSourcesPanel(options = {}) {
         sourcesList.appendChild(sourceItem);
     }
     sourcesPanel.classList.add('open');
+    sourcesPanel.setAttribute('data-populated', max > 0 ? 'true' : 'false');
+    if (isSourcesDrawerMode()) {
+        _sourcesFocusRestore = document.activeElement;
+        closeSources?.focus();
+    }
     const activeSource = sourcesList.querySelector('.source-item--active');
     if (activeSource) {
         activeSource.scrollIntoView({block: 'nearest'});
@@ -2593,6 +2760,14 @@ function openSourcesPanel(options = {}) {
 
 function closeSourcesPanel() {
     sourcesPanel.classList.remove('open');
+    if (!(currentSources && currentSources.length) && !(currentCitations && currentCitations.length)) {
+        sourcesPanel.removeAttribute('data-populated');
+        showSourcesEmpty(SOURCES_EMPTY_IDLE);
+    }
+    if (_sourcesFocusRestore && typeof _sourcesFocusRestore.focus === 'function') {
+        _sourcesFocusRestore.focus();
+        _sourcesFocusRestore = null;
+    }
 }
 
 function fileTypeFromPath(path) {

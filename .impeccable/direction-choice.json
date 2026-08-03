@@ -1,0 +1,77 @@
+{
+  "title": "Три мира для БочкарИИ",
+  "question": "Ролль назначил «Радиожурнал». Оставь его, возьми альтернативу или перебрось.",
+  "options": [
+    {
+      "id": "assigned",
+      "label": "Радиожурнал",
+      "kicker": "THE ROLL",
+      "lineage": "диспетчерский радиожурнал / каналная стойка сопровождения",
+      "thesis": "Ответ — это эфир: каналы чатов, лог обменов и источники как записи с позывными.",
+      "palette": ["#2a2e32", "#c8d2c4", "#d4a017", "#e8ebe6", "#1a1c1e"],
+      "materials": ["матовый приборный металл", "фосфорная зелень LIVE", "янтарный TX LED", "бумажные ленты лога"],
+      "viewport": "Слева стойка каналов (чаты) с LIVE-индикатором; центр — лента обменов вопрос/ответ с метками времени; справа — источники как пронумерованные записи эфира; внизу — полоса передачи вместо чат-инпута.",
+      "risk": "Легко скатиться в милитари-косплей; нужен язык техподдержки, не НАТО.",
+      "sketch": ".impeccable/sketches/assigned.webp",
+      "hero": null,
+      "board": null
+    },
+    {
+      "id": "challenger-darkroom",
+      "label": "Проявочная",
+      "kicker": "CHALLENGER",
+      "lineage": "фотолаборатория под янтарным safelight",
+      "thesis": "Ответ проявляется из серого: источники — тест-полоски экспозиции, стрим — химия в кювете.",
+      "palette": ["#c47a12", "#1a1612", "#8a8a86", "#f2efe8", "#2b2824"],
+      "materials": ["янтарный safelight", "мокрая серебряная печать", "эмаль кювет", "карандашные пометки"],
+      "viewport": "Янтарный зал: слева сушильная линия прошлых «отпечатков» (чаты); центр — кювета, где ответ проявляется по мере стрима; справа — тест-полоски источников со ступенями релевантности.",
+      "risk": "Фотолаб далековат от стола тикета; без жёсткой привязки к источникам станет mood.",
+      "case": "Выигрывает ясность механизма (проявление + тест-полоски = цитаты); чуть слабее опознание аудитории сопровождения.",
+      "sketch": ".impeccable/sketches/challenger-darkroom.webp",
+      "hero": "https://impeccable.style/worlds/cards/signals-instruments-darkroom-safelight-bay-hero.webp",
+      "board": "https://impeccable.style/worlds/cards/signals-instruments-darkroom-safelight-bay.webp"
+    },
+    {
+      "id": "challenger-arcade",
+      "label": "Аркадный CRT",
+      "kicker": "CHALLENGER",
+      "lineage": "pixel-art экран аркадного автомата",
+      "thesis": "Тикет — уровень: сетка тайлов, сканлайны, палитровый закон для статусов и источников.",
+      "palette": ["#0a0a0c", "#5cff5c", "#ffd400", "#ff3b5c", "#3d7cff"],
+      "materials": ["фосфорный чёрный", "жирные пиксели", "сканлайны", "16-цветная спрайт-палитра"],
+      "viewport": "Чёрный playfield: слева список «комнат»-чатов по тайлам; центр — диалог в 8×8 caps и tile-grid; источники — спрайты rarity по палитровому закону; send — lit power-up.",
+      "risk": "Игровой HUD бьёт доверие к цитатам и корпоративный контекст.",
+      "case": "Слабо стыкуется: аркада читается как игрушка, не как on-prem база знаний для тикета.",
+      "sketch": ".impeccable/sketches/challenger-arcade.webp",
+      "hero": "https://impeccable.style/worlds/cards/medium-native-crt-arcade-pixel-glow-hero.webp",
+      "board": "https://impeccable.style/worlds/cards/medium-native-crt-arcade-pixel-glow.webp"
+    },
+    {
+      "id": "challenger-ikat",
+      "label": "Икат-сетка",
+      "kicker": "CHALLENGER",
+      "lineage": "индиго ikat: нити красят до тканья, края намеренно размыты",
+      "thesis": "Поиск — переплетение: hybrid retrieval как сдвиг нитей; ответ — мотив, собравшийся из смещений.",
+      "palette": ["#1a2744", "#e8e4dc", "#c43c2c", "#4a6fa5", "#9aa3b2"],
+      "materials": ["глубокий индиго", "непрокрашенная кромка нити", "madder-red активный регистр", "ткацкий модуль"],
+      "viewport": "Индиго-поле: сайдбар как план окраски (чаты); workspace — ткацкий рапорт, где ответ набирает мотив; источники — связанные группы нитей с видимым offset на швах.",
+      "risk": "Мягкие края ткани конфликтуют с жёсткой границей цитаты и админ-плотностью.",
+      "case": "Слабо стыкуется: красивая метафора retrieval, но оператор тикета не опознаёт свой стол.",
+      "sketch": ".impeccable/sketches/challenger-ikat.webp",
+      "hero": "https://impeccable.style/worlds/cards/textiles-weave-drape-fashion-ikat-ghost-grid-hero.webp",
+      "board": "https://impeccable.style/worlds/cards/textiles-weave-drape-fashion-ikat-ghost-grid.webp"
+    }
+  ],
+  "reroll": true,
+  "steer": true,
+  "canon": true,
+  "canonCard": {
+    "label": "Стандарт категории",
+    "thesis": "Сайдбар + чат + мягкий AI-chrome, как у знакомых ассистентов — на полном крафте.",
+    "viewport": "Слева история чатов, центр лента сообщений, справа источники карточками; нейтральный светлый shell, один корпоративный акцент.",
+    "sketch": ".impeccable/sketches/canon.webp",
+    "palette": ["#f7f7f5", "#1c1c1a", "#5b6ee1", "#ffffff"],
+    "materials": ["плоский soft UI", "скруглённые панели", "нейтральный sans"],
+    "risk": "Неотличим от соседних AI-чатов; механизм цитат не становится героем."
+  }
+}

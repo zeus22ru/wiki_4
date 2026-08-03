@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>БочкарИИ — элементы и движение</title>
+  <style>
+    :root { --gold:#A88656; --sand:#D6BC8A; --ink:#212529; --muted:#68717b; --line:#dde1e5; --canvas:#f4f5f6; --white:#fff; --mint:#d9f2eb; }
+    * { box-sizing: border-box; } body { margin:0; background:#12171c; color:#f5f7f8; font-family:"Segoe UI",Arial,sans-serif; }
+    .page { max-width:1500px; margin:0 auto; padding:38px 26px 72px; }
+    h1 { max-width:850px; margin:0; font-size:clamp(2rem,4vw,3.7rem); line-height:1; letter-spacing:-.05em; }
+    .intro { max-width:70ch; margin:17px 0 37px; color:#b9c2cc; line-height:1.6; }
+    .variant { margin:0 0 48px; cursor:pointer; outline:1px solid #38434e; outline-offset:7px; transition:transform .2s ease,outline-color .2s ease; }
+    .variant:hover,.variant.selected { transform:translateY(-2px); outline:2px solid #f4f6f8; }
+    .caption { display:grid; grid-template-columns:1.1fr 1fr 160px; align-items:start; gap:30px; margin-bottom:15px; }
+    .caption h2 { margin:0; font-size:1.55rem; letter-spacing:-.035em; }
+    .caption p { margin:0; color:#b9c2cc; font-size:.92rem; line-height:1.55; }
+    .pick { justify-self:end; padding:10px 12px; border:1px solid #8090a0; font-size:.8rem; font-weight:700; }
+    .pick::before { content:"Выбрать →"; }
+    .app { height:640px; display:grid; grid-template-columns:220px minmax(0,1fr); overflow:hidden; background:var(--canvas); color:var(--ink); box-shadow:0 25px 55px rgba(0,0,0,.28); }
+    .side { display:flex; flex-direction:column; padding:17px 14px; background:#fff; border-right:1px solid var(--line); }
+    .logo { margin:0 0 18px; font-size:19px; font-weight:900; letter-spacing:-.06em; }.logo b { color:var(--gold); }
+    .side button { font:inherit; cursor:pointer; }.new { padding:10px 11px; border:1px solid var(--gold); background:var(--gold); color:#fff; font-size:12px; font-weight:700; }
+    .search { width:100%; margin:13px 0; padding:9px; border:1px solid #cbd2d9; font:inherit; font-size:11px; }
+    .history-title { margin:5px 0 7px; color:var(--muted); font-size:10px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; }
+    .dialog { padding:10px 9px; border-top:1px solid var(--line); font-size:11px; line-height:1.35; }.dialog small { display:block; margin-top:4px; color:var(--muted); font-size:9px; }
+    .dialog.active { margin-left:-14px; padding-left:21px; background:#f8f1e7; box-shadow:inset 3px 0 0 var(--gold); }.wipe { margin-top:auto; padding:8px 0; border:0; background:transparent; color:var(--muted); font-size:10px; text-align:left; }
+    .tile-variant .app { background:var(--canvas); }
+    .tile-variant .side { gap:9px; padding:14px; background:var(--canvas); border-right:0; }
+    .tile-variant .logo { margin:0; padding:5px 3px 7px; }
+    .tile-variant .new { border:0; border-radius:14px; }
+    .tile-variant .search { margin:0; border-radius:12px; background:#fff; }
+    .tile-variant .history-title { margin:7px 2px 1px; }
+    .tile-variant .dialog { margin-bottom:7px; padding:11px; border:1px solid transparent; border-radius:12px; background:#fff; }
+    .tile-variant .dialog.active { margin-left:0; padding-left:11px; border-color:#ebddc9; background:#f8f1e7; box-shadow:none; }
+    .tile-variant .wipe { padding:10px 11px; border-radius:12px; background:#fff; }
+    .surface { min-width:0; display:grid; grid-template-rows:auto auto 1fr; }.top { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:14px 19px; background:#fff; border-bottom:1px solid var(--line); }.top strong { font-size:14px; }.status { color:#37745b; font-size:10px; font-weight:700; }.tabs { display:flex; gap:21px; padding:0 19px; background:#fff; border-bottom:1px solid var(--line); }.tab { padding:12px 0 10px; color:var(--muted); font-size:11px; font-weight:650; }.tab.active { border-bottom:2px solid var(--gold); color:var(--ink); }
+    .tile-stage { padding:24px; overflow:hidden; }.tile-stage h3 { margin:0 0 6px; font-size:20px; letter-spacing:-.03em; }.tile-stage > p { margin:0 0 19px; color:var(--muted); font-size:12px; }.tiles { display:grid; grid-template-columns:1fr 1fr; gap:12px; }.tile { min-height:164px; padding:18px; border-radius:18px; display:flex; flex-direction:column; justify-content:space-between; }.tile .icon { width:28px; height:28px; display:grid; place-items:center; border-radius:8px; font-size:14px; }.tile h4 { margin:13px 0 0; font-size:17px; line-height:1.12; letter-spacing:-.025em; }.tile p { margin:8px 0 0; font-size:11px; line-height:1.45; }.tile .cta { align-self:flex-end; padding:9px 15px; border-radius:999px; font-size:11px; font-weight:700; }.tile.dark { background:#263642; color:#fff; }.tile.dark .icon { background:rgba(255,255,255,.14); }.tile.dark .cta { background:var(--gold); color:#fff; }.tile.gold { background:var(--sand); color:#382c1e; }.tile.gold .icon { background:rgba(255,255,255,.6); }.tile.gold .cta { background:#fff; color:#513c20; }.tile.light { background:#fff; border:1px solid var(--line); }.tile.light .icon { background:var(--mint); }.tile.light .cta { border:1px solid var(--gold); color:#6c4d27; }
+    .motion-stage { display:grid; grid-template-columns:minmax(0,1fr) 270px; min-height:0; background:#f5f6f7; }.flow { display:flex; flex-direction:column; padding:24px; min-width:0; }.motion-controls { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:19px; color:var(--muted); font-size:11px; }.replay { padding:8px 10px; border:1px solid #c4ccd4; background:#fff; color:#424a53; font:inherit; font-size:10px; cursor:pointer; }.prompt { width:max-content; max-width:84%; padding:11px 13px; background:#e6eaee; font-size:12px; }.response { max-width:680px; margin-top:17px; padding:0 0 0 15px; border-left:2px solid var(--gold); }.response h3 { margin:0 0 9px; font-size:16px; letter-spacing:-.025em; }.response p { margin:0 0 10px; color:#46505b; font-size:12px; line-height:1.55; }.citation { padding:2px 4px; background:#f8eddb; color:#694b24; font-weight:650; }.composer { display:grid; grid-template-columns:1fr 38px; gap:8px; margin-top:auto; }.composer input { padding:11px; border:1px solid #b9c2cb; font:inherit; font-size:11px; }.composer button { border:0; background:var(--gold); color:#fff; font-size:16px; }.motion-sources { padding:20px 14px; background:#fff; border-left:1px solid var(--line); }.motion-sources h3 { margin:0 0 12px; font-size:13px; }.source { padding:11px 10px; border-top:1px solid var(--line); }.source b { display:block; font-size:11px; line-height:1.35; }.source span { display:block; margin-top:6px; color:var(--muted); font-size:9px; }.motion-note { margin-top:18px; padding:10px; background:#f8f1e7; color:#624822; font-size:10px; line-height:1.5; }
+    .motion-demo .prompt { animation:send .32s cubic-bezier(.16,1,.3,1) both; }.motion-demo .response { animation:answer .48s .18s cubic-bezier(.16,1,.3,1) both; }.motion-demo .citation { animation:cite .35s .5s cubic-bezier(.16,1,.3,1) both; }.motion-demo .motion-sources { animation:panel .42s .36s cubic-bezier(.16,1,.3,1) both; }
+    @keyframes send { from { transform:translateY(14px); opacity:0; } to { transform:none; opacity:1; } } @keyframes answer { from { transform:translateY(11px); opacity:0; clip-path:inset(0 0 100% 0); } to { transform:none; opacity:1; clip-path:inset(0 0 0 0); } } @keyframes cite { from { background:#fff; color:transparent; } to { background:#f8eddb; color:#694b24; } } @keyframes panel { from { transform:translateX(24px); opacity:.25; } to { transform:none; opacity:1; } }
+    @media (prefers-reduced-motion:reduce) { *,*::before,*::after { animation:none !important; transition:none !important; } }
+    @media (max-width:820px) { .page { padding:28px 16px 52px; }.caption { grid-template-columns:1fr; gap:12px; }.pick { justify-self:start; }.app { grid-template-columns:185px minmax(0,1fr); }.motion-stage { grid-template-columns:1fr; }.motion-sources { display:none; } }
+    @media (max-width:540px) { .app { grid-template-columns:1fr; height:620px; }.side { display:none; }.tile-stage,.flow { padding:18px; }.tiles { gap:8px; }.tile { min-height:145px; padding:14px; }.tile h4 { font-size:14px; }.tile p { display:none; } }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <h1>Ещё два варианта на базе выбранного рабочего контура</h1>
+    <p class="intro">Первый переносит в интерфейс БочкарИИ приёмы с вашего референса: крупные функциональные плитки, мягкие радиусы и кнопки-пилюли. Второй оставляет рабочую плотность, но добавляет осмысленное движение — только для объяснения действий и связи ответа с источником.</p>
+
+    <section class="variant tile-variant" tabindex="0" data-choice="diadoc-tile-workspace" onclick="toggleSelect(this)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleSelect(this)}">
+      <div class="caption"><h2>1. Плиточный рабочий стол</h2><p>Референс Диадока здесь читается в форме карточек и CTA: крупные функциональные блоки помогают начать задачу, не превращая операционный экран в маркетинговую страницу.</p><span class="pick"></span></div>
+      <div class="app">
+        <aside class="side"><div class="logo">БОЧКАР<b>ИИ</b></div><button class="new">+ Новый чат</button><input class="search" placeholder="Поиск по истории"><div class="history-title">Диалоги</div><div class="dialog active">Недостаточно прав для работы с таблицей<small>Сегодня, 13:18</small></div><div class="dialog">Расхождение количества поддонов<small>Сегодня, 13:17</small></div><div class="dialog">Ошибка в журнале регистрации<small>Вчера, 16:40</small></div><button class="wipe">Очистить все чаты</button></aside>
+        <section class="surface"><header class="top"><strong>Рабочее пространство</strong><span class="status">● Сервис доступен · admin</span></header><nav class="tabs"><span class="tab active">Чат</span><span class="tab">База знаний</span><span class="tab">Админка</span></nav><main class="tile-stage"><h3>С чего начнём?</h3><p>Выберите рабочее действие или продолжите последний диалог.</p><div class="tiles"><article class="tile dark"><div><span class="icon">↗</span><h4>Задать вопрос по базе</h4><p>Получите ответ с цитатами из внутренней документации.</p></div><span class="cta">Открыть чат</span></article><article class="tile gold"><div><span class="icon">⌕</span><h4>Найти источник</h4><p>Проверьте документ или откройте точный фрагмент по теме.</p></div><span class="cta">Искать</span></article><article class="tile light"><div><span class="icon">▤</span><h4>Продолжить диалог</h4><p>Недостаточно прав для работы с таблицей</p></div><span class="cta">Открыть</span></article><article class="tile light"><div><span class="icon">↻</span><h4>Управление базой</h4><p>Загрузите документ или запустите переиндексацию.</p></div><span class="cta">К базе знаний</span></article></div></main></section>
+      </div>
+    </section>
+
+    <section class="variant" tabindex="0" data-choice="motion-feedback-workspace" onclick="toggleSelect(this)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleSelect(this)}">
+      <div class="caption"><h2>2. Движение как доказательство</h2><p>Фокусный момент: вопрос запускает появление ответа и затем открывает релевантные источники. Обычные состояния занимают 150–300 мс, поэтому интерфейс не создаёт ощущения задержки.</p><span class="pick"></span></div>
+      <div class="app">
+        <aside class="side"><div class="logo">БОЧКАР<b>ИИ</b></div><button class="new">+ Новый чат</button><input class="search" placeholder="Поиск по истории"><div class="history-title">Диалоги</div><div class="dialog active">Недостаточно прав для работы с таблицей<small>Сегодня, 13:18</small></div><div class="dialog">Расхождение количества поддонов<small>Сегодня, 13:17</small></div><div class="dialog">Ошибка в журнале регистрации<small>Вчера, 16:40</small></div><button class="wipe">Очистить все чаты</button></aside>
+        <section class="surface motion-demo" id="motionDemo"><header class="top"><strong>Рабочее пространство</strong><span class="status">● Сервис доступен · admin</span></header><nav class="tabs"><span class="tab active">Чат</span><span class="tab">База знаний</span><span class="tab">Админка</span></nav><main class="motion-stage"><div class="flow"><div class="motion-controls"><span>Стиль ответа: По шагам</span><button class="replay" type="button" onclick="replayMotion(event)">Повторить движение</button></div><div class="prompt">Нет прав на выполнение отчёта (не формируется)</div><article class="response"><h3>Проверьте роль пользователя и обновите сессию</h3><p>Назначьте роль для работы с таблицей в выбранной организации и выполните повторный вход.</p><p><span class="citation">Источник подтверждает: перезапуск не требуется</span></p></article><form class="composer"><input placeholder="Введите следующий вопрос…"><button type="button">↑</button></form></div><aside class="motion-sources"><h3>Источники</h3><article class="source"><b>Права для работы с таблицей</b><span>Релевантность 0.92 · html</span></article><article class="source"><b>НСИ и администрирование</b><span>Релевантность 0.88 · html</span></article><div class="motion-note">Движение не декоративно: оно показывает цепочку «вопрос → ответ → источник» и отключается при Reduce Motion.</div></aside></main></section>
+      </div>
+    </section>
+  </main>
+  <script>
+    function replayMotion(event) {
+      event.stopPropagation();
+      const demo = document.getElementById('motionDemo');
+      demo.classList.remove('motion-demo');
+      void demo.offsetWidth;
+      demo.classList.add('motion-demo');
+    }
+  </script>
+</body>
+</html>

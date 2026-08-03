@@ -1,202 +1,250 @@
-/* Единый набор дизайн-токенов для светлой темы */
+/* Option D — фирменные токены светлой темы (БочкарИИ) */
 :root {
-    --primary-color: #7c5a22;
-    --primary-hover: #5d4218;
-    --primary-light: rgba(124, 90, 34, 0.14);
-    --primary-soft: #f5ead7;
-    --accent-color: #c4933a;
+    /* Brand */
+    --primary-color: #A88656;
+    --primary-hover: #8f7044;
+    --primary-light: rgba(168, 134, 86, 0.14);
+    --primary-soft: #f8f1e7;
+    --on-primary: #ffffff;
+    --accent-color: #A88656;
+    --accent-sand: #D6BC8A;
+    --accent-mint: #D9F2EB;
 
-    --bg-color: #f4f1eb;
-    --chat-bg: #fffdf8;
-    --surface-color: #fffdf8;
-    --surface-muted: #faf7ef;
-    --surface-elevated: #fffdf8;
+    /* Surfaces */
+    --workspace-canvas: #F4F5F6;
+    --bg-color: #F4F5F6;
+    --chat-bg: #F4F5F6;
+    --surface-color: #FFFFFF;
+    --surface-muted: #F4F5F6;
+    --surface-elevated: #FFFFFF;
 
-    --sidebar-bg: rgba(255, 253, 248, 0.9);
-    --sidebar-text: #25211d;
-    --sidebar-border: #ded5c7;
-    --sidebar-hover: #f5ead7;
+    --sidebar-bg: #F4F5F6;
+    --sidebar-text: #212529;
+    --sidebar-border: #DDE1E5;
+    --sidebar-hover: #f8f1e7;
+    --sidebar-active-bg: #f8f1e7;
+    --sidebar-active-border: #ebddc9;
 
-    --user-message-bg: linear-gradient(135deg, #7c5a22 0%, #5d4218 100%);
-    --user-message-text: #ffffff;
-    --bot-message-bg: #fffdf8;
-    --bot-message-text: #25211d;
-    --bot-message-border: #ded5c7;
+    /* Messages — Option D: user neutral right, assistant light panel */
+    --user-message-bg: #ebe4d8;
+    --user-message-text: #212529;
+    --bot-message-bg: #FFFFFF;
+    --bot-message-text: #212529;
+    --bot-message-border: #DDE1E5;
 
-    --border-color: #ded5c7;
-    --border-strong: #c9b99f;
-    --text-color: #25211d;
-    --secondary-text: #71695f;
-    --muted-text: #9a8d7c;
+    --border-color: #DDE1E5;
+    --border-strong: #cad2d9;
+    --text-color: #212529;
+    --secondary-text: #68717B;
+    --muted-text: #68717B;
 
-    --success-color: #3f8f58;
-    --error-color: #b84a3d;
+    --success-color: #2f9e68;
+    --error-color: #c94a4a;
     --warning-color: #b7791f;
+    --status-ok: #2f9e68;
+    --status-down: #c94a4a;
 
-    --input-bg: #fffdf8;
-    --input-border: #c9b99f;
-    --input-placeholder: #9a8d7c;
-    --focus-ring: rgba(124, 90, 34, 0.18);
+    --input-bg: #FFFFFF;
+    --input-border: #b9c2cb;
+    --input-placeholder: #68717B;
+    --focus-ring: rgba(168, 134, 86, 0.28);
 
-    --shadow-sm: 0 4px 12px rgba(72, 55, 35, 0.08);
-    --shadow-md: 0 18px 42px rgba(72, 55, 35, 0.14);
-    --shadow-color: rgba(72, 55, 35, 0.16);
+    --shadow-sm: 0 2px 8px rgba(33, 37, 41, 0.06);
+    --shadow-md: 0 10px 20px rgba(33, 37, 41, 0.11);
+    --shadow-color: rgba(33, 37, 41, 0.12);
 
+    /* Geometry — one radius everywhere */
+    --radius: 4px;
     --radius-sm: 4px;
-    --radius-md: 8px;
-    --radius-lg: 12px;
-    --radius-xl: 14px;
+    --radius-md: 4px;
+    --radius-lg: 4px;
+    --radius-xl: 4px;
+
+    /* Type scale (readable floor ≥12px) */
+    --text-xs: 12px;
+    --text-sm: 13px;
+    --text-md: 14px;
+    --text-lg: 16px;
+    --text-xl: 20px;
+    --text-2xl: 28px;
+    --lh: 1.45;
 
     --control-height: 2.375rem;
     --control-height-lg: 2.75rem;
-    --btn-font-size: 0.875rem;
-    --btn-font-weight: 600;
+    --btn-font-size: var(--text-xs);
+    --btn-font-weight: 700;
     --btn-padding-x: 0.85rem;
     --btn-icon-size: 2.375rem;
-    --btn-shadow-primary: 0 4px 14px rgba(124, 90, 34, 0.22);
+    --btn-shadow-primary: none;
 
     --mono-font: 'Fira Code', 'JetBrains Mono', 'Consolas', 'Monaco', 'Courier New', monospace;
-    --code-bg: #f5ead7;
-    --code-text: #25211d;
-    --code-block-bg: #2a241d;
+    --code-bg: #f4f5f6;
+    --code-text: #212529;
+    --code-block-bg: #2a2f35;
     --code-block-text: #e5e7eb;
-    --blockquote-bg: #faf7ef;
-    --blockquote-border: #c4933a;
-    --table-header-bg: #f5ead7;
-    --table-border: #ded5c7;
-    --table-hover: #faf7ef;
+    --blockquote-bg: #f8f1e7;
+    --blockquote-border: #A88656;
+    --table-header-bg: #f4f5f6;
+    --table-border: #DDE1E5;
+    --table-hover: #f8f1e7;
 
-    --scrollbar-track: #eee6d9;
-    --scrollbar-thumb: #c9b99f;
+    --scrollbar-track: #eef0f2;
+    --scrollbar-thumb: #cad2d9;
 
-    --sources-panel-bg: #fffdf8;
-    --sources-panel-border: #ded5c7;
-    --copy-btn-bg: #faf7ef;
-    --copy-btn-hover: #f5ead7;
-    --copy-btn-text: #71695f;
-    --toast-bg: #25211d;
+    --sources-panel-bg: #FFFFFF;
+    --sources-panel-border: #DDE1E5;
+    --source-active-bg: #fcfaf7;
+    --source-active-border: #e4c99e;
+    --copy-btn-bg: #FFFFFF;
+    --copy-btn-hover: #f4f5f6;
+    --copy-btn-text: #68717B;
+    --toast-bg: #212529;
     --toast-text: #ffffff;
 
-    --header-bg: rgba(255, 253, 248, 0.76);
-    --header-border: #ded5c7;
-    --header-text: #25211d;
-    --badge-bg: #f5ead7;
-    --badge-text: #5d4218;
-    --link-color: #7c5a22;
-    --link-hover: #5d4218;
+    --header-bg: #FFFFFF;
+    --header-border: #DDE1E5;
+    --header-text: #212529;
+    --badge-bg: rgba(168, 134, 86, 0.14);
+    --badge-text: #5a4322;
+    --link-color: #8f7044;
+    --link-hover: #6b4d26;
 }
 
-/* Переменные для тёмной темы */
+/* Option D — тёмная тема (явные семантические пары, без light-fallback) */
 [data-theme="dark"] {
-    --primary-color: #d3a858;
-    --primary-hover: #f0c979;
-    --primary-light: rgba(211, 168, 88, 0.18);
-    --primary-soft: rgba(211, 168, 88, 0.13);
-    --accent-color: #f0c979;
+    --primary-color: #D6BC8A;
+    --primary-hover: #e4c99e;
+    --primary-light: rgba(214, 188, 138, 0.18);
+    --primary-soft: rgba(214, 188, 138, 0.12);
+    --on-primary: #2a2114;
+    --accent-color: #D6BC8A;
+    --accent-sand: #A88656;
+    --accent-mint: #2a4a40;
 
-    --bg-color: #17130f;
-    --chat-bg: #211b15;
-    --surface-color: #282118;
-    --surface-muted: #1d1812;
-    --surface-elevated: #2d251b;
+    --workspace-canvas: #1a1d21;
+    --bg-color: #1a1d21;
+    --chat-bg: #1a1d21;
+    --surface-color: #24282d;
+    --surface-muted: #1f2328;
+    --surface-elevated: #2c3138;
 
-    --sidebar-bg: rgba(33, 27, 21, 0.92);
-    --sidebar-text: #f4eadb;
-    --sidebar-border: #443827;
-    --sidebar-hover: rgba(211, 168, 88, 0.12);
+    --sidebar-bg: #1a1d21;
+    --sidebar-text: #e8eaed;
+    --sidebar-border: #343a42;
+    --sidebar-hover: rgba(214, 188, 138, 0.12);
+    --sidebar-active-bg: rgba(214, 188, 138, 0.14);
+    --sidebar-active-border: #A88656;
 
-    --user-message-bg: linear-gradient(135deg, #8c6628 0%, #5d4218 100%);
-    --user-message-text: #ffffff;
-    --bot-message-bg: #2d251b;
-    --bot-message-text: #f4eadb;
-    --bot-message-border: #443827;
+    --user-message-bg: #343a42;
+    --user-message-text: #e8eaed;
+    --bot-message-bg: #24282d;
+    --bot-message-text: #e8eaed;
+    --bot-message-border: #343a42;
 
-    --border-color: #443827;
-    --border-strong: #5f4f37;
-    --text-color: #f4eadb;
-    --secondary-text: #c4b49b;
-    --muted-text: #8f806a;
+    --border-color: #343a42;
+    --border-strong: #4a515a;
+    --text-color: #e8eaed;
+    --secondary-text: #9aa3ad;
+    --muted-text: #9aa3ad;
 
-    --success-color: #22c55e;
-    --error-color: #f87171;
-    --warning-color: #f59e0b;
+    --success-color: #3cb878;
+    --error-color: #e06b6b;
+    --warning-color: #e0a84a;
+    --status-ok: #3cb878;
+    --status-down: #e06b6b;
 
-    --input-bg: #1d1812;
-    --input-border: #5f4f37;
-    --input-placeholder: #8f806a;
-    --focus-ring: rgba(211, 168, 88, 0.24);
+    --input-bg: #1f2328;
+    --input-border: #4a515a;
+    --input-placeholder: #9aa3ad;
+    --focus-ring: rgba(214, 188, 138, 0.28);
 
-    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.25);
-    --shadow-md: 0 18px 42px rgba(0, 0, 0, 0.32);
-    --shadow-color: rgba(0, 0, 0, 0.38);
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
+    --shadow-md: 0 10px 24px rgba(0, 0, 0, 0.4);
+    --shadow-color: rgba(0, 0, 0, 0.45);
 
-    --code-bg: #3a3023;
-    --code-text: #f4eadb;
-    --code-block-bg: #100d0a;
-    --code-block-text: #f4eadb;
-    --blockquote-bg: rgba(211, 168, 88, 0.08);
-    --blockquote-border: #d3a858;
-    --table-header-bg: #2d251b;
-    --table-border: #443827;
-    --table-hover: rgba(211, 168, 88, 0.08);
+    --radius: 4px;
+    --radius-sm: 4px;
+    --radius-md: 4px;
+    --radius-lg: 4px;
+    --radius-xl: 4px;
 
-    --scrollbar-track: #1d1812;
-    --scrollbar-thumb: #5f4f37;
+    --text-xs: 12px;
+    --text-sm: 13px;
+    --text-md: 14px;
+    --text-lg: 16px;
+    --text-xl: 20px;
+    --text-2xl: 28px;
+    --lh: 1.45;
 
-    --sources-panel-bg: #211b15;
-    --sources-panel-border: #443827;
+    --code-bg: #2c3138;
+    --code-text: #e8eaed;
+    --code-block-bg: #121418;
+    --code-block-text: #e8eaed;
+    --blockquote-bg: rgba(214, 188, 138, 0.08);
+    --blockquote-border: #D6BC8A;
+    --table-header-bg: #2c3138;
+    --table-border: #343a42;
+    --table-hover: rgba(214, 188, 138, 0.08);
+
+    --scrollbar-track: #1f2328;
+    --scrollbar-thumb: #4a515a;
+
+    --sources-panel-bg: #24282d;
+    --sources-panel-border: #343a42;
+    --source-active-bg: rgba(214, 188, 138, 0.1);
+    --source-active-border: #A88656;
     --copy-btn-bg: rgba(255, 255, 255, 0.06);
     --copy-btn-hover: rgba(255, 255, 255, 0.12);
-    --copy-btn-text: #9aa8bd;
-    --toast-bg: #e5edf7;
-    --toast-text: #0b1120;
+    --copy-btn-text: #9aa3ad;
+    --toast-bg: #e8eaed;
+    --toast-text: #1a1d21;
 
-    --header-bg: rgba(33, 27, 21, 0.9);
-    --header-border: #443827;
-    --header-text: #f4eadb;
-    --badge-bg: rgba(211, 168, 88, 0.14);
-    --badge-text: #f0c979;
-    --link-color: #f0c979;
-    --link-hover: #ffe2a0;
+    --header-bg: #24282d;
+    --header-border: #343a42;
+    --header-text: #e8eaed;
+    --badge-bg: rgba(214, 188, 138, 0.14);
+    --badge-text: #D6BC8A;
+    --link-color: #D6BC8A;
+    --link-hover: #e4c99e;
 }
 
-/* Переключатель тем */
+/* Переключатель тем — Option D flat (tab sibling) */
 .theme-toggle {
-    display: flex;
+    display: inline-flex;
     align-items: center;
     justify-content: center;
     flex: 0 0 auto;
-    gap: 0.5rem;
-    width: 38px;
-    height: 38px;
-    padding: 0.55rem;
-    background: var(--copy-btn-bg);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-md);
+    gap: 0;
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: var(--radius);
     cursor: pointer;
-    transition: all 0.2s ease;
-    color: var(--text-color);
-    font-size: 0.875rem;
+    transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+    color: var(--secondary-text);
+    font-size: var(--text-xs);
     line-height: 0;
     overflow: hidden;
-    box-shadow: var(--shadow-sm);
+    box-shadow: none;
 }
 
 .theme-toggle:hover {
-    background: var(--copy-btn-hover);
+    background: transparent;
     border-color: var(--primary-color);
     color: var(--primary-color);
 }
 
 .theme-toggle svg {
-    width: 18px;
-    height: 18px;
-    flex: 0 0 18px;
-    transition: transform 0.3s ease;
+    width: 16px;
+    height: 16px;
+    flex: 0 0 16px;
+    transition: transform 0.2s ease;
 }
 
 .theme-toggle:hover svg {
-    transform: rotate(15deg);
+    transform: rotate(12deg);
 }
 
 /* Иконка солнца (светлая тема) */

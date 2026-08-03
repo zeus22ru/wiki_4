@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>БочкарИИ — реальные варианты интерфейса</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #0f1720; color: #eef3fa; font-family: "Segoe UI", Arial, sans-serif; }
+    .page { max-width: 1500px; padding: 38px 28px 70px; margin: 0 auto; }
+    h1 { max-width: 920px; margin: 0; font-size: clamp(2rem, 3.6vw, 3.75rem); letter-spacing: -.045em; line-height: 1; }
+    .intro { max-width: 68ch; margin: 18px 0 38px; color: #b5c0d0; line-height: 1.6; }
+    .option { margin: 0 0 40px; cursor: pointer; outline: 1px solid #314054; outline-offset: 6px; transition: outline-color .2s ease, transform .2s ease; }
+    .option:hover, .option.selected { outline: 2px solid #f3f7fb; transform: translateY(-2px); }
+    .option:focus-visible { outline: 3px solid #f3f7fb; }
+    .caption { display: grid; grid-template-columns: 1.2fr 1fr 170px; gap: 28px; align-items: start; margin-bottom: 14px; }
+    .caption h2 { margin: 0; font-size: 1.55rem; letter-spacing: -.03em; }
+    .caption p { margin: 0; color: #aebccd; font-size: .92rem; line-height: 1.55; }
+    .select { justify-self: end; padding: 11px 14px; border: 1px solid #7594b5; color: #e9f2fb; background: transparent; font-weight: 700; font-size: .78rem; }
+    .select::before { content: "Выбрать →"; }
+    .app { height: 640px; display: grid; grid-template-columns: 245px minmax(0,1fr); overflow: hidden; font-size: 12px; line-height: 1.35; }
+    .side { padding: 18px 14px; display: flex; flex-direction: column; }
+    .brand { margin: 0; font-size: 22px; letter-spacing: -.06em; font-weight: 900; }
+    .new-chat { margin: 18px 0 11px; width: 100%; padding: 10px; border: 0; font: inherit; font-weight: 750; cursor: pointer; }
+    .search { width: 100%; padding: 10px 11px; font: inherit; }
+    .history { display: grid; gap: 8px; margin-top: 14px; }
+    .history-item { padding: 11px; font-size: 11px; line-height: 1.35; }
+    .history-item small { display: block; margin-top: 5px; font-size: 9px; }
+    .side-bottom { margin-top: auto; padding-top: 14px; font-size: 10px; }
+    .work { display: grid; grid-template-rows: auto auto 1fr auto; min-width: 0; }
+    .topbar { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 14px 20px; }
+    .status { font-size: 10px; font-weight: 700; }
+    .tabs { display: flex; gap: 5px; padding: 9px 20px; }
+    .tab { padding: 8px 12px; font-weight: 650; font-size: 11px; }
+    .stage { display: grid; grid-template-columns: minmax(0, 1fr) 275px; min-height: 0; }
+    .conversation { display: flex; flex-direction: column; min-width: 0; padding: 22px 24px; }
+    .toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 17px; }
+    .toolbar select { padding: 8px; font: inherit; font-size: 10px; }
+    .answer { max-width: 740px; }
+    .question { width: max-content; max-width: 86%; padding: 10px 14px; border-radius: 10px 10px 10px 2px; }
+    .response { margin-top: 17px; padding: 16px 17px; }
+    .response h3 { margin: 0 0 10px; font-size: 15px; }
+    .response p { max-width: 70ch; margin: 0 0 10px; }
+    .answer-actions { display: flex; gap: 8px; margin-top: 14px; }
+    .answer-actions span { padding: 6px 9px; font-size: 10px; }
+    .composer { margin-top: auto; display: flex; gap: 8px; padding-top: 22px; }
+    .composer input { flex: 1; padding: 13px 14px; font: inherit; }
+    .composer button { width: 44px; border: 0; font-size: 17px; }
+    .sources { padding: 21px 14px; overflow: hidden; }
+    .sources h3 { margin: 0 0 15px; font-size: 14px; }
+    .source { margin-bottom: 10px; padding: 11px; }
+    .source strong { display: block; font-size: 11px; line-height: 1.3; }
+    .source p { margin: 7px 0; font-size: 10px; line-height: 1.45; }
+    .source small { font-size: 9px; }
+
+    .calm { background: #eff3f8; color: #172334; }
+    .calm .side { background: #172b46; color: #edf4fc; }
+    .calm .new-chat, .calm .composer button { background: #2768d9; color: white; }
+    .calm .search { border: 1px solid #59708d; background: #213954; color: white; }
+    .calm .search::placeholder { color: #c2d0df; }
+    .calm .history-item { background: #213954; color: #f5f9fd; }
+    .calm .history-item.active { background: #2b5b94; }
+    .calm .history-item small, .calm .side-bottom { color: #b9c9da; }
+    .calm .topbar { background: #fbfcfe; border-bottom: 1px solid #d8e1ed; }
+    .calm .brand { color: #173b70; }
+    .calm .status { color: #23734f; }
+    .calm .tabs { background: #f8fafd; border-bottom: 1px solid #d8e1ed; }
+    .calm .tab.active { background: #dce9fd; color: #1d56ad; }
+    .calm .conversation { background: #f4f7fb; }
+    .calm .question { background: #e4ebf4; }
+    .calm .response { background: white; box-shadow: 0 12px 28px rgba(34, 58, 89, .1); }
+    .calm .response h3 { color: #1e4f9f; }
+    .calm .answer-actions span { background: #e9f0fc; color: #295aa6; }
+    .calm .composer input { border: 1px solid #9cb3ce; background: white; }
+    .calm .sources { background: #e8eef6; border-left: 1px solid #d1dce9; }
+    .calm .source { background: #f9fbff; border: 1px solid #d6e1ef; }
+    .calm .source strong { color: #1f559f; }
+
+    .graphite { background: #131920; color: #e6ebf2; }
+    .graphite .side { background: #10161d; border-right: 1px solid #2e3a48; }
+    .graphite .new-chat, .graphite .composer button { background: #c98629; color: #17130e; }
+    .graphite .search { border: 1px solid #3b4b5e; background: #17222d; color: #dce7f2; }
+    .graphite .history-item { background: #17222d; color: #dce7f2; border: 1px solid #26384a; }
+    .graphite .history-item.active { border-color: #c98629; }
+    .graphite .history-item small, .graphite .side-bottom { color: #8fa4b9; }
+    .graphite .topbar { background: #151d26; border-bottom: 1px solid #2d3948; }
+    .graphite .brand { color: #e5edf7; }
+    .graphite .status { color: #8bc3a0; }
+    .graphite .tabs { background: #151d26; border-bottom: 1px solid #2d3948; }
+    .graphite .tab.active { background: #293746; color: #f1c47d; }
+    .graphite .conversation { background: #171f28; }
+    .graphite .question { background: #273545; }
+    .graphite .response { background: #202b37; border: 1px solid #344556; }
+    .graphite .response h3 { color: #f0c278; }
+    .graphite .answer-actions span { background: #293746; color: #bfcee0; }
+    .graphite .composer input { border: 1px solid #465b70; background: #111922; color: #e8eff7; }
+    .graphite .sources { background: #111922; border-left: 1px solid #2e3a48; }
+    .graphite .source { background: #1b2632; border: 1px solid #2e3d4d; }
+    .graphite .source strong { color: #e8c17e; }
+
+    .civic { background: #f7f8fb; color: #17202d; }
+    .civic .side { background: #ffffff; border-right: 1px solid #dfe5ee; }
+    .civic .new-chat, .civic .composer button { background: #193d7e; color: white; }
+    .civic .search { border: 1px solid #c8d2e1; background: #f7f9fc; }
+    .civic .history-item { background: #f6f8fb; border-left: 2px solid transparent; }
+    .civic .history-item.active { border-left-color: #193d7e; background: #e9eef8; }
+    .civic .history-item small, .civic .side-bottom { color: #68778b; }
+    .civic .topbar { background: white; border-bottom: 1px solid #e1e6ee; }
+    .civic .brand { color: #193d7e; }
+    .civic .status { color: #277650; }
+    .civic .tabs { background: white; border-bottom: 1px solid #e1e6ee; }
+    .civic .tab.active { border-bottom: 2px solid #193d7e; color: #193d7e; }
+    .civic .conversation { background: #f7f8fb; }
+    .civic .question { background: #e9eef8; }
+    .civic .response { background: white; border-top: 3px solid #193d7e; }
+    .civic .response h3 { color: #193d7e; }
+    .civic .answer-actions span { background: #edf1f8; color: #193d7e; }
+    .civic .composer input { border: 1px solid #bfcada; background: white; }
+    .civic .sources { background: #ffffff; border-left: 1px solid #e1e6ee; }
+    .civic .source { background: #f8faff; border-bottom: 1px solid #dae2ee; }
+    .civic .source strong { color: #193d7e; }
+    @media (max-width: 850px) {
+      .page { padding: 28px 17px 54px; }
+      .caption { grid-template-columns: 1fr; gap: 12px; }
+      .select { justify-self: start; }
+      .app { height: 600px; grid-template-columns: 190px minmax(0,1fr); }
+      .stage { grid-template-columns: minmax(0,1fr); }
+      .sources { display: none; }
+    }
+    @media (max-width: 560px) {
+      .app { grid-template-columns: 1fr; height: 630px; }
+      .side { display: none; }
+      .topbar { padding: 13px 15px; }
+      .tabs { padding: 8px 15px; overflow: hidden; }
+      .conversation { padding: 17px 15px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <h1>Три редизайна на реальной рабочей схеме БочкарИИ</h1>
+    <p class="intro">Это не абстрактные карточки: в каждом превью сохранены реальные зоны продукта — история диалогов, чат, стили ответа, источники, композер и вкладки «База знаний»/«Админка». Меняются только визуальная система, плотность и приоритеты.</p>
+
+    <section class="option" tabindex="0" data-choice="calm-workspace" onclick="toggleSelect(this)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleSelect(this)}">
+      <div class="caption"><h2>Корпоративный синий</h2><p>Светлая рабочая среда с тёмно-синим сайдбаром. Источники всегда занимают стабильную правую колонку; основной фокус — на спокойном чтении и проверке ответа.</p><span class="select"></span></div>
+      <div class="app calm">
+        <aside class="side"><div class="brand">БОЧКАРИИ</div><button class="new-chat">+ Новый чат</button><input class="search" placeholder="Поиск по истории"><div class="history"><div class="history-item active">Недостаточно прав для работы с таблицей<small>03.05.2026, 13:18</small></div><div class="history-item">Расхождение количества поддонов товара<small>03.05.2026, 13:17</small></div><div class="history-item">Ошибка в журнале регистрации<small>03.05.2026, 13:17</small></div><div class="history-item">Добавление пользователя в 1С<small>03.05.2026, 13:17</small></div></div><div class="side-bottom">Очистить все чаты</div></aside>
+        <section class="work"><header class="topbar"><strong>Чат по базе знаний</strong><span class="status">● Сервис доступен · admin</span></header><nav class="tabs"><span class="tab active">Чат</span><span class="tab">База знаний</span><span class="tab">Админка</span></nav><div class="stage"><div class="conversation"><div class="toolbar"><select><option>Стиль ответа: По шагам</option></select><span>Скачать диалог</span></div><div class="answer"><div class="question">Нет прав на выполнение отчёта (не формируется)</div><div class="response"><h3>Проверьте права и повторите вход</h3><p>У пользователя должна быть роль для работы с таблицей. После изменения роли обновите сессию и повторите запуск отчёта.</p><p>Причина и последовательность подтверждены в инструкциях по НСИ и администрированию.</p><div class="answer-actions"><span>Источники (3)</span><span>Проверить ответ</span></div></div></div><div class="composer"><input placeholder="Введите вопрос… Ctrl+V — вставить скриншот"><button>↑</button></div></div><aside class="sources"><h3>Источники</h3><div class="source"><strong>Нет прав на выполнение отчёта</strong><p>Проверьте роль пользователя в выбранной организации…</p><small>Релевантность 0.92 · html</small></div><div class="source"><strong>НСИ и администрирование</strong><p>Раздел «Права для работы с таблицей»…</p><small>Релевантность 0.88 · html</small></div></aside></div></section>
+      </div>
+    </section>
+
+    <section class="option" tabindex="0" data-choice="graphite-console" onclick="toggleSelect(this)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleSelect(this)}">
+      <div class="caption"><h2>Графитовая консоль</h2><p>Сдержанный тёмный режим для непрерывной работы в смене. Цвет служит только статусам, активной навигации и подтверждённым источникам; интерфейс остаётся деловым, без «AI-неона».</p><span class="select"></span></div>
+      <div class="app graphite">
+        <aside class="side"><div class="brand">БОЧКАРИИ</div><button class="new-chat">+ Новый чат</button><input class="search" placeholder="Поиск по истории"><div class="history"><div class="history-item active">Недостаточно прав для работы с таблицей<small>03.05.2026, 13:18</small></div><div class="history-item">Расхождение количества поддонов товара<small>03.05.2026, 13:17</small></div><div class="history-item">Ошибка в журнале регистрации<small>03.05.2026, 13:17</small></div><div class="history-item">Добавление пользователя в 1С<small>03.05.2026, 13:17</small></div></div><div class="side-bottom">Очистить все чаты</div></aside>
+        <section class="work"><header class="topbar"><strong>Чат по базе знаний</strong><span class="status">● Сервис доступен · admin</span></header><nav class="tabs"><span class="tab active">Чат</span><span class="tab">База знаний</span><span class="tab">Админка</span></nav><div class="stage"><div class="conversation"><div class="toolbar"><select><option>Стиль ответа: По шагам</option></select><span>Скачать диалог</span></div><div class="answer"><div class="question">Нет прав на выполнение отчёта (не формируется)</div><div class="response"><h3>Проверьте права и повторите вход</h3><p>У пользователя должна быть роль для работы с таблицей. После изменения роли обновите сессию и повторите запуск отчёта.</p><p>Причина и последовательность подтверждены в инструкциях по НСИ и администрированию.</p><div class="answer-actions"><span>Источники (3)</span><span>Проверить ответ</span></div></div></div><div class="composer"><input placeholder="Введите вопрос… Ctrl+V — вставить скриншот"><button>↑</button></div></div><aside class="sources"><h3>Источники</h3><div class="source"><strong>Нет прав на выполнение отчёта</strong><p>Проверьте роль пользователя в выбранной организации…</p><small>Релевантность 0.92 · html</small></div><div class="source"><strong>НСИ и администрирование</strong><p>Раздел «Права для работы с таблицей»…</p><small>Релевантность 0.88 · html</small></div></aside></div></section>
+      </div>
+    </section>
+
+    <section class="option" tabindex="0" data-choice="civic-library" onclick="toggleSelect(this)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleSelect(this)}">
+      <div class="caption"><h2>Белая система знаний</h2><p>Строгий светлый интерфейс, где чат, документы и админка выглядят как части одной внутренней системы. Максимум воздуха в ответе, линейная навигация, визуальный акцент только на текущем контексте.</p><span class="select"></span></div>
+      <div class="app civic">
+        <aside class="side"><div class="brand">БОЧКАРИИ</div><button class="new-chat">+ Новый чат</button><input class="search" placeholder="Поиск по истории"><div class="history"><div class="history-item active">Недостаточно прав для работы с таблицей<small>03.05.2026, 13:18</small></div><div class="history-item">Расхождение количества поддонов товара<small>03.05.2026, 13:17</small></div><div class="history-item">Ошибка в журнале регистрации<small>03.05.2026, 13:17</small></div><div class="history-item">Добавление пользователя в 1С<small>03.05.2026, 13:17</small></div></div><div class="side-bottom">Очистить все чаты</div></aside>
+        <section class="work"><header class="topbar"><strong>Чат по базе знаний</strong><span class="status">● Сервис доступен · admin</span></header><nav class="tabs"><span class="tab active">Чат</span><span class="tab">База знаний</span><span class="tab">Админка</span></nav><div class="stage"><div class="conversation"><div class="toolbar"><select><option>Стиль ответа: По шагам</option></select><span>Скачать диалог</span></div><div class="answer"><div class="question">Нет прав на выполнение отчёта (не формируется)</div><div class="response"><h3>Проверьте права и повторите вход</h3><p>У пользователя должна быть роль для работы с таблицей. После изменения роли обновите сессию и повторите запуск отчёта.</p><p>Причина и последовательность подтверждены в инструкциях по НСИ и администрированию.</p><div class="answer-actions"><span>Источники (3)</span><span>Проверить ответ</span></div></div></div><div class="composer"><input placeholder="Введите вопрос… Ctrl+V — вставить скриншот"><button>↑</button></div></div><aside class="sources"><h3>Источники</h3><div class="source"><strong>Нет прав на выполнение отчёта</strong><p>Проверьте роль пользователя в выбранной организации…</p><small>Релевантность 0.92 · html</small></div><div class="source"><strong>НСИ и администрирование</strong><p>Раздел «Права для работы с таблицей»…</p><small>Релевантность 0.88 · html</small></div></aside></div></section>
+      </div>
+    </section>
+  </main>
+</body>
+</html>
