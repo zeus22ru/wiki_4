@@ -198,10 +198,19 @@ class TelegramClient:
         *,
         params: dict[str, Any] | None = None,
         json_payload: dict[str, Any] | None = None,
+        data: dict[str, Any] | None = None,
+        files: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         url = self._method_url(method)
         try:
-            if json_payload is not None:
+            if files is not None:
+                response = requests.post(
+                    url,
+                    data=data or {},
+                    files=files,
+                    timeout=self.timeout,
+                )
+            elif json_payload is not None:
                 response = requests.post(
                     url,
                     json=json_payload,
@@ -223,7 +232,13 @@ class TelegramClient:
             except Exception:
                 retry_after = 1
             time.sleep(retry_after)
-            return self._request(method, params=params, json_payload=json_payload)
+            return self._request(
+                method,
+                params=params,
+                json_payload=json_payload,
+                data=data,
+                files=files,
+            )
 
         try:
             response.raise_for_status()
@@ -341,6 +356,24 @@ class TelegramClient:
             "sendChatAction",
             json_payload={"chat_id": chat_id, "action": action},
         )
+
+    def send_photo(
+        self,
+        chat_id: int,
+        photo: bytes,
+        *,
+        filename: str = "diagram.png",
+        caption: str | None = None,
+    ) -> dict[str, Any]:
+        """Upload a PNG/JPEG photo via Bot API sendPhoto (multipart)."""
+        if not photo:
+            raise ValueError("photo bytes must be non-empty")
+        data: dict[str, Any] = {"chat_id": str(chat_id)}
+        if caption:
+            data["caption"] = caption
+        mime, _ = mimetypes.guess_type(filename)
+        files = {"photo": (filename, photo, mime or "image/png")}
+        return self._request("sendPhoto", data=data, files=files)
 
     def get_me(self) -> dict[str, Any]:
         return self._request("getMe")

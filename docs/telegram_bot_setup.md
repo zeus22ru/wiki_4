@@ -45,9 +45,41 @@ TELEGRAM_MAX_MESSAGE_LENGTH=4096
 # Rich Messages (Bot API 10.1+): таблицы и GFM в ответах агента
 TELEGRAM_RICH_MESSAGES=true
 TELEGRAM_RICH_MAX_CHARS=32000
+# Рендер ```mermaid``` в PNG через локальный mmdc
+TELEGRAM_MERMAID_IMAGES=true
+TELEGRAM_MMDC_CMD=mmdc
+TELEGRAM_MMDC_TIMEOUT_SECONDS=30
+TELEGRAM_MERMAID_MAX_DIAGRAMS=5
+#TELEGRAM_PUPPETEER_EXECUTABLE_PATH=C:\Program Files\Google\Chrome\Application\chrome.exe
 ```
 
-## 3. Запустите приложение и worker
+## 3. Mermaid-диаграммы в Telegram (локальный mmdc)
+
+Telegram не рисует Mermaid в чате. Worker вырезает блоки `` ```mermaid `` `` из финального ответа, рендерит их в PNG через [`@mermaid-js/mermaid-cli`](https://github.com/mermaid-js/mermaid-cli) (`mmdc`) и отправляет фото после текста.
+
+Нужны **Node.js** (LTS) и зависимости из корня репозитория:
+
+```powershell
+npm install
+```
+
+CLI появится в `node_modules/.bin/mmdc`. Worker предпочитает локальный бинарник; иначе использует `TELEGRAM_MMDC_CMD` (по умолчанию `mmdc` из PATH).
+
+`mmdc` рендерит через **Chrome/Edge (Puppeteer)**. Worker сам ищет Chrome/Edge на машине и передаёт путь через `-p`. Если автодетект не сработал, задайте явно:
+
+```env
+TELEGRAM_PUPPETEER_EXECUTABLE_PATH=C:\Program Files\Google\Chrome\Application\chrome.exe
+```
+
+Альтернатива: установить браузер Puppeteer (`npx puppeteer browsers install chrome-headless-shell`) — тогда bundled Chromium тоже подойдёт.
+
+Если рендер падает, исходный код **не** показывается — в тексте остаётся короткое предупреждение. Смотрите лог worker на строки `Failed to render Mermaid` / `Could not find Chrome`.
+
+Во время стриминга (draft) исходник Mermaid тоже скрыт; пользователь видит текст ответа, а картинка приходит только после финала.
+
+Отключить: `TELEGRAM_MERMAID_IMAGES=false`.
+
+## 4. Запустите приложение и worker
 
 В одном терминале запустите Flask-приложение обычным способом:
 
@@ -69,7 +101,7 @@ python scripts/telegram_bot_worker.py --once
 
 Worker хранит подтверждённый `offset` в `TELEGRAM_OFFSET_PATH`, по умолчанию `./data/telegram_update_offset.json`.
 
-## 4. Привязка аккаунта пользователем
+## 5. Привязка аккаунта пользователем
 
 1. Авторизуйтесь в веб-интерфейсе wiki_4.
 2. Перейдите в профиль или раздел настроек Telegram и нажмите **Сгенерировать код**.
@@ -81,7 +113,7 @@ Worker хранит подтверждённый `offset` в `TELEGRAM_OFFSET_PA
 
 После успешного `/start <код>` привязка сохраняется в базе. При перезапуске веб-приложения и worker бот восстанавливает её автоматически — повторный `/start` не нужен.
 
-## 5. Доступные команды бота
+## 6. Доступные команды бота
 
 | Команда | Описание |
 |---------|----------|
@@ -95,7 +127,7 @@ Worker хранит подтверждённый `offset` в `TELEGRAM_OFFSET_PA
 
 > Аккаунт не привязан. Отправьте `/start <код>`
 
-## 6. Режимы ответа
+## 7. Режимы ответа
 
 Режимы передаются в поле `answer_mode` при запросе к `/api/chat/stream` и влияют на форматирование ответа LLM:
 
@@ -108,15 +140,16 @@ Worker хранит подтверждённый `offset` в `TELEGRAM_OFFSET_PA
 | `по_шагам` | Пошаговая инструкция |
 | `инструкция` | Инструкция для сотрудника с чёткими действиями |
 
-## 7. Ограничения
+## 8. Ограничения
 
 - **Rich Messages (по умолчанию):** ответы агента отправляются через `sendRichMessage` с GFM markdown — таблицы, заголовки, списки, блоки кода и другие элементы Bot API 10.1+. Лимит до ~32000 символов (`TELEGRAM_RICH_MAX_CHARS`, по умолчанию 32000; лимит Bot API — 32768).
 - **Стриминг Rich Messages:** во время генерации ответа worker обновляет эфемерный превью через `sendRichMessageDraft` (интервал — `TELEGRAM_STREAM_EDIT_INTERVAL_MS`). Финальный ответ всегда отправляется через `sendRichMessage`.
+- **Mermaid:** при `TELEGRAM_MERMAID_IMAGES=true` блоки `` ```mermaid `` `` скрываются уже в draft-превью и в финальном тексте; схемы уходят отдельными `sendPhoto` (до `TELEGRAM_MERMAID_MAX_DIAGRAMS`). Исходный код пользователю не показывается. При сбое рендера — короткое предупреждение без кода.
 - **Legacy/fallback:** если `TELEGRAM_RICH_MESSAGES=false` или Rich API возвращает ошибку, используется классический путь: placeholder + `editMessageText` + `sendMessage` с `parse_mode=HTML`. В этом режиме действует лимит `TELEGRAM_MAX_MESSAGE_LENGTH` (4096 символов); длинные ответы обрезаются до разумного разделителя (`\n\n`, `\n`, `. `, ` `) или разбиваются на части «Часть N/M».
 - **Rate limit:** при стриминге (draft или `editMessageText`) обновления вызываются с интервалом `TELEGRAM_STREAM_EDIT_INTERVAL_MS` (по умолчанию 800 мс). Если Telegram вернёт HTTP 429, worker читает `retry_after` и повторяет запрос.
 - **Форматирование (legacy):** в fallback-пути текст экранируется для `parse_mode=HTML`. Все `<`, `>` и `&` заменяются HTML-сущностями.
 
-## 8. Troubleshooting
+## 9. Troubleshooting
 
 ### Бот не отвечает
 

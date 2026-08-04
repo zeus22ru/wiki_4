@@ -229,6 +229,13 @@ class Settings:
     TELEGRAM_SHOW_SOURCES: bool = os.getenv("TELEGRAM_SHOW_SOURCES", "false").lower() == "true"
     TELEGRAM_RICH_MESSAGES: bool = os.getenv("TELEGRAM_RICH_MESSAGES", "true").lower() == "true"
     TELEGRAM_RICH_MAX_CHARS: int = int(os.getenv("TELEGRAM_RICH_MAX_CHARS", "32000"))
+    TELEGRAM_MERMAID_IMAGES: bool = os.getenv("TELEGRAM_MERMAID_IMAGES", "true").lower() == "true"
+    TELEGRAM_MMDC_CMD: str = os.getenv("TELEGRAM_MMDC_CMD", "mmdc")
+    TELEGRAM_MMDC_TIMEOUT_SECONDS: int = int(os.getenv("TELEGRAM_MMDC_TIMEOUT_SECONDS", "30"))
+    TELEGRAM_MERMAID_MAX_DIAGRAMS: int = int(os.getenv("TELEGRAM_MERMAID_MAX_DIAGRAMS", "5"))
+    # Chrome/Edge for Puppeteer used by mmdc (auto-detected if empty)
+    TELEGRAM_PUPPETEER_EXECUTABLE_PATH: str = os.getenv("TELEGRAM_PUPPETEER_EXECUTABLE_PATH", "")
+    TELEGRAM_MMDC_PUPPETEER_CONFIG: str = os.getenv("TELEGRAM_MMDC_PUPPETEER_CONFIG", "")
 
     # Database настройки
     DATABASE_PATH: str = os.getenv("DATABASE_PATH", "./data/wiki_qa.db")

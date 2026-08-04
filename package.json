@@ -1,0 +1,8 @@
+{
+  "name": "wiki-4",
+  "private": true,
+  "description": "Local Mermaid CLI for Telegram diagram rendering",
+  "dependencies": {
+    "@mermaid-js/mermaid-cli": "11.12.0"
+  }
+}

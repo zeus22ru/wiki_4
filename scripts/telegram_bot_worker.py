@@ -26,6 +26,12 @@ for stream in (sys.stdout, sys.stderr):
 
 from config import get_logger, settings  # noqa: E402
 from core.chat_attachments import attachments_enabled  # noqa: E402
+from integrations.mermaid_telegram import (  # noqa: E402
+    hide_mermaid_source,
+    is_trivial_display_text,
+    process_answer_mermaid,
+    send_mermaid_photos,
+)
 from integrations.telegram import (  # noqa: E402
     TelegramClient,
     TelegramError,
@@ -645,19 +651,26 @@ def handle_question(
             now = time.time()
             if now - last_edit >= min_edit_interval and accumulated:
                 try:
+                    preview = (
+                        hide_mermaid_source(accumulated)
+                        if settings.TELEGRAM_MERMAID_IMAGES
+                        else accumulated
+                    )
+                    if not preview.strip():
+                        preview = "⏳ Формирую схему…"
                     if use_rich:
                         client.send_rich_message_draft(
                             chat_id,
                             draft_id,
                             {
                                 "markdown": prepare_rich_markdown(
-                                    accumulated,
+                                    preview,
                                     max_chars=settings.TELEGRAM_RICH_MAX_CHARS,
                                 )
                             },
                         )
                     elif message_id is not None:
-                        _edit_streaming_preview(client, chat_id, message_id, accumulated)
+                        _edit_streaming_preview(client, chat_id, message_id, preview)
                     last_edit = now
                 except TelegramError:
                     pass
@@ -674,25 +687,56 @@ def handle_question(
 
     try:
         answer_text = accumulated
-        if use_rich:
-            rich_body = _prepare_answer_markdown(answer_text)
-            try:
-                client.send_rich_message(chat_id, {"markdown": rich_body})
-            except TelegramError:
-                logger.exception("Rich final failed; falling back to HTML")
+        mermaid = process_answer_mermaid(
+            answer_text,
+            enabled=settings.TELEGRAM_MERMAID_IMAGES,
+            max_diagrams=settings.TELEGRAM_MERMAID_MAX_DIAGRAMS,
+            mmdc_cmd=settings.TELEGRAM_MMDC_CMD,
+            timeout=float(settings.TELEGRAM_MMDC_TIMEOUT_SECONDS),
+            browser_executable=settings.TELEGRAM_PUPPETEER_EXECUTABLE_PATH or None,
+            puppeteer_config_path=settings.TELEGRAM_MMDC_PUPPETEER_CONFIG or None,
+            project_root=ROOT,
+        )
+        answer_for_text = mermaid.text
+        send_text = bool(answer_for_text.strip()) and not (
+            mermaid.images and is_trivial_display_text(answer_for_text)
+        )
+        if send_text:
+            if use_rich:
+                rich_body = _prepare_answer_markdown(answer_for_text)
+                try:
+                    client.send_rich_message(chat_id, {"markdown": rich_body})
+                except TelegramError:
+                    logger.exception("Rich final failed; falling back to HTML")
+                    _send_full_answer(
+                        client,
+                        chat_id,
+                        message_id,
+                        _sanitize_answer_markdown(answer_for_text),
+                    )
+            else:
                 _send_full_answer(
                     client,
                     chat_id,
                     message_id,
-                    _sanitize_answer_markdown(answer_text),
+                    _sanitize_answer_markdown(answer_for_text),
                 )
-        else:
-            _send_full_answer(
-                client,
-                chat_id,
-                message_id,
-                _sanitize_answer_markdown(answer_text),
-            )
+        elif not mermaid.images:
+            # Nothing useful to show
+            fallback = answer_for_text.strip() or "⚠️ Пустой ответ."
+            if use_rich:
+                try:
+                    client.send_rich_message(chat_id, {"markdown": fallback})
+                except TelegramError:
+                    _send_full_answer(client, chat_id, message_id, fallback)
+            else:
+                _send_full_answer(client, chat_id, message_id, fallback)
+        if mermaid.images:
+            try:
+                client.send_chat_action(chat_id, "upload_photo")
+            except TelegramError:
+                pass
+            send_mermaid_photos(client, chat_id, mermaid.images)
     except TelegramError:
         logger.exception("Не удалось отправить финальное сообщение")
 

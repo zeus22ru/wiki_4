@@ -21,6 +21,9 @@ venv/
 ENV/
 .venv
 
+# Node (Mermaid CLI for Telegram)
+node_modules/
+
 # IDE
 .vscode/
 .idea/

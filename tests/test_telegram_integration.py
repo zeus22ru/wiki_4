@@ -826,6 +826,7 @@ def test_handle_question_rich_messages_draft_then_final(monkeypatch):
 
     _sessions.clear()
     monkeypatch.setattr("scripts.telegram_bot_worker.settings.TELEGRAM_RICH_MESSAGES", True)
+    monkeypatch.setattr("scripts.telegram_bot_worker.settings.TELEGRAM_MERMAID_IMAGES", False)
     monkeypatch.setattr("scripts.telegram_bot_worker.settings.TELEGRAM_SHOW_SOURCES", False)
     monkeypatch.setattr(
         "scripts.telegram_bot_worker.settings.TELEGRAM_STREAM_EDIT_INTERVAL_MS", 0
@@ -910,6 +911,7 @@ def test_handle_question_rich_failure_falls_back(monkeypatch):
 
     _sessions.clear()
     monkeypatch.setattr("scripts.telegram_bot_worker.settings.TELEGRAM_RICH_MESSAGES", True)
+    monkeypatch.setattr("scripts.telegram_bot_worker.settings.TELEGRAM_MERMAID_IMAGES", False)
     monkeypatch.setattr("scripts.telegram_bot_worker.settings.TELEGRAM_SHOW_SOURCES", False)
     monkeypatch.setattr(
         "scripts.telegram_bot_worker.settings.TELEGRAM_STREAM_EDIT_INTERVAL_MS", 0
@@ -992,6 +994,7 @@ def test_handle_question_rich_failure_fallback_not_truncated(monkeypatch):
     expected_stripped = body
 
     monkeypatch.setattr("scripts.telegram_bot_worker.settings.TELEGRAM_RICH_MESSAGES", True)
+    monkeypatch.setattr("scripts.telegram_bot_worker.settings.TELEGRAM_MERMAID_IMAGES", False)
     monkeypatch.setattr("scripts.telegram_bot_worker.settings.TELEGRAM_SHOW_SOURCES", False)
     monkeypatch.setattr("scripts.telegram_bot_worker.settings.TELEGRAM_RICH_MAX_CHARS", rich_max)
     monkeypatch.setattr(
@@ -1060,3 +1063,353 @@ def test_handle_question_rich_failure_fallback_not_truncated(monkeypatch):
     assert len(fallback_markdown) > rich_max
     assert fallback_markdown == expected_stripped
     assert "**Источники:**" not in fallback_markdown
+
+
+def test_resolve_browser_executable_prefers_explicit(tmp_path):
+    from integrations.mermaid_telegram import resolve_browser_executable
+
+    fake = tmp_path / "chrome.exe"
+    fake.write_bytes(b"x")
+    assert resolve_browser_executable(str(fake)) == str(fake)
+
+
+def test_render_mermaid_png_passes_puppeteer_config(monkeypatch, tmp_path):
+    from pathlib import Path
+
+    from integrations import mermaid_telegram as mt
+
+    calls = []
+
+    class FakeCompleted:
+        returncode = 0
+        stderr = b""
+        stdout = b""
+
+    def fake_run(cmd, **kwargs):
+        calls.append((cmd, kwargs))
+        raw = cmd if isinstance(cmd, str) else " ".join(cmd)
+        assert "-p" in raw
+        import re
+
+        m = re.search(r'-o\s+"?([^"\s]+)"?', raw)
+        assert m
+        Path(m.group(1)).write_bytes(b"PNGFAKE")
+        return FakeCompleted()
+
+    monkeypatch.setattr(mt.subprocess, "run", fake_run)
+    browser = tmp_path / "chrome.exe"
+    browser.write_bytes(b"x")
+    png = mt.render_mermaid_png(
+        "flowchart TD\nA-->B",
+        mmdc_cmd="mmdc.cmd",
+        browser_executable=str(browser),
+    )
+    assert png == b"PNGFAKE"
+    assert calls
+
+
+def test_extract_mermaid_blocks_order():
+    from integrations.mermaid_telegram import extract_mermaid_blocks
+
+    text = (
+        "Intro\n"
+        "```mermaid\nflowchart TD\nA-->B\n```\n"
+        "Mid\n"
+        "```Mermaid\nsequenceDiagram\nA->>B: hi\n```\n"
+    )
+    blocks = extract_mermaid_blocks(text)
+    assert len(blocks) == 2
+    assert "flowchart TD" in blocks[0].code
+    assert "sequenceDiagram" in blocks[1].code
+
+
+def test_hide_mermaid_source_complete_and_incomplete():
+    from integrations.mermaid_telegram import hide_mermaid_source
+
+    full = "До\n```mermaid\nflowchart TD\nA-->B\n```\nПосле"
+    assert hide_mermaid_source(full) == "До\n\nПосле"
+    stream = "До\n```mermaid\nflowchart TD\nA-->"
+    assert hide_mermaid_source(stream) == "До"
+    assert hide_mermaid_source(stream, placeholder="⏳ Схема…") == "До\n⏳ Схема…"
+
+
+def test_is_trivial_display_text():
+    from integrations.mermaid_telegram import is_trivial_display_text
+
+    assert is_trivial_display_text("")
+    assert is_trivial_display_text("**")
+    assert is_trivial_display_text("****")
+    assert is_trivial_display_text("  *_*  ")
+    assert not is_trivial_display_text("Схема")
+    assert not is_trivial_display_text("**Заголовок**")
+
+
+def test_process_answer_mermaid_photo_only_clears_trivial_leftover():
+    from integrations.mermaid_telegram import process_answer_mermaid
+
+    text = "**\n\n```mermaid\nflowchart TD\nA-->B\n```\n"
+    result = process_answer_mermaid(
+        text,
+        enabled=True,
+        render_fn=lambda code, timeout: b"PNG",
+    )
+    assert result.images == [b"PNG"]
+    assert result.text == ""
+    assert "```" not in result.text
+
+
+def test_process_answer_mermaid_strips_success_keeps_failure():
+    from integrations.mermaid_telegram import process_answer_mermaid
+
+    text = (
+        "Схема:\n"
+        "```mermaid\nflowchart TD\nA-->B\n```\n"
+        "И ещё:\n"
+        "```mermaid\ngraph LR\nX-->Y\n```\n"
+    )
+
+    def fake_render(code: str, timeout: float) -> bytes:
+        if "flowchart" in code:
+            return b"PNG1"
+        raise RuntimeError("boom")
+
+    result = process_answer_mermaid(
+        text,
+        enabled=True,
+        max_diagrams=5,
+        render_fn=fake_render,
+    )
+    assert result.images == [b"PNG1"]
+    assert "flowchart TD" not in result.text
+    assert "```mermaid" not in result.text
+    assert "graph LR" not in result.text
+    assert "Схема:" in result.text
+    assert "не удалось" in result.text.lower()
+
+
+def test_process_answer_mermaid_respects_max_diagrams():
+    from integrations.mermaid_telegram import process_answer_mermaid
+
+    text = "\n\n".join(
+        f"```mermaid\nflowchart TD\nA{i}-->B{i}\n```" for i in range(3)
+    )
+    calls = []
+
+    def fake_render(code: str, timeout: float) -> bytes:
+        calls.append(code)
+        return b"PNG"
+
+    result = process_answer_mermaid(
+        text,
+        enabled=True,
+        max_diagrams=2,
+        render_fn=fake_render,
+    )
+    assert len(calls) == 2
+    assert len(result.images) == 2
+    assert "```mermaid" not in result.text
+    assert "не удалось" in result.text.lower()
+
+def test_telegram_client_send_photo(monkeypatch):
+    calls = []
+
+    def mock_request(self, method, *, params=None, json_payload=None, data=None, files=None):
+        calls.append((method, data, files))
+        return {"ok": True, "result": {"message_id": 11}}
+
+    monkeypatch.setattr(TelegramClient, "_request", mock_request)
+    client = TelegramClient(bot_token="test-token")
+    result = client.send_photo(55, b"\x89PNG", filename="diagram_1.png")
+    assert result["result"]["message_id"] == 11
+    assert calls[0][0] == "sendPhoto"
+    assert calls[0][1]["chat_id"] == "55"
+    assert calls[0][2]["photo"][0] == "diagram_1.png"
+    assert calls[0][2]["photo"][1] == b"\x89PNG"
+
+
+def test_handle_question_photo_only_skips_trivial_text(monkeypatch):
+    from scripts.telegram_bot_worker import TelegramSession, _sessions
+
+    _sessions.clear()
+    monkeypatch.setattr("scripts.telegram_bot_worker.settings.TELEGRAM_RICH_MESSAGES", True)
+    monkeypatch.setattr("scripts.telegram_bot_worker.settings.TELEGRAM_MERMAID_IMAGES", True)
+    monkeypatch.setattr("scripts.telegram_bot_worker.settings.TELEGRAM_SHOW_SOURCES", False)
+    monkeypatch.setattr("scripts.telegram_bot_worker.settings.TELEGRAM_MERMAID_MAX_DIAGRAMS", 5)
+    monkeypatch.setattr(
+        "scripts.telegram_bot_worker.settings.TELEGRAM_STREAM_EDIT_INTERVAL_MS", 0
+    )
+    monkeypatch.setattr("scripts.telegram_bot_worker.settings.TELEGRAM_RICH_MAX_CHARS", 32000)
+    monkeypatch.setattr(
+        "scripts.telegram_bot_worker.settings.TELEGRAM_INTERNAL_API_URL",
+        "http://127.0.0.1:5000",
+    )
+    monkeypatch.setattr(
+        "scripts.telegram_bot_worker.settings.TELEGRAM_INTERNAL_API_KEY",
+        "secret",
+    )
+    monkeypatch.setattr(
+        "scripts.telegram_bot_worker.hydrate_session",
+        lambda session, tg_user_id: setattr(session, "user_id", 1) or True,
+    )
+
+    answer = "**\n```mermaid\nflowchart TD\nA-->B\n```\n"
+
+    def fake_process(text, **kwargs):
+        from integrations.mermaid_telegram import MermaidProcessResult
+
+        return MermaidProcessResult(text="", images=[b"PNGONLY"])
+
+    monkeypatch.setattr(
+        "scripts.telegram_bot_worker.process_answer_mermaid",
+        fake_process,
+    )
+
+    calls: list[tuple] = []
+
+    class FakeClient:
+        def send_chat_action(self, *a, **k):
+            calls.append(("action", a[1] if len(a) > 1 else k.get("action")))
+            return {"ok": True}
+
+        def send_rich_message_draft(self, *a, **k):
+            calls.append(("draft",))
+            return {"ok": True}
+
+        def send_rich_message(self, *a, **k):
+            calls.append(("final",))
+            raise AssertionError("should not send trivial text when photos exist")
+
+        def send_photo(self, chat_id, photo, *, filename="diagram.png", caption=None):
+            calls.append(("photo", chat_id, photo))
+            return {"ok": True, "result": {"message_id": 10}}
+
+        def send_message(self, *a, **k):
+            raise AssertionError("classic send_message should not be used")
+
+        def edit_message_text(self, *a, **k):
+            raise AssertionError("classic edit should not be used")
+
+    class FakeResp:
+        def raise_for_status(self):
+            return None
+
+        def iter_lines(self, decode_unicode=True):
+            yield (
+                f'data: {{"type":"done","answer":{json.dumps(answer)},'
+                '"chat_id":"c1","sources":[],"citations":[]}'
+            )
+            yield "data: [DONE]"
+
+    monkeypatch.setattr(
+        "scripts.telegram_bot_worker.requests.post",
+        lambda *a, **k: FakeResp(),
+    )
+
+    update = {
+        "update_id": 99,
+        "message": {"chat": {"id": 55}, "from": {"id": 77}, "text": "только схема"},
+    }
+    handle_question(update, TelegramSession(), FakeClient(), text="только схема")
+
+    assert not any(c[0] == "final" for c in calls)
+    photos = [c for c in calls if c[0] == "photo"]
+    assert len(photos) == 1
+    assert photos[0][2] == b"PNGONLY"
+
+
+def test_handle_question_sends_mermaid_photos_after_text(monkeypatch):
+    from scripts.telegram_bot_worker import TelegramSession, _sessions
+
+    _sessions.clear()
+    monkeypatch.setattr("scripts.telegram_bot_worker.settings.TELEGRAM_RICH_MESSAGES", True)
+    monkeypatch.setattr("scripts.telegram_bot_worker.settings.TELEGRAM_MERMAID_IMAGES", True)
+    monkeypatch.setattr("scripts.telegram_bot_worker.settings.TELEGRAM_SHOW_SOURCES", False)
+    monkeypatch.setattr("scripts.telegram_bot_worker.settings.TELEGRAM_MERMAID_MAX_DIAGRAMS", 5)
+    monkeypatch.setattr(
+        "scripts.telegram_bot_worker.settings.TELEGRAM_STREAM_EDIT_INTERVAL_MS", 0
+    )
+    monkeypatch.setattr("scripts.telegram_bot_worker.settings.TELEGRAM_RICH_MAX_CHARS", 32000)
+    monkeypatch.setattr(
+        "scripts.telegram_bot_worker.settings.TELEGRAM_INTERNAL_API_URL",
+        "http://127.0.0.1:5000",
+    )
+    monkeypatch.setattr(
+        "scripts.telegram_bot_worker.settings.TELEGRAM_INTERNAL_API_KEY",
+        "secret",
+    )
+    monkeypatch.setattr(
+        "scripts.telegram_bot_worker.hydrate_session",
+        lambda session, tg_user_id: setattr(session, "user_id", 1) or True,
+    )
+
+    answer = "Визуализация\n\n```mermaid\nflowchart TD\nA-->B\n```\n"
+
+    def fake_process(text, **kwargs):
+        from integrations.mermaid_telegram import MermaidProcessResult
+
+        assert "flowchart TD" in text
+        return MermaidProcessResult(text="Визуализация", images=[b"PNGDATA"])
+
+    monkeypatch.setattr(
+        "scripts.telegram_bot_worker.process_answer_mermaid",
+        fake_process,
+    )
+
+    calls: list[tuple] = []
+
+    class FakeClient:
+        def send_chat_action(self, *a, **k):
+            return {"ok": True}
+
+        def send_rich_message_draft(self, *a, **k):
+            calls.append(("draft",))
+            return {"ok": True}
+
+        def send_rich_message(self, chat_id, rich_message, reply_markup=None):
+            calls.append(("final", rich_message))
+            return {"ok": True, "result": {"message_id": 9}}
+
+        def send_photo(self, chat_id, photo, *, filename="diagram.png", caption=None):
+            calls.append(("photo", chat_id, photo, filename))
+            return {"ok": True, "result": {"message_id": 10}}
+
+        def send_message(self, *a, **k):
+            raise AssertionError("classic send_message should not be used")
+
+        def edit_message_text(self, *a, **k):
+            raise AssertionError("classic edit should not be used")
+
+    class FakeResp:
+        def raise_for_status(self):
+            return None
+
+        def iter_lines(self, decode_unicode=True):
+            yield (
+                f'data: {{"type":"done","answer":{json.dumps(answer)},'
+                '"chat_id":"c1","sources":[],"citations":[]}'
+            )
+            yield "data: [DONE]"
+
+    monkeypatch.setattr(
+        "scripts.telegram_bot_worker.requests.post",
+        lambda *a, **k: FakeResp(),
+    )
+
+    update = {
+        "update_id": 42,
+        "message": {"chat": {"id": 55}, "from": {"id": 77}, "text": "схема"},
+    }
+    handle_question(update, TelegramSession(), FakeClient(), text="схема")
+
+    finals = [c for c in calls if c[0] == "final"]
+    photos = [c for c in calls if c[0] == "photo"]
+    assert len(finals) == 1
+    assert finals[0][1]["markdown"] == "Визуализация"
+    assert "mermaid" not in finals[0][1]["markdown"].lower()
+    assert len(photos) == 1
+    assert photos[0][1] == 55
+    assert photos[0][2] == b"PNGDATA"
+    # text before photo
+    final_idx = next(i for i, c in enumerate(calls) if c[0] == "final")
+    photo_idx = next(i for i, c in enumerate(calls) if c[0] == "photo")
+    assert final_idx < photo_idx
