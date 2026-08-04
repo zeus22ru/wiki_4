@@ -106,6 +106,42 @@ def get_session(tg_user_id: int) -> TelegramSession:
     return _sessions[tg_user_id]
 
 
+def hydrate_session(session: TelegramSession, tg_user_id: int) -> bool:
+    """Восстановить user_id из БД через API, если in-memory сессия пуста (после рестарта)."""
+    if session.user_id:
+        return True
+    try:
+        url = f"{settings.TELEGRAM_INTERNAL_API_URL.rstrip('/')}/api/telegram/resolve"
+        headers: dict[str, str] = {
+            "X-API-Key": settings.TELEGRAM_INTERNAL_API_KEY,
+            "Content-Type": "application/json",
+        }
+        resp = requests.post(
+            url,
+            json={"telegram_user_id": tg_user_id},
+            headers=headers,
+            timeout=10,
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            user_id = data.get("user_id")
+            if isinstance(user_id, int):
+                session.user_id = user_id
+                return True
+            return False
+        if resp.status_code == 404:
+            return False
+        logger.warning(
+            "resolve Telegram-привязки вернул %s для tg_user_id=%s",
+            resp.status_code,
+            tg_user_id,
+        )
+        return False
+    except requests.RequestException:
+        logger.exception("Ошибка resolve Telegram-привязки для tg_user_id=%s", tg_user_id)
+        return False
+
+
 def load_offset(path: str | Path) -> int | None:
     """Прочитать сохранённый offset обновлений Telegram."""
     offset_path = Path(path)
@@ -444,7 +480,7 @@ def handle_question(
         logger.warning("Пропущено сообщение без текста/фото или chat_id: %s", update.get("update_id"))
         return
 
-    if not session.user_id:
+    if not hydrate_session(session, tg_user_id):
         try:
             client.send_message(
                 chat_id,
@@ -666,6 +702,12 @@ def process_message(update: dict[str, Any], client: TelegramClient) -> None:
         if args:
             reply = handle_start(args, tg_user_id, client)
             send_bot_message(client, chat_id, reply)
+        elif hydrate_session(session, tg_user_id):
+            send_bot_message(
+                client,
+                chat_id,
+                f"✅ Аккаунт уже привязан (ID: {session.user_id}). Можно задавать вопросы.",
+            )
         else:
             send_bot_message(
                 client,

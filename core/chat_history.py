@@ -299,26 +299,41 @@ class ChatHistoryManager:
     # ========== Методы для привязки Telegram ==========
 
     def create_telegram_link(self, user_id: int) -> dict:
-        """Создать код привязки Telegram (6 цифр), инвалидируя старые."""
+        """Вернуть активный код привязки Telegram или создать новый (6 цифр)."""
         now = datetime.now()
-        expires_at = now + timedelta(seconds=settings.TELEGRAM_LINK_CODE_TTL_SECONDS)
-        code = f"{secrets.randbelow(1_000_000):06d}"
+        now_iso = now.isoformat()
 
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            # Инвалидировать старые активные коды этого пользователя
+            cursor.execute('''
+                SELECT code, expires_at
+                FROM telegram_links
+                WHERE user_id = ?
+                  AND used_at IS NULL
+                  AND expires_at > ?
+                ORDER BY created_at DESC
+                LIMIT 1
+            ''', (user_id, now_iso))
+            existing = cursor.fetchone()
+            if existing:
+                return {"code": existing["code"], "expires_at": existing["expires_at"]}
+
+            expires_at = now + timedelta(seconds=settings.TELEGRAM_LINK_CODE_TTL_SECONDS)
+            code = f"{secrets.randbelow(1_000_000):06d}"
+
+            # Инвалидировать просроченные/остаточные активные коды этого пользователя
             cursor.execute('''
                 UPDATE telegram_links
                 SET expires_at = ?
                 WHERE user_id = ?
                   AND used_at IS NULL
                   AND expires_at > ?
-            ''', (now.isoformat(), user_id, now.isoformat()))
+            ''', (now_iso, user_id, now_iso))
 
             cursor.execute('''
                 INSERT INTO telegram_links (user_id, code, telegram_user_id, telegram_username, created_at, expires_at, used_at)
                 VALUES (?, ?, NULL, NULL, ?, ?, NULL)
-            ''', (user_id, code, now.isoformat(), expires_at.isoformat()))
+            ''', (user_id, code, now_iso, expires_at.isoformat()))
             conn.commit()
 
         logger.info(f"Создан код привязки Telegram для user_id={user_id}")

@@ -438,23 +438,35 @@ def test_telegram_link_code_generation(monkeypatch):
     result2 = chat_history.create_telegram_link(user2.id)
     assert result2["code"] != code
 
-    # Инвалидация старого кода
-    result3 = chat_history.create_telegram_link(user.id)
-    assert result3["code"] != code
-
-    # verify → get roundtrip
+    # После использования кода — новый create выдаёт другой код
     verify = chat_history.verify_telegram_link(
-        result3["code"], telegram_user_id=111, telegram_username="tg_name"
+        code, telegram_user_id=111, telegram_username="tg_name"
     )
     assert verify is not None
     assert verify["user_id"] == user.id
     assert verify["role"] == "user"
+
+    result_after_use = chat_history.create_telegram_link(user.id)
+    assert result_after_use["code"] != code
 
     link = chat_history.get_telegram_link(111)
     assert link is not None
     assert link["user_id"] == user.id
     assert link["telegram_username"] == "tg_name"
     assert link["role"] == "user"
+
+
+def test_telegram_link_reuses_active_code(monkeypatch):
+    from core.chat_history import get_chat_history
+
+    monkeypatch.setattr("config.settings.TELEGRAM_LINK_CODE_TTL_SECONDS", 300)
+    chat_history = get_chat_history()
+    user = _create_test_user()
+
+    first = chat_history.create_telegram_link(user.id)
+    second = chat_history.create_telegram_link(user.id)
+    assert second["code"] == first["code"]
+    assert second["expires_at"] == first["expires_at"]
 
 
 def test_get_telegram_link_survives_code_ttl_expiry(monkeypatch):
@@ -552,6 +564,90 @@ def test_telegram_api_verify(client, monkeypatch):
     body = rv.get_json()
     assert body["user_id"] == user.id
     assert body["role"] == "user"
+
+
+def test_telegram_api_resolve(client, monkeypatch):
+    monkeypatch.setattr("api.routes.telegram.settings.TELEGRAM_ENABLED", True)
+    from core.chat_history import get_chat_history
+
+    chat_history = get_chat_history()
+    user = _create_test_user()
+    link = chat_history.create_telegram_link(user.id)
+    chat_history.verify_telegram_link(link["code"], telegram_user_id=555)
+
+    rv = client.post(
+        "/api/telegram/resolve",
+        json={"telegram_user_id": 555},
+    )
+    assert rv.status_code == 200
+    body = rv.get_json()
+    assert body["user_id"] == user.id
+    assert body["role"] == "user"
+
+    missing = client.post(
+        "/api/telegram/resolve",
+        json={"telegram_user_id": 999001},
+    )
+    assert missing.status_code == 404
+
+
+def test_hydrate_session_from_resolve(monkeypatch):
+    from scripts.telegram_bot_worker import TelegramSession, hydrate_session, _sessions
+
+    _sessions.clear()
+    calls = []
+
+    def mock_post(url, json=None, headers=None, timeout=None):
+        calls.append({"url": url, "json": json, "headers": dict(headers or {})})
+        response = MagicMock()
+        response.status_code = 200
+        response.json.return_value = {"user_id": 42, "role": "user"}
+        return response
+
+    monkeypatch.setattr("scripts.telegram_bot_worker.requests.post", mock_post)
+    monkeypatch.setattr(
+        "scripts.telegram_bot_worker.settings.TELEGRAM_INTERNAL_API_URL",
+        "http://127.0.0.1:5000",
+    )
+    monkeypatch.setattr(
+        "scripts.telegram_bot_worker.settings.TELEGRAM_INTERNAL_API_KEY",
+        "secret",
+    )
+
+    session = TelegramSession()
+    assert hydrate_session(session, 168539480) is True
+    assert session.user_id == 42
+    assert calls[0]["url"].endswith("/api/telegram/resolve")
+    assert calls[0]["json"] == {"telegram_user_id": 168539480}
+
+    assert hydrate_session(session, 168539480) is True
+    assert len(calls) == 1
+
+
+def test_hydrate_session_not_linked(monkeypatch):
+    from scripts.telegram_bot_worker import TelegramSession, hydrate_session, _sessions
+
+    _sessions.clear()
+
+    def mock_post(url, json=None, headers=None, timeout=None):
+        response = MagicMock()
+        response.status_code = 404
+        response.json.return_value = {"error": "not found"}
+        return response
+
+    monkeypatch.setattr("scripts.telegram_bot_worker.requests.post", mock_post)
+    monkeypatch.setattr(
+        "scripts.telegram_bot_worker.settings.TELEGRAM_INTERNAL_API_URL",
+        "http://127.0.0.1:5000",
+    )
+    monkeypatch.setattr(
+        "scripts.telegram_bot_worker.settings.TELEGRAM_INTERNAL_API_KEY",
+        "secret",
+    )
+
+    session = TelegramSession()
+    assert hydrate_session(session, 1) is False
+    assert session.user_id is None
 
 
 @patch("web_app.initialize_database")

@@ -59,6 +59,25 @@ def verify_link():
     return jsonify(result)
 
 
+@telegram_bp.route("/resolve", methods=["POST"])
+def resolve_link():
+    """Найти активную привязку по telegram_user_id (для воркера после рестарта)."""
+    if not settings.TELEGRAM_ENABLED:
+        return jsonify({"error": "Интеграция с Telegram отключена"}), 400
+
+    data = _json_body()
+    telegram_user_id = data.get("telegram_user_id")
+    if not isinstance(telegram_user_id, int):
+        return jsonify({"error": "Некорректный telegram_user_id"}), 400
+
+    chat_history = get_chat_history()
+    link = chat_history.get_telegram_link(telegram_user_id)
+    if not link:
+        return jsonify({"error": "Привязка не найдена"}), 404
+
+    return jsonify({"user_id": link["user_id"], "role": link["role"]})
+
+
 @telegram_bp.route("/status", methods=["GET"])
 def status():
     """Публичный статус интеграции с Telegram."""

@@ -223,7 +223,7 @@ class Settings:
     TELEGRAM_OFFSET_PATH: str = os.getenv("TELEGRAM_OFFSET_PATH", "./data/telegram_update_offset.json")
     TELEGRAM_INTERNAL_API_URL: str = os.getenv("TELEGRAM_INTERNAL_API_URL", f"http://127.0.0.1:{API_PORT}")
     TELEGRAM_INTERNAL_API_KEY: str = os.getenv("TELEGRAM_INTERNAL_API_KEY", os.getenv("API_KEY", "API_KEY"))
-    TELEGRAM_LINK_CODE_TTL_SECONDS: int = int(os.getenv("TELEGRAM_LINK_CODE_TTL_SECONDS", "600"))
+    TELEGRAM_LINK_CODE_TTL_SECONDS: int = int(os.getenv("TELEGRAM_LINK_CODE_TTL_SECONDS", "86400"))
     TELEGRAM_STREAM_EDIT_INTERVAL_MS: int = int(os.getenv("TELEGRAM_STREAM_EDIT_INTERVAL_MS", "800"))
     TELEGRAM_MAX_MESSAGE_LENGTH: int = int(os.getenv("TELEGRAM_MAX_MESSAGE_LENGTH", "4096"))
     TELEGRAM_SHOW_SOURCES: bool = os.getenv("TELEGRAM_SHOW_SOURCES", "false").lower() == "true"
