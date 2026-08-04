@@ -37,6 +37,8 @@ REQUIRED_IDS = (
     "messages",
     "exportChatBtn",
     "answerModeSelect",
+    "followupSuggestionsToggle",
+    "relatedDocsToggle",
     "topKInput",
     "minScoreInput",
     "ragAdvancedToggle",

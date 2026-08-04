@@ -24,7 +24,7 @@ documents_bp = Blueprint("documents", __name__, url_prefix="/api/documents")
 @documents_bp.before_request
 def require_admin_role():
     """Управление базой знаний доступно только администраторам."""
-    if request.endpoint == "documents.open_document":
+    if request.endpoint in {"documents.open_document", "documents.related_documents"}:
         return None
     return require_admin_access()
 

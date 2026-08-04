@@ -533,6 +533,45 @@ def test_api_documents_related_uses_only_data_dir(client, tmp_path, monkeypatch)
     assert docs[0]["path"] == "wiki/printer/errors.txt"
 
 
+def test_api_documents_related_allows_guest_without_auth(client, tmp_path, monkeypatch):
+    base = tmp_path / "wiki" / "printer"
+    base.mkdir(parents=True)
+    (base / "setup.txt").write_text("setup", encoding="utf-8")
+    (base / "errors.txt").write_text("errors", encoding="utf-8")
+    monkeypatch.setattr("api.routes.documents.settings.DATA_DIR", str(tmp_path))
+
+    rv = client.post("/api/documents/related", json={
+        "sources": [{"path": "wiki/printer/setup.txt", "title": "Настройка принтера"}],
+    })
+
+    assert rv.status_code == 200
+    docs = rv.get_json()["documents"]
+    assert docs
+    assert docs[0]["path"] == "wiki/printer/errors.txt"
+
+
+def test_api_documents_related_allows_non_admin_user(client, tmp_path, monkeypatch):
+    rv = client.post(
+        "/api/auth/register",
+        json={"username": "reader", "email": "reader@example.com", "password": "password123"},
+    )
+    assert rv.status_code == 201
+    base = tmp_path / "wiki" / "printer"
+    base.mkdir(parents=True)
+    (base / "setup.txt").write_text("setup", encoding="utf-8")
+    (base / "errors.txt").write_text("errors", encoding="utf-8")
+    monkeypatch.setattr("api.routes.documents.settings.DATA_DIR", str(tmp_path))
+
+    rv = client.post("/api/documents/related", json={
+        "sources": [{"path": "wiki/printer/setup.txt", "title": "Настройка принтера"}],
+    })
+
+    assert rv.status_code == 200
+    docs = rv.get_json()["documents"]
+    assert docs
+    assert docs[0]["path"] == "wiki/printer/errors.txt"
+
+
 @patch("api.routes.admin._chroma_status")
 @patch("api.routes.admin.fetch_remote_model_ids")
 @patch("api.routes.admin.inference_server_reachable")

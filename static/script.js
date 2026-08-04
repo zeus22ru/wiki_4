@@ -70,6 +70,10 @@ const clearChatsBtn = document.getElementById('clearChatsBtn');
 const chatList = document.getElementById('chatList');
 const chatSearchInput = document.getElementById('chatSearchInput');
 const answerModeSelect = document.getElementById('answerModeSelect');
+const followupSuggestionsToggle = document.getElementById('followupSuggestionsToggle');
+const relatedDocsToggle = document.getElementById('relatedDocsToggle');
+const CHAT_SHOW_FOLLOWUPS_KEY = 'chatShowFollowups';
+const CHAT_SHOW_RELATED_DOCS_KEY = 'chatShowRelatedDocs';
 const topKInput = document.getElementById('topKInput');
 const minScoreInput = document.getElementById('minScoreInput');
 const exportChatBtn = document.getElementById('exportChatBtn');
@@ -647,6 +651,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     loadChats().then(restoreActiveChatAfterReload);
     syncRagToolbarDefaults();
+    initChatSuggestionToggles();
     setInterval(checkHealth, 30000);
 
     messageForm.addEventListener('submit', handleSubmit);
@@ -2404,8 +2409,50 @@ function renderVerificationResult(container, verification) {
     `;
 }
 
+function readLocalFlag(key) {
+    try {
+        return localStorage.getItem(key) === '1';
+    } catch (_) {
+        return false;
+    }
+}
+
+function writeLocalFlag(key, enabled) {
+    try {
+        localStorage.setItem(key, enabled ? '1' : '0');
+    } catch (_) {
+        /* ignore quota / private mode */
+    }
+}
+
+function isFollowupSuggestionsEnabled() {
+    return Boolean(followupSuggestionsToggle?.checked);
+}
+
+function isRelatedDocsEnabled() {
+    return Boolean(relatedDocsToggle?.checked);
+}
+
+function initChatSuggestionToggles() {
+    if (followupSuggestionsToggle) {
+        followupSuggestionsToggle.checked = readLocalFlag(CHAT_SHOW_FOLLOWUPS_KEY);
+        followupSuggestionsToggle.addEventListener('change', () => {
+            writeLocalFlag(CHAT_SHOW_FOLLOWUPS_KEY, followupSuggestionsToggle.checked);
+        });
+    }
+    if (relatedDocsToggle) {
+        relatedDocsToggle.checked = readLocalFlag(CHAT_SHOW_RELATED_DOCS_KEY);
+        relatedDocsToggle.addEventListener('change', () => {
+            writeLocalFlag(CHAT_SHOW_RELATED_DOCS_KEY, relatedDocsToggle.checked);
+        });
+    }
+}
+
 async function loadFollowupSuggestions(messageEl, details = {}) {
     if (!messageEl || !details.answer || messageEl.querySelector('.followup-suggestions')) {
+        return;
+    }
+    if (!isFollowupSuggestionsEnabled()) {
         return;
     }
     try {
@@ -2450,7 +2497,7 @@ function renderFollowupSuggestions(messageEl, suggestions) {
 }
 
 async function loadRelatedDocuments(messageEl, sources = []) {
-    if (currentAuth.role !== 'admin') {
+    if (!isRelatedDocsEnabled()) {
         return;
     }
     if (!messageEl || !sources.length || messageEl.querySelector('.related-documents')) {
