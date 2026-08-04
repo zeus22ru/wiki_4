@@ -31,6 +31,7 @@ from integrations.telegram import (  # noqa: E402
     TelegramError,
     escape_html,
     markdown_to_telegram_html,
+    prepare_rich_markdown,
     split_markdown_for_telegram,
     strip_markdown_light,
 )
@@ -380,6 +381,30 @@ def _strip_sources_section(markdown_text: str) -> str:
     return _SOURCES_SECTION_RE.sub("", markdown_text).rstrip()
 
 
+def make_rich_draft_id(update: dict[str, Any], tg_user_id: int) -> int:
+    update_id = update.get("update_id")
+    if isinstance(update_id, int) and update_id != 0:
+        return update_id
+    mixed = (int(tg_user_id) ^ int(time.time() * 1000)) & 0x7FFFFFFF
+    return mixed or 1
+
+
+def _sanitize_answer_markdown(markdown_text: str) -> str:
+    """Подготовить markdown без обрезки: пустой ответ и опционально без источников."""
+    text = markdown_text if markdown_text else "(пустой ответ)"
+    if not settings.TELEGRAM_SHOW_SOURCES:
+        text = _strip_sources_section(text)
+    return text
+
+
+def _prepare_answer_markdown(markdown_text: str) -> str:
+    """Подготовить markdown для Rich Message: sanitize + truncate."""
+    return prepare_rich_markdown(
+        _sanitize_answer_markdown(markdown_text),
+        max_chars=settings.TELEGRAM_RICH_MAX_CHARS,
+    )
+
+
 def _send_html_or_plain(
     client: TelegramClient,
     chat_id: int,
@@ -418,7 +443,7 @@ def _send_html_or_plain(
 def _send_full_answer(
     client: TelegramClient,
     chat_id: int,
-    message_id: int,
+    message_id: int | None,
     markdown_text: str,
 ) -> None:
     """Отправить полный ответ: форматирование + разбиение на несколько сообщений."""
@@ -521,13 +546,26 @@ def handle_question(
     except TelegramError:
         pass
 
-    # 2. Отправить placeholder
-    try:
-        placeholder = client.send_message(chat_id, "⏳ Думаю...")
-        message_id = placeholder["result"]["message_id"]
-    except TelegramError:
-        logger.exception("Не удалось отправить placeholder для chat_id=%s", chat_id)
-        return
+    use_rich = settings.TELEGRAM_RICH_MESSAGES
+    draft_id = make_rich_draft_id(update, tg_user_id) if use_rich else 0
+    message_id: int | None = None
+
+    if use_rich:
+        try:
+            client.send_rich_message_draft(
+                chat_id,
+                draft_id,
+                {"html": "<tg-thinking>Думаю...</tg-thinking>"},
+            )
+        except TelegramError:
+            logger.exception("Rich thinking draft failed")
+    else:
+        try:
+            placeholder = client.send_message(chat_id, "⏳ Думаю...")
+            message_id = placeholder["result"]["message_id"]
+        except TelegramError:
+            logger.exception("Не удалось отправить placeholder для chat_id=%s", chat_id)
+            return
 
     # 3. Вызвать POST /api/chat/stream
     url = f"{settings.TELEGRAM_INTERNAL_API_URL.rstrip('/')}/api/chat/stream"
@@ -559,7 +597,10 @@ def handle_question(
     except requests.RequestException as exc:
         logger.exception("Ошибка запроса к /api/chat/stream для tg_user_id=%s", tg_user_id)
         try:
-            client.edit_message_text(chat_id, message_id, f"❌ Ошибка связи с сервером: {exc}")
+            if message_id is not None:
+                client.edit_message_text(chat_id, message_id, f"❌ Ошибка связи с сервером: {exc}")
+            else:
+                client.send_message(chat_id, f"❌ Ошибка связи с сервером: {exc}")
         except TelegramError:
             pass
         return
@@ -603,12 +644,20 @@ def handle_question(
 
             now = time.time()
             if now - last_edit >= min_edit_interval and accumulated:
-                display = accumulated if accumulated else "⏳ Думаю..."
                 try:
-                    if display == "⏳ Думаю...":
-                        client.edit_message_text(chat_id, message_id, display, parse_mode="")
-                    else:
-                        _edit_streaming_preview(client, chat_id, message_id, display)
+                    if use_rich:
+                        client.send_rich_message_draft(
+                            chat_id,
+                            draft_id,
+                            {
+                                "markdown": prepare_rich_markdown(
+                                    accumulated,
+                                    max_chars=settings.TELEGRAM_RICH_MAX_CHARS,
+                                )
+                            },
+                        )
+                    elif message_id is not None:
+                        _edit_streaming_preview(client, chat_id, message_id, accumulated)
                     last_edit = now
                 except TelegramError:
                     pass
@@ -625,9 +674,25 @@ def handle_question(
 
     try:
         answer_text = accumulated
-        if not settings.TELEGRAM_SHOW_SOURCES:
-            answer_text = _strip_sources_section(answer_text)
-        _send_full_answer(client, chat_id, message_id, answer_text)
+        if use_rich:
+            rich_body = _prepare_answer_markdown(answer_text)
+            try:
+                client.send_rich_message(chat_id, {"markdown": rich_body})
+            except TelegramError:
+                logger.exception("Rich final failed; falling back to HTML")
+                _send_full_answer(
+                    client,
+                    chat_id,
+                    message_id,
+                    _sanitize_answer_markdown(answer_text),
+                )
+        else:
+            _send_full_answer(
+                client,
+                chat_id,
+                message_id,
+                _sanitize_answer_markdown(answer_text),
+            )
     except TelegramError:
         logger.exception("Не удалось отправить финальное сообщение")
 

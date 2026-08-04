@@ -1,5 +1,6 @@
 """Тесты интеграции Telegram-бота wiki_4 без реальных вызовов API."""
 
+import json
 from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
 
@@ -19,7 +20,9 @@ from scripts.telegram_bot_worker import (
     build_main_keyboard,
     build_mode_inline_keyboard,
     collect_image_attachment_ids,
+    handle_question,
     load_offset,
+    make_rich_draft_id,
     message_has_image,
     message_question_text,
     normalize_user_input,
@@ -755,3 +758,305 @@ def test_resolve_chat_session_telegram_recovers_stale_guest_chat_id(
     body = rv.get_json()
     assert body["chat_id"] != guest_chat.id
     assert chat_history.get_session(body["chat_id"]).user_id == user.id
+
+
+def test_validate_rich_message_requires_exactly_one_representation():
+    from integrations.telegram import validate_rich_message
+
+    assert validate_rich_message({"markdown": "| a | b |\n|---|---|\n| 1 | 2 |"})["markdown"].startswith("| a |")
+    with pytest.raises(ValueError):
+        validate_rich_message({})
+    with pytest.raises(ValueError):
+        validate_rich_message({"markdown": "x", "html": "<p>x</p>"})
+
+
+def test_prepare_rich_markdown_truncates():
+    from integrations.telegram import prepare_rich_markdown
+
+    long_text = "я" * 100
+    out = prepare_rich_markdown(long_text, max_chars=50)
+    assert len(out) <= 50
+    assert out.endswith("…") or len(out) == 50
+
+
+def test_telegram_client_send_rich_message(monkeypatch):
+    calls = []
+
+    def mock_request(self, method, *, params=None, json_payload=None):
+        calls.append((method, json_payload))
+        return {"ok": True, "result": {"message_id": 42}}
+
+    monkeypatch.setattr(TelegramClient, "_request", mock_request)
+    client = TelegramClient(bot_token="test-token")
+    table = "| A | B |\n|---|---|\n| 1 | 2 |"
+    result = client.send_rich_message(987, {"markdown": table})
+    assert result["result"]["message_id"] == 42
+    assert calls[0][0] == "sendRichMessage"
+    assert calls[0][1]["chat_id"] == 987
+    assert calls[0][1]["rich_message"]["markdown"] == table
+
+
+def test_telegram_client_send_rich_message_draft(monkeypatch):
+    calls = []
+
+    def mock_request(self, method, *, params=None, json_payload=None):
+        calls.append((method, json_payload))
+        return {"ok": True, "result": True}
+
+    monkeypatch.setattr(TelegramClient, "_request", mock_request)
+    client = TelegramClient(bot_token="test-token")
+    client.send_rich_message_draft(
+        987,
+        draft_id=555,
+        rich_message={"html": "<tg-thinking>Думаю...</tg-thinking>"},
+    )
+    assert calls[0][0] == "sendRichMessageDraft"
+    assert calls[0][1]["draft_id"] == 555
+    assert "html" in calls[0][1]["rich_message"]
+
+
+def test_make_rich_draft_id_uses_update_id():
+    assert make_rich_draft_id({"update_id": 42}, tg_user_id=1) == 42
+    draft = make_rich_draft_id({}, tg_user_id=7)
+    assert isinstance(draft, int) and draft != 0
+
+
+def test_handle_question_rich_messages_draft_then_final(monkeypatch):
+    from scripts.telegram_bot_worker import TelegramSession, _sessions
+
+    _sessions.clear()
+    monkeypatch.setattr("scripts.telegram_bot_worker.settings.TELEGRAM_RICH_MESSAGES", True)
+    monkeypatch.setattr("scripts.telegram_bot_worker.settings.TELEGRAM_SHOW_SOURCES", False)
+    monkeypatch.setattr(
+        "scripts.telegram_bot_worker.settings.TELEGRAM_STREAM_EDIT_INTERVAL_MS", 0
+    )
+    monkeypatch.setattr("scripts.telegram_bot_worker.settings.TELEGRAM_RICH_MAX_CHARS", 32000)
+    monkeypatch.setattr(
+        "scripts.telegram_bot_worker.settings.TELEGRAM_INTERNAL_API_URL",
+        "http://127.0.0.1:5000",
+    )
+    monkeypatch.setattr(
+        "scripts.telegram_bot_worker.settings.TELEGRAM_INTERNAL_API_KEY",
+        "secret",
+    )
+    monkeypatch.setattr(
+        "scripts.telegram_bot_worker.hydrate_session",
+        lambda session, tg_user_id: setattr(session, "user_id", 1) or True,
+    )
+
+    calls: list[tuple] = []
+
+    class FakeClient:
+        def send_chat_action(self, *a, **k):
+            return {"ok": True}
+
+        def send_rich_message_draft(self, chat_id, draft_id, rich_message):
+            calls.append(("draft", chat_id, draft_id, rich_message))
+            return {"ok": True, "result": True}
+
+        def send_rich_message(self, chat_id, rich_message, reply_markup=None):
+            calls.append(("final", chat_id, rich_message))
+            return {"ok": True, "result": {"message_id": 9}}
+
+        def send_message(self, *a, **k):
+            raise AssertionError("classic send_message should not be used on success")
+
+        def edit_message_text(self, *a, **k):
+            raise AssertionError("classic edit should not be used on success")
+
+    sse = (
+        'data: {"type":"delta","text":"| A | B |\\n"}\n\n'
+        'data: {"type":"delta","text":"|---|---|\\n"}\n\n'
+        'data: {"type":"delta","text":"| 1 | 2 |"}\n\n'
+        'data: {"type":"done","answer":"| A | B |\\n|---|---|\\n| 1 | 2 |","chat_id":"c1","sources":[],"citations":[]}\n\n'
+        "data: [DONE]\n\n"
+    )
+
+    class FakeResp:
+        def raise_for_status(self):
+            return None
+
+        def iter_lines(self, decode_unicode=True):
+            for line in sse.splitlines():
+                yield line
+
+    monkeypatch.setattr(
+        "scripts.telegram_bot_worker.requests.post",
+        lambda *a, **k: FakeResp(),
+    )
+
+    update = {
+        "update_id": 1001,
+        "message": {
+            "chat": {"id": 55},
+            "from": {"id": 77},
+            "text": "покажи таблицу",
+        },
+    }
+    handle_question(update, TelegramSession(), FakeClient(), text="покажи таблицу")
+
+    assert calls[0][0] == "draft"
+    assert calls[0][2] == 1001
+    assert "tg-thinking" in calls[0][3].get("html", "")
+    assert any(c[0] == "draft" and "markdown" in c[3] for c in calls)
+    finals = [c for c in calls if c[0] == "final"]
+    assert len(finals) == 1
+    assert "| A | B |" in finals[0][2]["markdown"]
+
+
+def test_handle_question_rich_failure_falls_back(monkeypatch):
+    from integrations.telegram import TelegramError
+    from scripts.telegram_bot_worker import TelegramSession, _sessions
+
+    _sessions.clear()
+    monkeypatch.setattr("scripts.telegram_bot_worker.settings.TELEGRAM_RICH_MESSAGES", True)
+    monkeypatch.setattr("scripts.telegram_bot_worker.settings.TELEGRAM_SHOW_SOURCES", False)
+    monkeypatch.setattr(
+        "scripts.telegram_bot_worker.settings.TELEGRAM_STREAM_EDIT_INTERVAL_MS", 0
+    )
+    monkeypatch.setattr(
+        "scripts.telegram_bot_worker.settings.TELEGRAM_INTERNAL_API_URL",
+        "http://127.0.0.1:5000",
+    )
+    monkeypatch.setattr(
+        "scripts.telegram_bot_worker.settings.TELEGRAM_INTERNAL_API_KEY",
+        "secret",
+    )
+    monkeypatch.setattr(
+        "scripts.telegram_bot_worker.hydrate_session",
+        lambda session, tg_user_id: setattr(session, "user_id", 1) or True,
+    )
+
+    legacy = []
+
+    def fake_send_full(client, chat_id, message_id, markdown_text):
+        legacy.append((chat_id, message_id, markdown_text))
+
+    monkeypatch.setattr("scripts.telegram_bot_worker._send_full_answer", fake_send_full)
+
+    class FakeClient:
+        def send_chat_action(self, *a, **k):
+            return {"ok": True}
+
+        def send_rich_message_draft(self, *a, **k):
+            return {"ok": True}
+
+        def send_rich_message(self, *a, **k):
+            raise TelegramError("rich failed")
+
+        def send_message(self, chat_id, text, **k):
+            legacy.append(("placeholder", chat_id, text))
+            return {"ok": True, "result": {"message_id": 1}}
+
+        def edit_message_text(self, *a, **k):
+            return {"ok": True}
+
+    class FakeResp:
+        def raise_for_status(self):
+            return None
+
+        def iter_lines(self, decode_unicode=True):
+            yield (
+                'data: {"type":"done","answer":"**ok**\\n\\n**Источники:**\\n1. doc",'
+                '"chat_id":"c1","sources":[],"citations":[]}'
+            )
+            yield "data: [DONE]"
+
+    monkeypatch.setattr(
+        "scripts.telegram_bot_worker.requests.post",
+        lambda *a, **k: FakeResp(),
+    )
+
+    update = {
+        "update_id": 2,
+        "message": {"chat": {"id": 1}, "from": {"id": 2}, "text": "q"},
+    }
+    handle_question(update, TelegramSession(), FakeClient(), text="q")
+    assert legacy
+    fallback_calls = [item for item in legacy if item[0] == 1 and isinstance(item[2], str)]
+    assert fallback_calls
+    fallback_markdown = fallback_calls[0][2]
+    assert "**ok**" in fallback_markdown
+    assert "**Источники:**" not in fallback_markdown
+
+
+def test_handle_question_rich_failure_fallback_not_truncated(monkeypatch):
+    from integrations.telegram import TelegramError
+    from scripts.telegram_bot_worker import TelegramSession, _sessions
+
+    _sessions.clear()
+    rich_max = 100
+    body = "x" * 250
+    sources_block = "\n\n**Источники:**\n1. doc"
+    full_answer = body + sources_block
+    expected_stripped = body
+
+    monkeypatch.setattr("scripts.telegram_bot_worker.settings.TELEGRAM_RICH_MESSAGES", True)
+    monkeypatch.setattr("scripts.telegram_bot_worker.settings.TELEGRAM_SHOW_SOURCES", False)
+    monkeypatch.setattr("scripts.telegram_bot_worker.settings.TELEGRAM_RICH_MAX_CHARS", rich_max)
+    monkeypatch.setattr(
+        "scripts.telegram_bot_worker.settings.TELEGRAM_STREAM_EDIT_INTERVAL_MS", 0
+    )
+    monkeypatch.setattr(
+        "scripts.telegram_bot_worker.settings.TELEGRAM_INTERNAL_API_URL",
+        "http://127.0.0.1:5000",
+    )
+    monkeypatch.setattr(
+        "scripts.telegram_bot_worker.settings.TELEGRAM_INTERNAL_API_KEY",
+        "secret",
+    )
+    monkeypatch.setattr(
+        "scripts.telegram_bot_worker.hydrate_session",
+        lambda session, tg_user_id: setattr(session, "user_id", 1) or True,
+    )
+
+    legacy = []
+
+    def fake_send_full(client, chat_id, message_id, markdown_text):
+        legacy.append((chat_id, message_id, markdown_text))
+
+    monkeypatch.setattr("scripts.telegram_bot_worker._send_full_answer", fake_send_full)
+
+    class FakeClient:
+        def send_chat_action(self, *a, **k):
+            return {"ok": True}
+
+        def send_rich_message_draft(self, *a, **k):
+            return {"ok": True}
+
+        def send_rich_message(self, *a, **k):
+            raise TelegramError("rich failed")
+
+        def send_message(self, *a, **k):
+            raise AssertionError("classic send_message should not be used")
+
+        def edit_message_text(self, *a, **k):
+            raise AssertionError("classic edit should not be used")
+
+    class FakeResp:
+        def raise_for_status(self):
+            return None
+
+        def iter_lines(self, decode_unicode=True):
+            yield (
+                f'data: {{"type":"done","answer":{json.dumps(full_answer)},'
+                '"chat_id":"c1","sources":[],"citations":[]}'
+            )
+            yield "data: [DONE]"
+
+    monkeypatch.setattr(
+        "scripts.telegram_bot_worker.requests.post",
+        lambda *a, **k: FakeResp(),
+    )
+
+    update = {
+        "update_id": 3,
+        "message": {"chat": {"id": 1}, "from": {"id": 2}, "text": "q"},
+    }
+    handle_question(update, TelegramSession(), FakeClient(), text="q")
+
+    assert legacy
+    fallback_markdown = legacy[0][2]
+    assert len(fallback_markdown) > rich_max
+    assert fallback_markdown == expected_stripped
+    assert "**Источники:**" not in fallback_markdown

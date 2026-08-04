@@ -227,6 +227,8 @@ class Settings:
     TELEGRAM_STREAM_EDIT_INTERVAL_MS: int = int(os.getenv("TELEGRAM_STREAM_EDIT_INTERVAL_MS", "800"))
     TELEGRAM_MAX_MESSAGE_LENGTH: int = int(os.getenv("TELEGRAM_MAX_MESSAGE_LENGTH", "4096"))
     TELEGRAM_SHOW_SOURCES: bool = os.getenv("TELEGRAM_SHOW_SOURCES", "false").lower() == "true"
+    TELEGRAM_RICH_MESSAGES: bool = os.getenv("TELEGRAM_RICH_MESSAGES", "true").lower() == "true"
+    TELEGRAM_RICH_MAX_CHARS: int = int(os.getenv("TELEGRAM_RICH_MAX_CHARS", "32000"))
 
     # Database настройки
     DATABASE_PATH: str = os.getenv("DATABASE_PATH", "./data/wiki_qa.db")

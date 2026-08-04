@@ -148,6 +148,28 @@ def split_markdown_for_telegram(
     return parts if parts else [markdown]
 
 
+def validate_rich_message(rich_message: dict[str, Any]) -> dict[str, Any]:
+    """Require exactly one of markdown / html / blocks per Bot API InputRichMessage."""
+    if not isinstance(rich_message, dict):
+        raise ValueError("rich_message must be a dict")
+    present = [k for k in ("markdown", "html", "blocks") if k in rich_message and rich_message[k] is not None]
+    if len(present) != 1:
+        raise ValueError("rich_message must contain exactly one of markdown, html, blocks")
+    return rich_message
+
+
+def prepare_rich_markdown(text: str, *, max_chars: int) -> str:
+    """Truncate markdown for Rich Message limits."""
+    text = text or ""
+    if max_chars <= 0:
+        return ""
+    if len(text) <= max_chars:
+        return text
+    if max_chars == 1:
+        return "…"
+    return text[: max_chars - 1] + "…"
+
+
 class TelegramError(RuntimeError):
     """Ошибка вызова Telegram Bot API."""
 
@@ -250,6 +272,36 @@ class TelegramClient:
         if reply_markup is not None:
             payload["reply_markup"] = reply_markup
         return self._request("sendMessage", json_payload=payload)
+
+    def send_rich_message(
+        self,
+        chat_id: int,
+        rich_message: dict[str, Any],
+        *,
+        reply_markup: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "chat_id": chat_id,
+            "rich_message": validate_rich_message(rich_message),
+        }
+        if reply_markup is not None:
+            payload["reply_markup"] = reply_markup
+        return self._request("sendRichMessage", json_payload=payload)
+
+    def send_rich_message_draft(
+        self,
+        chat_id: int,
+        draft_id: int,
+        rich_message: dict[str, Any],
+    ) -> dict[str, Any]:
+        if not draft_id:
+            raise ValueError("draft_id must be a non-zero integer")
+        payload: dict[str, Any] = {
+            "chat_id": chat_id,
+            "draft_id": int(draft_id),
+            "rich_message": validate_rich_message(rich_message),
+        }
+        return self._request("sendRichMessageDraft", json_payload=payload)
 
     def answer_callback_query(
         self,
