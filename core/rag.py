@@ -469,33 +469,39 @@ def _looks_like_flowchart_block(text: str) -> bool:
 
 def _quote_unsafe_flowchart_labels(text: str) -> str:
     """
-    Mermaid 10 flowchart: подписи узлов с (, ), <br/>, URL ломают парсер без кавычек.
-    Преобразует `A[текст (прим)]` -> `A["текст (прим)"]`, `{...}` -> `{"..."}`.
+    Mermaid 10 flowchart: подписи узлов с (, ), <br/>, URL, вложенными \", =>
+    ломают парсер без внешних кавычек.
+    Преобразует `A[текст (прим)]` -> `A["текст (прим)"]`,
+    `A[Открыть "Доп"]` -> `A["Открыть 'Доп'"]`, `{...}` -> `{"..."}`.
     """
     if not _looks_like_flowchart_block(text):
         return text
 
-    unsafe = re.compile(r"[()<]|://")
+    unsafe = re.compile(r"[()<]|://|=>")
     br_tag = re.compile(r"(?i)<br\s*/?>")
 
     def _needs_quotes(label: str) -> bool:
-        return bool(unsafe.search(label) or br_tag.search(label) or "'" in label)
+        return bool(
+            unsafe.search(label)
+            or br_tag.search(label)
+            or "'" in label
+            or '"' in label
+        )
+
+    def _wrap_quoted(node_id: str, label: str, open_ch: str, close_ch: str) -> str:
+        if label.startswith('"') and label.endswith('"') and len(label) >= 2:
+            inner = label[1:-1].replace('"', "'")
+            return f'{node_id}{open_ch}"{inner}"{close_ch}'
+        if not _needs_quotes(label):
+            return f"{node_id}{open_ch}{label}{close_ch}"
+        cleaned = label.replace('"', "'")
+        return f'{node_id}{open_ch}"{cleaned}"{close_ch}'
 
     def _quote_square(m: re.Match) -> str:
-        node_id = m.group(1)
-        label = m.group(2)
-        if not _needs_quotes(label):
-            return m.group(0)
-        label = label.replace('"', "'")
-        return f'{node_id}["{label}"]'
+        return _wrap_quoted(m.group(1), m.group(2), "[", "]")
 
     def _quote_diamond(m: re.Match) -> str:
-        node_id = m.group(1)
-        label = m.group(2)
-        if not _needs_quotes(label):
-            return m.group(0)
-        label = label.replace('"', "'")
-        return f'{node_id}{{"{label}"}}'
+        return _wrap_quoted(m.group(1), m.group(2), "{", "}")
 
     def _quote_subgraph_brackets(m: re.Match) -> str:
         prefix = m.group(1)
@@ -505,10 +511,11 @@ def _quote_unsafe_flowchart_labels(text: str) -> str:
         title = title.replace('"', "'")
         return f'{prefix}["{title}"]'
 
-    text = re.sub(r"(\b[A-Za-z_]\w*)\[([^\]\"\n]+)\]", _quote_square, text)
-    text = re.sub(r"(\b[A-Za-z_]\w*)\{([^{}\"\n]+)\}", _quote_diamond, text)
+    # Разрешаем " внутри [...] — иначе `A[текст "кавычки"]` вообще не матчится.
+    text = re.sub(r"(\b[A-Za-z_]\w*)\[([^\]\n]+)\]", _quote_square, text)
+    text = re.sub(r"(\b[A-Za-z_]\w*)\{([^{}\n]+)\}", _quote_diamond, text)
     text = re.sub(
-        r"(?mi)^(\s*subgraph\s+\w+)\s+\[([^\]\"\n]+)\]\s*$",
+        r"(?mi)^(\s*subgraph\s+\w+)\s+\[([^\]\n]+)\]\s*$",
         _quote_subgraph_brackets,
         text,
     )

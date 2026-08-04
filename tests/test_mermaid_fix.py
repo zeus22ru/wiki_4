@@ -34,6 +34,18 @@ def test_quote_labels_with_parentheses_after_br():
     assert '{"Определить роль<br/>вариант"}' in fixed
 
 
+def test_quote_labels_with_nested_double_quotes_and_arrow():
+    """Вложенные \" и => внутри [...] ломают Mermaid 10 без внешних кавычек."""
+    raw = (
+        "flowchart TD\n"
+        'EditNewCard --> OpenSettings[Открыть "Доп. Сведения" => Настройки пользователя]\n'
+        "OpenSettings --> Save[ok]\n"
+    )
+    fixed = _normalize_mermaid_code(raw)
+    assert 'OpenSettings["Открыть \'Доп. Сведения\' => Настройки пользователя"]' in fixed
+    assert 'OpenSettings[Открыть "' not in fixed
+
+
 def test_fix_russian_style_directive():
     raw = "flowchart TD\nA-->B\nстиль A fill:#f9f,stroke:#333"
     fixed = _normalize_mermaid_code(raw)
