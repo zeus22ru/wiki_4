@@ -74,7 +74,22 @@ def test_validate_telegram_init_data_rejects_expired_and_future_data():
 def test_telegram_app_page(client):
     rv = client.get("/telegram-app")
     assert rv.status_code == 200
-    assert "telegram-web-app.js" in rv.get_data(as_text=True)
+    html = rv.get_data(as_text=True)
+    assert "telegram-web-app.js" in html
+    assert "mermaid@10/dist/mermaid.min.js" in html
+    assert "telegram-app.js') }}?v=3" not in html
+    assert "telegram-app.js?v=3" in html
+
+
+def test_telegram_app_renders_mermaid_blocks():
+    from pathlib import Path
+
+    script = (Path(__file__).parents[1] / "static" / "telegram-app.js").read_text(encoding="utf-8")
+
+    assert "function renderMermaidIn(container)" in script
+    assert "renderMermaidIn(bubble)" in script
+    assert "replaceStreamingMermaidWithPlaceholder(target.bubble)" in script
+    assert "'/api/mermaid/fix'" in script
 
 
 def test_webapp_auth_sets_session_for_linked_user(client, monkeypatch):

@@ -48,6 +48,10 @@ button { min-width: 44px; min-height: 44px; }
 .tg-message__meta { display: flex; gap: 8px; margin-top: 10px; }
 .tg-message__meta button { min-height: 34px; min-width: 34px; padding: 6px 10px; border: 1px solid var(--border-color); border-radius: 9px; background: transparent; color: var(--tg-muted); font-size: 12px; }
 .tg-thinking { color: var(--tg-muted); }
+.tg-mermaid { width: 100%; max-width: 100%; margin: 10px 0; overflow-x: auto; color: var(--tg-text); }
+.tg-mermaid svg { display: block; width: 100%; min-width: 520px; height: auto; margin: 0 auto; }
+.tg-mermaid-placeholder, .tg-mermaid-error { margin: 10px 0; padding: 12px; border: 1px solid var(--border-color); border-radius: 12px; background: var(--tg-bg); color: var(--tg-muted); font-size: 13px; }
+.tg-mermaid-placeholder::before { content: ""; display: inline-block; width: 12px; height: 12px; margin-right: 8px; vertical-align: -1px; border: 2px solid color-mix(in srgb, var(--tg-muted) 35%, transparent); border-top-color: var(--tg-accent); border-radius: 50%; animation: spin .8s linear infinite; }
 
 .tg-composer { display: grid; grid-template-columns: 1fr 48px; gap: 8px; padding: 10px 12px max(10px, env(safe-area-inset-bottom)); background: color-mix(in srgb, var(--tg-surface) 96%, transparent); border-top: 1px solid var(--border-color); }
 .tg-composer textarea { width: 100%; max-height: 128px; resize: none; padding: 12px 14px; border: 1px solid var(--input-border); border-radius: 14px; outline: 0; background: var(--input-bg); color: var(--tg-text); line-height: 1.35; }
@@ -72,4 +76,5 @@ button { min-width: 44px; min-height: 44px; }
     .tg-header { padding-inline: max(16px, calc((100vw - 760px) / 2)); }
     .tg-composer { padding-inline: max(12px, calc((100vw - 760px) / 2)); }
 }
+@media (max-width: 620px) { .tg-mermaid svg { min-width: 460px; } }
 @media (prefers-reduced-motion: reduce) { .tg-loader { animation-duration: 1.8s; } .tg-messages { scroll-behavior: auto; } }

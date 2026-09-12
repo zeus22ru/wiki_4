@@ -3,6 +3,7 @@
 
     const tg = window.Telegram?.WebApp;
     const state = {chatId: null, chats: [], busy: false, controller: null};
+    let mermaidInitialized = false;
     const $ = (id) => document.getElementById(id);
     const bootState = $('bootState');
     const errorState = $('errorState');
@@ -71,6 +72,107 @@
         return escapeHtml(text).replace(/\n/g, '<br>');
     }
 
+    function looksLikeMermaid(code) {
+        const text = String(code || '').trim();
+        return /^(?:graph|flowchart)\s|^(?:sequenceDiagram|classDiagram|stateDiagram|erDiagram|journey|gantt|mindmap|timeline|quadrantChart|sankey-beta)\b/.test(text);
+    }
+
+    function mermaidCodeBlocks(container) {
+        return [...container.querySelectorAll('pre > code')].filter((code) => {
+            const language = String(code.className || '').toLowerCase();
+            return language.includes('language-mermaid') || language.includes('lang-mermaid') || looksLikeMermaid(code.textContent);
+        });
+    }
+
+    function ensureMermaid() {
+        if (!window.mermaid) return false;
+        if (mermaidInitialized) return true;
+        try {
+            mermaid.initialize({
+                startOnLoad: false,
+                securityLevel: 'strict',
+                suppressErrorRendering: true,
+                theme: document.documentElement.dataset.theme === 'dark' ? 'dark' : 'default',
+            });
+            mermaidInitialized = true;
+            return true;
+        } catch (_) {
+            return false;
+        }
+    }
+
+    function replaceStreamingMermaidWithPlaceholder(container) {
+        mermaidCodeBlocks(container).forEach((code) => {
+            const placeholder = document.createElement('div');
+            placeholder.className = 'tg-mermaid-placeholder';
+            placeholder.setAttribute('role', 'status');
+            placeholder.textContent = 'Формирование диаграммы…';
+            code.parentElement.replaceWith(placeholder);
+        });
+    }
+
+    function renderMermaidIn(container) {
+        const blocks = mermaidCodeBlocks(container);
+        if (!blocks.length) return;
+
+        if (!ensureMermaid()) {
+            blocks.forEach((code) => {
+                const fallback = document.createElement('div');
+                fallback.className = 'tg-mermaid-error';
+                fallback.textContent = 'Диаграмма временно недоступна.';
+                code.parentElement.replaceWith(fallback);
+            });
+            return;
+        }
+
+        blocks.forEach((code, index) => {
+            const raw = String(code.textContent || '').trim();
+            const diagram = document.createElement('div');
+            diagram.className = 'tg-mermaid';
+            diagram.setAttribute('role', 'img');
+            diagram.setAttribute('aria-label', 'Диаграмма');
+            code.parentElement.replaceWith(diagram);
+            const renderId = `tg-mmd-${Date.now()}-${index}-${Math.random().toString(16).slice(2)}`;
+
+            const showError = () => {
+                diagram.className = 'tg-mermaid-error';
+                diagram.removeAttribute('role');
+                diagram.removeAttribute('aria-label');
+                diagram.textContent = 'Не удалось построить диаграмму.';
+            };
+
+            const render = (source, allowFix) => {
+                Promise.resolve()
+                    .then(() => mermaid.render(`${renderId}-${allowFix ? 'raw' : 'fixed'}`, source))
+                    .then((result) => {
+                        const svg = result?.svg || result;
+                        if (typeof svg !== 'string' || !svg.trim().startsWith('<svg')) throw new Error('invalid_svg');
+                        diagram.innerHTML = svg;
+                        scrollDown();
+                    })
+                    .catch((error) => {
+                        if (!allowFix) {
+                            showError();
+                            return;
+                        }
+                        api('/api/mermaid/fix', {
+                            method: 'POST',
+                            headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify({code: source, parse_error: String(error?.message || error || '')}),
+                        })
+                            .then((data) => {
+                                const fixed = String(data?.code || '').trim();
+                                if (!fixed || fixed === source) throw new Error('not_fixed');
+                                render(fixed, false);
+                            })
+                            .catch(showError);
+                    });
+            };
+
+            render(raw, true);
+        });
+    }
+
     function scrollDown() { messages.scrollTop = messages.scrollHeight; }
 
     function addMessage(role, text, details = {}) {
@@ -79,7 +181,10 @@
         row.className = `tg-message tg-message--${role}`;
         const bubble = document.createElement('div');
         bubble.className = 'tg-message__bubble';
-        if (role === 'assistant') bubble.innerHTML = markdown(text);
+        if (role === 'assistant') {
+            bubble.innerHTML = markdown(text);
+            renderMermaidIn(bubble);
+        }
         else bubble.textContent = text;
         row.appendChild(bubble);
         messages.appendChild(row);
@@ -204,6 +309,7 @@
                 if (payload.type === 'delta') {
                     answer += payload.text || '';
                     target.bubble.innerHTML = markdown(answer);
+                    replaceStreamingMermaidWithPlaceholder(target.bubble);
                     scrollDown();
                 } else if (payload.type === 'status' && !answer) {
                     target.bubble.innerHTML = `<span class="tg-thinking">${escapeHtml(payload.message || 'Готовлю ответ…')}</span>`;
