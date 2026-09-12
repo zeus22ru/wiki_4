@@ -43,6 +43,8 @@ def _validate_registration(data: dict) -> tuple[str, str, str] | tuple[None, Non
 
 
 def _login_user(user) -> None:
+    flask_session.pop("telegram_user_id", None)
+    flask_session.pop("auth_type", None)
     flask_session["user_id"] = user.id
     flask_session["role"] = user.role
     flask_session.permanent = True
@@ -95,6 +97,7 @@ def logout():
     """Выйти из пользовательского аккаунта, оставив гостевой режим доступным."""
     flask_session.pop("user_id", None)
     flask_session.pop("role", None)
+    flask_session.pop("telegram_user_id", None)
+    flask_session.pop("auth_type", None)
     ensure_guest_id()
     return jsonify(_user_payload(None))
-

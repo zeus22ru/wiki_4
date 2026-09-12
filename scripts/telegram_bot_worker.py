@@ -51,6 +51,7 @@ BUTTON_HELP = "❓ Справка"
 BUTTON_RESET = "🔄 Новый диалог"
 BUTTON_MODE = "📝 Режим ответа"
 BUTTON_HISTORY = "📜 История"
+BUTTON_WEBAPP = "🚀 Открыть БочкарИИ"
 
 MODE_LABELS: dict[str, str] = {
     "обычный": "Обычный",
@@ -64,11 +65,18 @@ MODE_LABELS: dict[str, str] = {
 
 def build_main_keyboard() -> dict[str, Any]:
     """Постоянная reply-клавиатура с основными действиями."""
+    rows: list[list[dict[str, Any]]] = []
+    if settings.TELEGRAM_WEBAPP_ENABLED and settings.TELEGRAM_WEBAPP_URL:
+        rows.append([{
+            "text": BUTTON_WEBAPP,
+            "web_app": {"url": settings.TELEGRAM_WEBAPP_URL},
+        }])
+    rows.extend([
+        [{"text": BUTTON_HELP}, {"text": BUTTON_RESET}],
+        [{"text": BUTTON_MODE}, {"text": BUTTON_HISTORY}],
+    ])
     return {
-        "keyboard": [
-            [{"text": BUTTON_HELP}, {"text": BUTTON_RESET}],
-            [{"text": BUTTON_MODE}, {"text": BUTTON_HISTORY}],
-        ],
+        "keyboard": rows,
         "resize_keyboard": True,
         "is_persistent": True,
     }

@@ -389,6 +389,16 @@ def index():
     )
 
 
+@app.route('/telegram-app')
+@log_api_request
+def telegram_mini_app():
+    """Мобильный интерфейс БочкарИИ, запускаемый внутри Telegram."""
+    return render_template(
+        'telegram_app.html',
+        telegram_bot_username=settings.TELEGRAM_BOT_USERNAME,
+    )
+
+
 @app.route('/api/rag/defaults', methods=['GET'])
 @log_api_request
 def rag_defaults():
@@ -872,11 +882,17 @@ def log_request_info():
     # Пропускаем логирование статических файлов
     if request.path.startswith('/static'):
         return
+    internal_telegram_path = request.path in {
+        '/api/telegram/verify',
+        '/api/telegram/resolve',
+    }
     if (
         settings.API_KEY
         and request.path.startswith('/api/')
         and not request.path.startswith('/api/auth')
         and not request.path.startswith('/api/issues')
+        and request.path != '/api/telegram/webapp/auth'
+        and (internal_telegram_path or not current_user_id())
     ):
         api_key = request.headers.get("X-API-Key") or request.args.get("api_key")
         admin_key = request.headers.get("X-Admin-Key") or request.args.get("admin_key")

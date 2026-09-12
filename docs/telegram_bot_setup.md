@@ -23,6 +23,21 @@ TELEGRAM_BOT_TOKEN=123456789:ABCdefGHIjklMNOpqrsTUVwxyz
 TELEGRAM_INTERNAL_API_URL=http://127.0.0.1:5000
 ```
 
+### Telegram Mini App
+
+В проект также входит мобильный Web App с чатом, историей и источниками. Для него нужен публичный HTTPS-адрес:
+
+```env
+TELEGRAM_WEBAPP_ENABLED=true
+TELEGRAM_BOT_USERNAME=WikiQA_Bot
+TELEGRAM_WEBAPP_URL=https://assistant.example.com/telegram-app
+TELEGRAM_WEBAPP_MAX_AGE_SECONDS=3600
+```
+
+После перезапуска worker добавит кнопку **«Открыть БочкарИИ»** в клавиатуру бота. Для постоянной кнопки меню можно также открыть `@BotFather` → `/mybots` → Bot Settings → Menu Button и указать тот же URL.
+
+Mini App использует существующую привязку аккаунта: сначала пользователь получает код в основном веб-интерфейсе и отправляет боту `/start <код>`. Данные `Telegram.WebApp.initData` проверяются сервером по HMAC; Telegram ID из браузера сам по себе не считается авторизацией.
+
 Если основной API защищён переменной `API_KEY`, добавьте тот же ключ:
 
 ```env
@@ -168,4 +183,3 @@ python scripts/telegram_bot_worker.py --once
 - Убедитесь, что код ещё не истёк (TTL — `TELEGRAM_LINK_CODE_TTL_SECONDS` секунд).
 - Проверьте, что код вводится ровно 6 цифр после `/start`.
 - Сгенерируйте новый код в веб-интерфейсе.
-

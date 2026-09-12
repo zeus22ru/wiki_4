@@ -219,6 +219,12 @@ class Settings:
     # Telegram bot integration
     TELEGRAM_ENABLED: bool = os.getenv("TELEGRAM_ENABLED", "false").lower() == "true"
     TELEGRAM_BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
+    TELEGRAM_BOT_USERNAME: str = os.getenv("TELEGRAM_BOT_USERNAME", "").lstrip("@")
+    TELEGRAM_WEBAPP_ENABLED: bool = os.getenv(
+        "TELEGRAM_WEBAPP_ENABLED", os.getenv("TELEGRAM_ENABLED", "false")
+    ).lower() == "true"
+    TELEGRAM_WEBAPP_MAX_AGE_SECONDS: int = int(os.getenv("TELEGRAM_WEBAPP_MAX_AGE_SECONDS", "3600"))
+    TELEGRAM_WEBAPP_URL: str = os.getenv("TELEGRAM_WEBAPP_URL", "")
     TELEGRAM_POLL_INTERVAL_SECONDS: int = int(os.getenv("TELEGRAM_POLL_INTERVAL_SECONDS", "2"))
     TELEGRAM_OFFSET_PATH: str = os.getenv("TELEGRAM_OFFSET_PATH", "./data/telegram_update_offset.json")
     TELEGRAM_INTERNAL_API_URL: str = os.getenv("TELEGRAM_INTERNAL_API_URL", f"http://127.0.0.1:{API_PORT}")

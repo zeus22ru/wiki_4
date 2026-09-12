@@ -381,6 +381,8 @@ python scripts/telegram_bot_worker.py --once
 
 Подробная инструкция: [docs/telegram_bot_setup.md](docs/telegram_bot_setup.md).
 
+Для мобильного Mini App задайте `TELEGRAM_WEBAPP_ENABLED=true`, `TELEGRAM_BOT_USERNAME` и публичный HTTPS `TELEGRAM_WEBAPP_URL`, оканчивающийся на `/telegram-app`. Worker добавит кнопку запуска в чат с ботом; вход в Mini App выполняется через проверенный Telegram `initData` и существующую привязку `/start <код>`.
+
 ## Конфигурация
 
 Конфигурация централизована в [config/settings.py](config/settings.py) и загружается из `.env` файла. Вспомогательные функции: `inference_server_reachable()`, `fetch_remote_model_ids()`, `uses_openai_compatible_api()` (экспорт из пакета `config`).

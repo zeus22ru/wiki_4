@@ -2,9 +2,10 @@
 # -*- coding: utf-8 -*-
 """API для привязки Telegram-аккаунтов к пользователям системы."""
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, session as flask_session
 
 from api.middleware.auth import current_user_id
+from api.middleware.telegram_webapp import validate_telegram_init_data
 from config import get_logger, settings
 from core.chat_history import get_chat_history
 
@@ -83,5 +84,54 @@ def status():
     """Публичный статус интеграции с Telegram."""
     return jsonify({
         "enabled": settings.TELEGRAM_ENABLED,
-        "bot_username": None,
+        "webapp_enabled": settings.TELEGRAM_WEBAPP_ENABLED,
+        "bot_username": settings.TELEGRAM_BOT_USERNAME or None,
+    })
+
+
+@telegram_bp.route("/webapp/auth", methods=["POST"])
+def webapp_auth():
+    """Проверить Telegram initData и открыть обычную пользовательскую web-сессию."""
+    if not settings.TELEGRAM_WEBAPP_ENABLED:
+        return jsonify({"error": "Telegram Mini App отключено", "code": "webapp_disabled"}), 503
+    if not settings.TELEGRAM_BOT_TOKEN:
+        return jsonify({"error": "Telegram Mini App не настроено", "code": "webapp_unconfigured"}), 503
+
+    data = _json_body()
+    try:
+        identity = validate_telegram_init_data(
+            data.get("init_data"),
+            settings.TELEGRAM_BOT_TOKEN,
+            max_age_seconds=settings.TELEGRAM_WEBAPP_MAX_AGE_SECONDS,
+        )
+    except ValueError as exc:
+        logger.warning("Отклонена авторизация Telegram Mini App: %s", exc)
+        return jsonify({"error": "Не удалось подтвердить вход через Telegram", "code": "invalid_init_data"}), 401
+
+    history = get_chat_history()
+    link = history.get_telegram_link(identity.user_id)
+    if not link:
+        return jsonify({
+            "error": "Сначала привяжите Telegram к аккаунту БочкарИИ",
+            "code": "telegram_not_linked",
+            "bot_username": settings.TELEGRAM_BOT_USERNAME or None,
+        }), 403
+
+    user = history.get_user(link["user_id"])
+    if not user or not user.is_active:
+        return jsonify({"error": "Аккаунт недоступен", "code": "account_unavailable"}), 403
+
+    flask_session.clear()
+    flask_session["user_id"] = user.id
+    flask_session["role"] = user.role
+    flask_session["telegram_user_id"] = identity.user_id
+    flask_session["auth_type"] = "telegram_webapp"
+    flask_session.permanent = True
+
+    logger.info("Вход через Telegram Mini App для user_id=%s", user.id)
+    return jsonify({
+        "authenticated": True,
+        "auth_type": "telegram_webapp",
+        "telegram_user": identity.to_dict(),
+        "user": user.to_dict(),
     })
