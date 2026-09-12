@@ -1901,6 +1901,25 @@ body {
     margin-right: auto;
 }
 
+.input-area.is-drag-over {
+    background: color-mix(in srgb, var(--primary-color) 8%, var(--chat-bg));
+}
+
+.input-area.is-drag-over .message-form {
+    outline: 2px dashed var(--primary-color);
+    outline-offset: 5px;
+}
+
+.input-area.is-drag-over::before {
+    content: 'Отпустите файлы, чтобы прикрепить';
+    display: block;
+    max-width: 1040px;
+    margin: 0 auto 0.55rem;
+    color: var(--primary-color);
+    font-size: 0.82rem;
+    font-weight: 600;
+}
+
 .attachment-chip {
     display: inline-flex;
     align-items: center;

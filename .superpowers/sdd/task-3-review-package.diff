@@ -1,0 +1,153 @@
+﻿# Review package Task 3
+# Head: working tree (uncommitted)
+# Files: static/script.js only
+
+## git status
+ M static/script.js
+
+## git diff --stat
+ static/script.js | 49 ++++++++++++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 48 insertions(+), 1 deletion(-)
+
+## full diff
+diff --git a/static/script.js b/static/script.js
+index a69dbdd..1636b55 100644
+--- a/static/script.js
++++ b/static/script.js
+@@ -63,20 +63,24 @@ const workspaceSidebar = document.getElementById('workspaceSidebar');
+ const sidebarToggle = document.getElementById('sidebarToggle');
+ const emptyTiles = document.getElementById('emptyTiles');
+ const chatContainer = document.querySelector('.chat-container');
+ const continueTileHint = document.getElementById('continueTileHint');
+ const ragAdvancedToggle = document.getElementById('ragAdvancedToggle');
+ const ragAdvancedPanel = document.getElementById('ragAdvancedPanel');
+ const clearChatsBtn = document.getElementById('clearChatsBtn');
+ const chatList = document.getElementById('chatList');
+ const chatSearchInput = document.getElementById('chatSearchInput');
+ const answerModeSelect = document.getElementById('answerModeSelect');
++const followupSuggestionsToggle = document.getElementById('followupSuggestionsToggle');
++const relatedDocsToggle = document.getElementById('relatedDocsToggle');
++const CHAT_SHOW_FOLLOWUPS_KEY = 'chatShowFollowups';
++const CHAT_SHOW_RELATED_DOCS_KEY = 'chatShowRelatedDocs';
+ const topKInput = document.getElementById('topKInput');
+ const minScoreInput = document.getElementById('minScoreInput');
+ const exportChatBtn = document.getElementById('exportChatBtn');
+ const uploadForm = document.getElementById('uploadForm');
+ const documentFileInput = document.getElementById('documentFileInput');
+ let _sourcesFocusRestore = null;
+ const documentsList = document.getElementById('documentsList');
+ const refreshDocumentsBtn = document.getElementById('refreshDocumentsBtn');
+ const previewDocumentBtn = document.getElementById('previewDocumentBtn');
+ const reindexBtn = document.getElementById('reindexBtn');
+@@ -640,20 +644,21 @@ document.addEventListener('DOMContentLoaded', () => {
+         const onlyWelcome = [...messagesContainer.querySelectorAll('.message')].every(
+             (node) => node.classList.contains('welcome-message') || node.classList.contains('system-message')
+         );
+         if (onlyWelcome) {
+             messagesContainer.innerHTML = '';
+         }
+         syncEmptyTilesState();
+     }
+     loadChats().then(restoreActiveChatAfterReload);
+     syncRagToolbarDefaults();
++    initChatSuggestionToggles();
+     setInterval(checkHealth, 30000);
+ 
+     messageForm.addEventListener('submit', handleSubmit);
+     closeSources.addEventListener('click', closeSourcesPanel);
+     document.addEventListener('keydown', (event) => {
+         if (event.key === 'Escape' && sourcesPanel?.classList.contains('open') && isSourcesDrawerMode()) {
+             closeSourcesPanel();
+         }
+     });
+     if (sidebarNewChatBtn) {
+@@ -2397,24 +2402,66 @@ function renderVerificationResult(container, verification) {
+             </li>
+         `).join('')}</ul>`
+         : '';
+     container.innerHTML = `
+         <div class="verification-title">${escapeHtml(statusLabels[status] || statusLabels.partial)}</div>
+         <div>${escapeHtml(verification.summary || '╨Я╤А╨╛╨▓╨╡╤А╨║╨░ ╨╖╨░╨▓╨╡╤А╤И╨╡╨╜╨░.')}</div>
+         ${detailsHtml}
+     `;
+ }
+ 
++function readLocalFlag(key) {
++    try {
++        return localStorage.getItem(key) === '1';
++    } catch (_) {
++        return false;
++    }
++}
++
++function writeLocalFlag(key, enabled) {
++    try {
++        localStorage.setItem(key, enabled ? '1' : '0');
++    } catch (_) {
++        /* ignore quota / private mode */
++    }
++}
++
++function isFollowupSuggestionsEnabled() {
++    return Boolean(followupSuggestionsToggle?.checked);
++}
++
++function isRelatedDocsEnabled() {
++    return Boolean(relatedDocsToggle?.checked);
++}
++
++function initChatSuggestionToggles() {
++    if (followupSuggestionsToggle) {
++        followupSuggestionsToggle.checked = readLocalFlag(CHAT_SHOW_FOLLOWUPS_KEY);
++        followupSuggestionsToggle.addEventListener('change', () => {
++            writeLocalFlag(CHAT_SHOW_FOLLOWUPS_KEY, followupSuggestionsToggle.checked);
++        });
++    }
++    if (relatedDocsToggle) {
++        relatedDocsToggle.checked = readLocalFlag(CHAT_SHOW_RELATED_DOCS_KEY);
++        relatedDocsToggle.addEventListener('change', () => {
++            writeLocalFlag(CHAT_SHOW_RELATED_DOCS_KEY, relatedDocsToggle.checked);
++        });
++    }
++}
++
+ async function loadFollowupSuggestions(messageEl, details = {}) {
+     if (!messageEl || !details.answer || messageEl.querySelector('.followup-suggestions')) {
+         return;
+     }
++    if (!isFollowupSuggestionsEnabled()) {
++        return;
++    }
+     try {
+         const data = await apiJson('/api/chat/suggestions', {
+             method: 'POST',
+             headers: {'Content-Type': 'application/json'},
+             body: JSON.stringify({
+                 answer: details.answer,
+                 sources: details.sources || [],
+                 citations: details.citations || [],
+             }),
+         });
+@@ -2443,21 +2490,21 @@ function renderFollowupSuggestions(messageEl, suggestions) {
+             messageInput.value = question;
+             messageInput.focus();
+             messageForm.dispatchEvent(new Event('submit'));
+         });
+         wrapper.appendChild(btn);
+     });
+     content.appendChild(wrapper);
+ }
+ 
+ async function loadRelatedDocuments(messageEl, sources = []) {
+-    if (currentAuth.role !== 'admin') {
++    if (!isRelatedDocsEnabled()) {
+         return;
+     }
+     if (!messageEl || !sources.length || messageEl.querySelector('.related-documents')) {
+         return;
+     }
+     try {
+         const data = await apiJson('/api/documents/related', {
+             method: 'POST',
+             headers: {'Content-Type': 'application/json'},
+             body: JSON.stringify({

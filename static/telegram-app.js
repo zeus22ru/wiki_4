@@ -11,6 +11,19 @@
     const input = $('messageInput');
     const sendButton = $('sendButton');
 
+    function telegramInitData() {
+        if (tg?.initData) return tg.initData;
+
+        // Telegram also appends the signed launch payload to the URL fragment.
+        // This fallback supports desktop clients where the WebApp bridge is not
+        // ready when the application script is evaluated. The server validates
+        // the payload HMAC before creating a session.
+        const fragment = window.location.hash.startsWith('#')
+            ? window.location.hash.slice(1)
+            : window.location.hash;
+        return new URLSearchParams(fragment).get('tgWebAppData') || '';
+    }
+
     function applyTelegramTheme() {
         document.documentElement.dataset.theme = tg?.colorScheme === 'dark' ? 'dark' : 'light';
         if (tg?.themeParams?.bg_color) {
@@ -258,14 +271,15 @@
         tg?.ready?.();
         tg?.expand?.();
 
-        if (!tg?.initData) {
+        const initData = telegramInitData();
+        if (!initData) {
             showError('Откройте приложение в Telegram', 'Эта страница получает безопасные данные входа только внутри Telegram.');
             return;
         }
         try {
             const auth = await api('/api/telegram/webapp/auth', {
                 method: 'POST', headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({init_data: tg.initData}),
+                body: JSON.stringify({init_data: initData}),
             });
             $('serviceStatus').textContent = auth.telegram_user?.first_name ? `В сети · ${auth.telegram_user.first_name}` : 'В сети';
             bootState.hidden = true;

@@ -115,6 +115,8 @@ python scripts/telegram_bot_worker.py --once
 ```
 
 Worker хранит подтверждённый `offset` в `TELEGRAM_OFFSET_PATH`, по умолчанию `./data/telegram_update_offset.json`.
+Рядом с ним worker создаёт файл блокировки `.lock`. Одновременно может работать только один экземпляр:
+повторный запуск завершится сразу с кодом `2`, не вызывая конфликт `getUpdates` в Telegram.
 
 ## 5. Привязка аккаунта пользователем
 
@@ -177,6 +179,9 @@ Worker хранит подтверждённый `offset` в `TELEGRAM_OFFSET_PA
 ```powershell
 python scripts/telegram_bot_worker.py --once
 ```
+
+Ошибка HTTP 409 `terminated by other getUpdates request` означает, что тот же токен уже использует
+другой polling-worker. Остановите старый процесс или перезапустите проект через `start.bat`.
 
 ### Привязка не работает
 

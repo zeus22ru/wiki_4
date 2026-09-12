@@ -242,9 +242,18 @@ class TelegramClient:
 
         try:
             response.raise_for_status()
-            body = response.json()
         except requests.HTTPError as exc:
-            raise TelegramError(f"HTTP {response.status_code} при вызове {method}: {exc}") from exc
+            try:
+                error_body = response.json()
+            except ValueError:
+                error_body = {}
+            description = error_body.get("description") if isinstance(error_body, dict) else None
+            # Не включаем URL из requests.HTTPError: URL Bot API содержит секретный токен.
+            details = description or response.reason or "неизвестная ошибка Telegram API"
+            raise TelegramError(f"HTTP {response.status_code} при вызове {method}: {details}") from exc
+
+        try:
+            body = response.json()
         except ValueError as exc:
             raise TelegramError(f"Telegram вернул не JSON для {method}") from exc
 
@@ -265,6 +274,19 @@ class TelegramClient:
             payload["offset"] = offset
         body = self._request("getUpdates", params=payload)
         return body.get("result", []) or []
+
+    def set_web_app_menu_button(self, text: str, url: str) -> dict[str, Any]:
+        """Настроить постоянную кнопку Mini App в меню личного чата с ботом."""
+        return self._request(
+            "setChatMenuButton",
+            json_payload={
+                "menu_button": {
+                    "type": "web_app",
+                    "text": text,
+                    "web_app": {"url": url},
+                },
+            },
+        )
 
     def send_message(
         self,

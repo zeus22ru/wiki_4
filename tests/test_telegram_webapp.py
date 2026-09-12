@@ -152,7 +152,7 @@ def test_api_key_allows_authenticated_webapp_session(client, monkeypatch):
     assert chats.status_code == 200
 
 
-def test_bot_keyboard_includes_webapp_button_when_configured(monkeypatch):
+def test_bot_keyboard_keeps_webapp_out_of_reply_keyboard(monkeypatch):
     from scripts.telegram_bot_worker import build_main_keyboard
 
     monkeypatch.setattr("scripts.telegram_bot_worker.settings.TELEGRAM_WEBAPP_ENABLED", True)
@@ -163,4 +163,23 @@ def test_bot_keyboard_includes_webapp_button_when_configured(monkeypatch):
 
     keyboard = build_main_keyboard()
 
-    assert keyboard["keyboard"][0][0]["web_app"]["url"].endswith("/telegram-app")
+    assert all(
+        "web_app" not in button
+        for row in keyboard["keyboard"]
+        for button in row
+    )
+
+
+def test_bot_inline_keyboard_includes_webapp_button_when_configured(monkeypatch):
+    from scripts.telegram_bot_worker import webapp_inline_keyboard
+
+    monkeypatch.setattr("scripts.telegram_bot_worker.settings.TELEGRAM_WEBAPP_ENABLED", True)
+    monkeypatch.setattr(
+        "scripts.telegram_bot_worker.settings.TELEGRAM_WEBAPP_URL",
+        "https://assistant.example.com/telegram-app",
+    )
+
+    keyboard = webapp_inline_keyboard()
+
+    assert keyboard is not None
+    assert keyboard["inline_keyboard"][0][0]["web_app"]["url"].endswith("/telegram-app")

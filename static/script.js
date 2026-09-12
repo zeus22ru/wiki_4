@@ -1558,6 +1558,38 @@ function initAttachmentControls() {
     if (messageInput) {
         messageInput.addEventListener('paste', onMessageInputPaste);
     }
+    const dropTarget = document.querySelector('.input-area');
+    if (dropTarget) {
+        let dragDepth = 0;
+        const setDragState = (active) => dropTarget.classList.toggle('is-drag-over', active);
+        dropTarget.addEventListener('dragenter', (event) => {
+            if (isProcessing || !event.dataTransfer?.types?.includes('Files')) return;
+            event.preventDefault();
+            dragDepth += 1;
+            setDragState(true);
+        });
+        dropTarget.addEventListener('dragover', (event) => {
+            if (isProcessing || !event.dataTransfer?.types?.includes('Files')) return;
+            event.preventDefault();
+            event.dataTransfer.dropEffect = 'copy';
+        });
+        dropTarget.addEventListener('dragleave', (event) => {
+            if (!event.relatedTarget || !dropTarget.contains(event.relatedTarget)) {
+                dragDepth = 0;
+                setDragState(false);
+            } else {
+                dragDepth = Math.max(0, dragDepth - 1);
+                if (!dragDepth) setDragState(false);
+            }
+        });
+        dropTarget.addEventListener('drop', async (event) => {
+            if (isProcessing) return;
+            event.preventDefault();
+            dragDepth = 0;
+            setDragState(false);
+            await uploadAttachmentFiles(Array.from(event.dataTransfer?.files || []));
+        });
+    }
 }
 
 function clipboardImageFiles(clipboardData) {

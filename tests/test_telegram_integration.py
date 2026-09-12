@@ -5,11 +5,13 @@ from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
 
 import pytest
+import requests
 from werkzeug.security import generate_password_hash
 
 from core.rag import RAGResult
 from integrations.telegram import (
     TelegramClient,
+    TelegramError,
     escape_html,
     markdown_to_telegram_html,
     split_markdown_for_telegram,
@@ -17,6 +19,8 @@ from integrations.telegram import (
 )
 from scripts.telegram_bot_worker import (
     BUTTON_MODE,
+    TelegramWorkerLock,
+    WorkerAlreadyRunningError,
     build_main_keyboard,
     build_mode_inline_keyboard,
     collect_image_attachment_ids,
@@ -71,6 +75,48 @@ def test_telegram_client_get_updates(monkeypatch):
     assert calls[0]["params"]["offset"] == 42
     assert calls[0]["params"]["limit"] == 10
     assert calls[0]["params"]["timeout"] == 5
+
+
+def test_telegram_client_http_error_uses_api_description_without_token(monkeypatch):
+    def mock_get(url, params=None, timeout=None):
+        response = MagicMock()
+        response.status_code = 409
+        response.reason = "Conflict"
+        response.raise_for_status.side_effect = requests.HTTPError(
+            f"409 Client Error for url: {url}"
+        )
+        response.json.return_value = {
+            "ok": False,
+            "error_code": 409,
+            "description": "Conflict: terminated by other getUpdates request",
+        }
+        return response
+
+    monkeypatch.setattr("integrations.telegram.requests.get", mock_get)
+
+    client = TelegramClient(bot_token="secret-token")
+    with pytest.raises(TelegramError) as exc_info:
+        client.get_updates(timeout=0)
+
+    message = str(exc_info.value)
+    assert "terminated by other getUpdates request" in message
+    assert "secret-token" not in message
+
+
+def test_telegram_worker_lock_rejects_second_instance(tmp_path):
+    lock_path = tmp_path / "telegram-worker.lock"
+    first = TelegramWorkerLock(lock_path)
+    second = TelegramWorkerLock(lock_path)
+
+    first.acquire()
+    try:
+        with pytest.raises(WorkerAlreadyRunningError):
+            second.acquire()
+    finally:
+        first.release()
+
+    second.acquire()
+    second.release()
 
 
 def test_telegram_client_send_message(monkeypatch):

@@ -26,6 +26,9 @@ from urllib.parse import parse_qsl, quote, unquote_plus, urljoin, urlparse, urlu
 
 import requests
 from bs4 import BeautifulSoup
+from dotenv import load_dotenv
+
+load_dotenv()
 
 
 DEFAULT_BASE_URL = "http://wiki.bochkari.local"

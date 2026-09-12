@@ -11,7 +11,7 @@ import re
 import sys
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO
 
 import requests
 
@@ -63,23 +63,117 @@ MODE_LABELS: dict[str, str] = {
 }
 
 
+class WorkerAlreadyRunningError(RuntimeError):
+    """Другой Telegram polling-worker уже удерживает блокировку."""
+
+
+class TelegramWorkerLock:
+    """Межпроцессная блокировка, автоматически снимаемая ОС при завершении worker."""
+
+    def __init__(self, path: str | Path):
+        self.path = Path(path)
+        self._handle: BinaryIO | None = None
+
+    def acquire(self) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        handle = self.path.open("a+b")
+        if handle.tell() == 0:
+            handle.write(b"\0")
+            handle.flush()
+        handle.seek(0)
+
+        try:
+            if os.name == "nt":
+                import msvcrt
+
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except (OSError, BlockingIOError) as exc:
+            handle.close()
+            raise WorkerAlreadyRunningError(
+                "Telegram worker уже запущен. Остановите существующий экземпляр перед новым запуском."
+            ) from exc
+
+        self._handle = handle
+
+    def release(self) -> None:
+        handle = self._handle
+        if handle is None:
+            return
+        try:
+            handle.seek(0)
+            if os.name == "nt":
+                import msvcrt
+
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        finally:
+            handle.close()
+            self._handle = None
+
+    def __enter__(self) -> "TelegramWorkerLock":
+        self.acquire()
+        return self
+
+    def __exit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
+        self.release()
+
+
 def build_main_keyboard() -> dict[str, Any]:
     """Постоянная reply-клавиатура с основными действиями."""
-    rows: list[list[dict[str, Any]]] = []
-    if settings.TELEGRAM_WEBAPP_ENABLED and settings.TELEGRAM_WEBAPP_URL:
-        rows.append([{
-            "text": BUTTON_WEBAPP,
-            "web_app": {"url": settings.TELEGRAM_WEBAPP_URL},
-        }])
-    rows.extend([
+    rows: list[list[dict[str, Any]]] = [
         [{"text": BUTTON_HELP}, {"text": BUTTON_RESET}],
         [{"text": BUTTON_MODE}, {"text": BUTTON_HISTORY}],
-    ])
+    ]
     return {
         "keyboard": rows,
         "resize_keyboard": True,
         "is_persistent": True,
     }
+
+
+def configure_webapp_menu_button(client: TelegramClient) -> None:
+    """Включить Mini App через меню бота — этот режим передаёт initData."""
+    if not (settings.TELEGRAM_WEBAPP_ENABLED and settings.TELEGRAM_WEBAPP_URL):
+        return
+    try:
+        client.set_web_app_menu_button(BUTTON_WEBAPP, settings.TELEGRAM_WEBAPP_URL)
+        logger.info("Кнопка Telegram Mini App настроена в меню бота")
+    except TelegramError:
+        logger.exception("Не удалось настроить кнопку Telegram Mini App в меню бота")
+
+
+def webapp_inline_keyboard() -> dict[str, Any] | None:
+    """Кнопка под сообщением: полноценный Mini App с Telegram initData."""
+    if not (settings.TELEGRAM_WEBAPP_ENABLED and settings.TELEGRAM_WEBAPP_URL):
+        return None
+    return {
+        "inline_keyboard": [[{
+            "text": BUTTON_WEBAPP,
+            "web_app": {"url": settings.TELEGRAM_WEBAPP_URL},
+        }]],
+    }
+
+
+def send_webapp_launcher(client: TelegramClient, chat_id: int) -> None:
+    """Показать запускатель Mini App под сообщением, а не в reply-клавиатуре."""
+    reply_markup = webapp_inline_keyboard()
+    if reply_markup is None:
+        return
+    try:
+        client.send_message(
+            chat_id,
+            "Откройте веб-приложение кнопкой ниже.",
+            reply_markup=reply_markup,
+        )
+    except TelegramError:
+        logger.exception("Не удалось отправить кнопку Telegram Mini App в chat_id=%s", chat_id)
 
 
 def build_mode_inline_keyboard() -> dict[str, Any]:
@@ -832,6 +926,8 @@ def process_message(update: dict[str, Any], client: TelegramClient) -> None:
                 "Привет! Отправьте /start <код>, чтобы привязать аккаунт wiki_4.",
                 reply_markup={"remove_keyboard": True},
             )
+        if hydrate_session(session, tg_user_id):
+            send_webapp_launcher(client, chat_id)
     elif cmd == "reset":
         reply = handle_reset(session)
         send_bot_message(client, chat_id, reply)
@@ -889,20 +985,8 @@ def run_once(
     return offset, processed
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description="Запустить polling-worker Telegram-бота wiki_4.")
-    parser.add_argument("--once", action="store_true", help="Выполнить один polling-цикл и завершиться")
-    parser.add_argument("--limit", type=int, default=100, help="Размер пачки updates getUpdates")
-    args = parser.parse_args()
-
-    if not settings.TELEGRAM_ENABLED:
-        print("TELEGRAM_ENABLED=false. Включите интеграцию в .env перед запуском worker.")
-        return 1
-
-    if not settings.TELEGRAM_BOT_TOKEN:
-        print("TELEGRAM_BOT_TOKEN не задан")
-        return 1
-
+def run_worker(args: argparse.Namespace) -> int:
+    """Запустить Telegram polling после проверки настроек и блокировки экземпляра."""
     client = TelegramClient(
         bot_token=settings.TELEGRAM_BOT_TOKEN,
         max_message_length=settings.TELEGRAM_MAX_MESSAGE_LENGTH,
@@ -917,6 +1001,7 @@ def main() -> int:
     username = me.get("result", {}).get("username", "unknown")
     print(f"Подключён как @{username}")
     logger.info("Telegram worker запущен как @%s", username)
+    configure_webapp_menu_button(client)
 
     offset = load_offset(settings.TELEGRAM_OFFSET_PATH)
     logger.info("Telegram worker offset=%s", offset)
@@ -944,6 +1029,30 @@ def main() -> int:
             time.sleep(5)
 
     return 0
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Запустить polling-worker Telegram-бота wiki_4.")
+    parser.add_argument("--once", action="store_true", help="Выполнить один polling-цикл и завершиться")
+    parser.add_argument("--limit", type=int, default=100, help="Размер пачки updates getUpdates")
+    args = parser.parse_args()
+
+    if not settings.TELEGRAM_ENABLED:
+        print("TELEGRAM_ENABLED=false. Включите интеграцию в .env перед запуском worker.")
+        return 1
+
+    if not settings.TELEGRAM_BOT_TOKEN:
+        print("TELEGRAM_BOT_TOKEN не задан")
+        return 1
+
+    lock_path = Path(f"{settings.TELEGRAM_OFFSET_PATH}.lock")
+    try:
+        with TelegramWorkerLock(lock_path):
+            return run_worker(args)
+    except WorkerAlreadyRunningError as exc:
+        print(f"Ошибка запуска: {exc}")
+        logger.error("Повторный запуск Telegram worker заблокирован: %s", lock_path)
+        return 2
 
 
 if __name__ == "__main__":
