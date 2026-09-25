@@ -9,7 +9,7 @@ Set-Location $projectRoot
 New-Item -ItemType Directory -Force -Path $logsPath | Out-Null
 
 if (-not (Test-Path -LiteralPath $python)) {
-    throw "Virtual environment was not found: $python"
+    throw "Virtual environment was not found: $python`nRun: powershell -NoProfile -ExecutionPolicy Bypass -File scripts\bootstrap.ps1"
 }
 
 function Stop-ProjectPythonProcess {

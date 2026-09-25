@@ -10,8 +10,12 @@ echo   Updating XWiki knowledge base
 echo ========================================
 echo.
 
-rem Use system Python because the local .venv may point to an old installation.
-set "PYTHON=python"
+set "PYTHON=%~dp0.venv\Scripts\python.exe"
+if not exist "%PYTHON%" (
+    echo ERROR: Python environment was not found. Run scripts\bootstrap.ps1 first.
+    pause
+    exit /b 1
+)
 
 echo [1/2] Exporting pages from XWiki...
 %PYTHON% scripts\parse_xwiki.py --include-space sa --include-space 1c --include-space faq

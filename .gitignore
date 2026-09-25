@@ -10,7 +10,9 @@ chroma_db/
 # Исходные данные HTML
 data/
 
-# Python
+# Python, включая локальный интерпретатор из scripts/bootstrap.ps1
+.tools/
+.python/
 __pycache__/
 *.py[cod]
 *$py.class

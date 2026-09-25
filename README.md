@@ -58,14 +58,38 @@ wiki_4/
 
 ## Требования
 
-- Python 3.10+
-- Сервер инференса: **Ollama** (Docker или нативно) или **LM Studio** с включённым локальным сервером
+- Python 3.10+. На Windows `scripts/bootstrap.ps1` скачивает CPython 3.12 в папку проекта, отдельная установка Python не нужна
+- Сервер инференса: **Ollama** (Docker или нативно), **LM Studio** или облачный OpenAI-совместимый API
 - Модели эмбеддингов и чата, согласованные с размерностью уже собранной Chroma (для `bge-m3` обычно 1024 измерений)
 - Для Ollama в Docker: Docker Desktop; для GPU — настроенная поддержка NVIDIA Container Toolkit
 
 ## Установка
 
+### Windows без системного Python
+
+На машине, где есть только Git, скрипт скачивает uv и CPython 3.12 в каталоги `.tools` и `.python`, создаёт `.venv` и ставит зависимости из `requirements.txt`.
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\bootstrap.ps1
+```
+
+Облачную OpenAI-совместимую модель можно прописать тем же запуском. `OLLAMA_URL` — базовый адрес без суффикса `/v1`: приложение само добавляет `/v1/embeddings` и `/v1/chat/completions`.
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\bootstrap.ps1 `
+  -InferenceUrl "https://api.example.com" `
+  -ApiKey "sk-..." `
+  -ChatModel "model-id" `
+  -EmbeddingModel "embedding-id"
+```
+
+Дальше запуск — `start.bat`. Повторный bootstrap обновляет пакеты. Уже существующий `.env` он не перезаписывает целиком: меняются только ключи, переданные параметрами.
+
+Если Windows попросит права администратора, это установщик Microsoft Visual C++ Runtime: без него скачанный CPython не стартует. Каталоги `.tools`, `.python` и `.venv` в git не попадают.
+
 ### 1. Установка зависимостей Python
+
+Если Python уже установлен в системе, окружение можно собрать вручную:
 
 ```powershell
 pip install -r requirements.txt
