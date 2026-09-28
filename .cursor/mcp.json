@@ -1,0 +1,7 @@
+{
+  "mcpServers": {
+    "inspo": {
+      "url": "https://inspomcp.dev/api/mcp"
+    }
+  }
+}
