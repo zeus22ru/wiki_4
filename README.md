@@ -41,8 +41,7 @@ wiki_4/
 ├── utils/                   # Утилиты
 │   ├── cache.py            # Кэширование эмбеддингов
 │   ├── embeddings.py       # Работа с эмбеддингами
-│   ├── formatters.py       # Форматирование данных
-│   └── validators.py       # Валидация данных
+│   └── formatters.py       # Форматирование данных
 ├── .env.example             # Пример конфигурации
 ├── docker-compose.yml       # Docker конфигурация
 ├── GPU_SETUP.md             # Настройка GPU
@@ -50,7 +49,9 @@ wiki_4/
 ├── qa_system.py            # CLI вопрос-ответ через текущий RAGSystem
 ├── web_app.py              # Flask веб-приложение
 ├── start.bat               # Скрипт запуска на Windows
-├── requirements.txt        # Зависимости Python
+├── requirements.txt        # Зависимости Python (runtime)
+├── requirements-dev.txt    # pytest, playwright и прочее для разработки
+├── requirements-rerank.txt # sentence-transformers (только при RERANK_ENABLED=true)
 ├── chroma_db/              # Векторная база данных (ChromaDB)
 ├── cache/                  # Кэш эмбеддингов
 └── README.md               # Этот файл
@@ -93,6 +94,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\bootstrap.ps1 `
 
 ```powershell
 pip install -r requirements.txt
+# Опционально (dev-тесты / скриншоты):
+pip install -r requirements-dev.txt
+# Опционально (cross-encoder rerank, тянет torch):
+# pip install -r requirements-rerank.txt
 ```
 
 ### 2. Настройка Ollama (или LM Studio)
@@ -608,13 +613,30 @@ $ curl -X POST http://localhost:5000/api/chat \
 
 ## Тестирование
 
-Запуск тестов:
+### Запуск тестов
 
-```powershell
-pytest
+Интерпретатор с зависимостями (пример: venv на Python 3.12). Каталоги данных и кэша выносятся во временную папку, чтобы не засорять репозиторий:
+
+```bash
+mkdir -p /tmp/wiki4_pytest
+cd /path/to/wiki_4
+env PYTHONDONTWRITEBYTECODE=1 \
+  DATABASE_PATH=/tmp/wiki4_pytest/d/db.sqlite \
+  DATA_DIR=/tmp/wiki4_pytest/d \
+  UPLOAD_DIR=/tmp/wiki4_pytest/d/up \
+  CHROMA_PERSIST_DIR=/tmp/wiki4_pytest/chroma \
+  LOG_DIR=/tmp/wiki4_pytest/logs \
+  CACHE_DIR=/tmp/wiki4_pytest/cache \
+  CHAT_ATTACHMENTS_DIR=/tmp/wiki4_pytest/d/chat_attachments \
+  TELEGRAM_OFFSET_PATH=/tmp/wiki4_pytest/d/tg.json \
+  BITRIX24_EVENT_OFFSET_PATH=/tmp/wiki4_pytest/d/bx.json \
+  SETTINGS_OVERRIDES_PATH=/tmp/wiki4_pytest/d/ov.json \
+  python -m pytest -q -p no:cacheprovider --ignore=tests/e2e
 ```
 
-Запуск отдельных наборов:
+Для разработки: `pip install -r requirements-dev.txt` (pytest и связанные инструменты).
+
+Отдельные наборы:
 
 ```powershell
 pytest tests/test_web_app.py
@@ -622,6 +644,8 @@ pytest tests/test_auth.py
 pytest tests/test_product_features.py
 pytest tests/test_bitrix24_integration.py
 pytest tests/test_telegram_integration.py
+pytest tests/test_frontend_contract.py
+pytest tests/test_scripts_smoke.py
 ```
 
 ## Устранение неполадок

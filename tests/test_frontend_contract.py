@@ -423,3 +423,55 @@ def test_admin_model_select_wired_in_frontend() -> None:
     assert "data-setting-models-refresh" in script
     assert "setting-model-picker" in style
     assert "setting-select" in style
+
+
+def test_vendor_assets_are_local_not_cdn() -> None:
+    """Основные UI-библиотеки — локальный static/vendor, не CDN (кроме Telegram SDK)."""
+    index = INDEX_HTML.read_text(encoding="utf-8")
+    telegram = (ROOT / "templates" / "telegram_app.html").read_text(encoding="utf-8")
+
+    for html in (index, telegram):
+        assert "cdn.jsdelivr.net" not in html
+        assert "cdnjs.cloudflare.com" not in html
+        assert "fonts.googleapis.com" not in html
+        assert "vendor/marked/12.0.2/marked.min.js" in html
+        assert "vendor/dompurify/3.2.4/purify.min.js" in html
+        assert "vendor/mermaid/10.9.1/mermaid.min.js" in html
+
+    assert "vendor/highlight.js/11.9.0/highlight.min.js" in index
+    assert "vendor/highlight.js/11.9.0/github-dark.min.css" in index
+    assert "vendor/fonts/inter.css" in index
+    assert "telegram.org/js/telegram-web-app.js" in telegram
+
+    for relative in (
+        "static/vendor/marked/12.0.2/marked.min.js",
+        "static/vendor/dompurify/3.2.4/purify.min.js",
+        "static/vendor/mermaid/10.9.1/mermaid.min.js",
+        "static/vendor/highlight.js/11.9.0/highlight.min.js",
+        "static/vendor/highlight.js/11.9.0/github-dark.min.css",
+        "static/vendor/fonts/inter.css",
+    ):
+        assert (ROOT / relative).is_file(), f"missing {relative}"
+
+
+def test_sanitize_html_fallback_escapes_without_dompurify() -> None:
+    """Без DOMPurify HTML не вставляется — только экранированный текст."""
+    script = (ROOT / "static" / "script.js").read_text(encoding="utf-8")
+    tg = (ROOT / "static" / "telegram-app.js").read_text(encoding="utf-8")
+
+    assert "function sanitizeHtml(" not in script
+    assert "markdown-fallback" in script
+    assert "escapeHtml(text || '')" in script or 'escapeHtml(text || "")' in script
+    assert "window.DOMPurify ? DOMPurify.sanitize(html) : escapeHtml(text)" in tg
+    assert "ensureMarkedConfigured" in script
+    assert "highlightCodeBlocks" in script
+    assert "highlight: (code" not in script
+    assert re.search(r"marked\.setOptions\(\s*\{[^}]*highlight\s*:", script) is None
+
+
+def test_health_indicator_supports_degraded() -> None:
+    script = (ROOT / "static" / "script.js").read_text(encoding="utf-8")
+    assert "Частично" in script
+    assert "degraded" in script
+    assert "data.rag" in script or "data.status" in script
+    assert "data.status" in script

@@ -19,8 +19,6 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from config import settings
-
 REPLACEMENTS = {
     ':': '_',
     '*': '_',
@@ -121,8 +119,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "-i",
         "--input",
-        default=str(PROJECT_ROOT / settings.DATA_DIR),
-        help="ZIP-файл или директория с ZIP-архивами (по умолчанию DATA_DIR из настроек)",
+        default=str(PROJECT_ROOT / "data"),
+        help="ZIP-файл или директория с ZIP-архивами (по умолчанию <корень проекта>/data)",
     )
     parser.add_argument(
         "-o",

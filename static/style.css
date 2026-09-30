@@ -3134,6 +3134,12 @@ body {
     box-shadow: 0 0 0 3px rgba(47, 158, 104, 0.18);
 }
 
+.status-indicator[data-state="degraded"] .status-dot,
+.status-dot.degraded {
+    background: var(--status-degraded);
+    box-shadow: 0 0 0 3px rgba(201, 162, 39, 0.2);
+}
+
 .status-indicator[data-state="down"] .status-dot,
 .status-dot.offline {
     background: var(--status-down);

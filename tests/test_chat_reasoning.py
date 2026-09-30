@@ -1,6 +1,6 @@
 """Тесты отсечения reasoning/thinking из ответа чата."""
 
-from utils.embeddings import strip_model_reasoning
+from utils.embeddings import strip_model_reasoning, _filter_reasoning_stream
 
 _OPEN_THINK = "<" + "think" + ">"
 _CLOSE_THINK = "</" + "think" + ">"
@@ -25,6 +25,22 @@ def test_strip_english_cot_before_russian():
 def test_strip_leaves_clean_answer_unchanged():
     answer = "## Ответ\n\nКраткая инструкция для сотрудника."
     assert strip_model_reasoning(answer) == answer
+
+
+def test_strip_preserves_1c_upp_instruction():
+    """Ответ, начинающийся с цифры/латиницы без CoT, не обрезается."""
+    answer = "1С:УПП — откройте раздел «Склад».\nЗатем нажмите Создать."
+    assert strip_model_reasoning(answer) == answer
+
+
+def test_strip_preserves_egais_latin_prefix():
+    answer = "EGAIS-статусы:\n\nОтправка идёт через УТМ."
+    assert strip_model_reasoning(answer) == answer
+
+
+def test_strip_preserves_json_array():
+    raw = '["вопрос один", "вопрос два", "вопрос три"]'
+    assert strip_model_reasoning(raw) == raw
 
 
 def test_strip_preserves_mermaid_fence():
@@ -52,3 +68,20 @@ def test_strip_preserves_mermaid_after_english_cot():
     assert "```mermaid" in out.lower()
     assert "flowchart TD" in out
     assert "A[Начало]" in out
+
+
+def test_filter_reasoning_stream_waits_for_cyrillic_on_cot():
+    chunks = [
+        "The user is asking about EGAIS.\n\n",
+        "Ответ по-русски: откройте УТМ.",
+    ]
+    out = "".join(_filter_reasoning_stream(iter(chunks)))
+    assert "The user is asking" not in out
+    assert "Ответ по-русски" in out
+
+
+def test_filter_reasoning_stream_emits_latin_without_cot():
+    chunks = ["EGAIS-статусы:\n\n", "Отправка идёт через УТМ."]
+    out = "".join(_filter_reasoning_stream(iter(chunks)))
+    assert out.startswith("EGAIS")
+    assert "УТМ" in out

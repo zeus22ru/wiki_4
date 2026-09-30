@@ -37,6 +37,12 @@ def _as_bool(value: Any) -> bool:
     return str(value).strip().lower() in {"1", "true", "y", "yes", "да"}
 
 
+def dialog_chat_map_path(offset_path: str | Path) -> Path:
+    """JSON с соответствием dialogId -> chat_id рядом с offset-файлом."""
+    path = Path(offset_path)
+    return path.with_name(f"{path.stem}.dialogs{path.suffix or '.json'}")
+
+
 def load_offset(path: str | Path) -> int | None:
     """Прочитать сохранённый offset очереди Битрикс24."""
     offset_path = Path(path)
@@ -58,6 +64,37 @@ def save_offset(path: str | Path, offset: int) -> None:
     tmp_path = offset_path.with_suffix(offset_path.suffix + ".tmp")
     tmp_path.write_text(json.dumps({"offset": int(offset)}, ensure_ascii=False, indent=2), encoding="utf-8")
     tmp_path.replace(offset_path)
+
+
+def load_dialog_chats(path: str | Path) -> dict[str, int]:
+    """Прочитать соответствие dialogId -> wiki chat_id."""
+    map_path = dialog_chat_map_path(path)
+    if not map_path.exists():
+        return {}
+    try:
+        data = json.loads(map_path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            return {}
+        result: dict[str, int] = {}
+        for key, value in data.items():
+            try:
+                result[str(key)] = int(value)
+            except (TypeError, ValueError):
+                continue
+        return result
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        logger.warning("Не удалось прочитать карту диалогов Битрикс24 из %s", map_path)
+        return {}
+
+
+def save_dialog_chats(path: str | Path, mapping: dict[str, int]) -> None:
+    """Сохранить соответствие dialogId -> chat_id атомарно."""
+    map_path = dialog_chat_map_path(path)
+    map_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = map_path.with_suffix(map_path.suffix + ".tmp")
+    payload = {str(k): int(v) for k, v in mapping.items()}
+    tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp_path.replace(map_path)
 
 
 def extract_message_event(event: dict[str, Any]) -> dict[str, Any] | None:
@@ -87,24 +124,40 @@ def extract_message_event(event: dict[str, Any]) -> dict[str, Any] | None:
     }
 
 
-def ask_internal_chat_api(message: str, *, api_url: str, api_key: str = "", timeout: float = 120.0) -> str:
-    """Отправить вопрос в локальный RAG API и вернуть только текст ответа."""
+def ask_internal_chat_api(
+    message: str,
+    *,
+    api_url: str,
+    api_key: str = "",
+    chat_id: int | None = None,
+    timeout: float = 120.0,
+) -> tuple[str, int | None]:
+    """Отправить вопрос в локальный RAG API; вернуть (answer, chat_id)."""
     headers = {"Accept": "application/json"}
     if api_key:
         headers["X-API-Key"] = api_key
 
-    response = requests.post(
+    payload: dict[str, Any] = {"message": message}
+    if chat_id is not None:
+        payload["chat_id"] = chat_id
+
+    with requests.post(
         f"{api_url.rstrip('/')}/api/chat",
-        json={"message": message},
+        json=payload,
         headers=headers,
         timeout=timeout,
-    )
-    response.raise_for_status()
-    body = response.json()
+    ) as response:
+        response.raise_for_status()
+        body = response.json()
     answer = str(body.get("answer") or "").strip()
     if not answer:
         raise RuntimeError(body.get("error") or "RAG API вернул пустой ответ")
-    return answer
+    returned_chat_id = body.get("chat_id")
+    try:
+        resolved_chat_id = int(returned_chat_id) if returned_chat_id is not None else chat_id
+    except (TypeError, ValueError):
+        resolved_chat_id = chat_id
+    return answer, resolved_chat_id
 
 
 def process_event(
@@ -115,21 +168,37 @@ def process_event(
     bot_token: str,
     api_url: str,
     api_key: str = "",
+    dialog_chats: dict[str, int] | None = None,
+    offset_path: str | Path | None = None,
 ) -> bool:
     """Обработать одно событие и отправить ответ в тот же диалог."""
     parsed = extract_message_event(event)
     if not parsed:
         return False
 
-    logger.info("Получен вопрос из Битрикс24 dialogId=%s", parsed["dialog_id"])
-    answer = ask_internal_chat_api(parsed["text"], api_url=api_url, api_key=api_key)
+    mapping = dialog_chats if dialog_chats is not None else {}
+    dialog_id = parsed["dialog_id"]
+    known_chat_id = mapping.get(dialog_id)
+
+    logger.info("Получен вопрос из Битрикс24 dialogId=%s chat_id=%s", dialog_id, known_chat_id)
+    answer, new_chat_id = ask_internal_chat_api(
+        parsed["text"],
+        api_url=api_url,
+        api_key=api_key,
+        chat_id=known_chat_id,
+    )
+    if new_chat_id is not None and mapping.get(dialog_id) != new_chat_id:
+        mapping[dialog_id] = int(new_chat_id)
+        if offset_path is not None:
+            save_dialog_chats(offset_path, mapping)
+
     bitrix.send_message(
         bot_id=bot_id,
         bot_token=bot_token,
-        dialog_id=parsed["dialog_id"],
+        dialog_id=dialog_id,
         text=answer,
     )
-    logger.info("Ответ отправлен в Битрикс24 dialogId=%s", parsed["dialog_id"])
+    logger.info("Ответ отправлен в Битрикс24 dialogId=%s", dialog_id)
     return True
 
 
@@ -141,7 +210,14 @@ def _next_offset(result: dict[str, Any]) -> int | None:
         return None
 
 
-def run_once(bitrix: Bitrix24Client, offset: int | None, limit: int = 100) -> tuple[int | None, int]:
+def run_once(
+    bitrix: Bitrix24Client,
+    offset: int | None,
+    limit: int = 100,
+    *,
+    dialog_chats: dict[str, int] | None = None,
+    offset_path: str | Path | None = None,
+) -> tuple[int | None, int]:
     """Получить пачку событий, обработать её и вернуть следующий offset."""
     if settings.BITRIX24_BOT_ID is None:
         raise RuntimeError("BITRIX24_BOT_ID не задан")
@@ -156,6 +232,7 @@ def run_once(bitrix: Bitrix24Client, offset: int | None, limit: int = 100) -> tu
     )
     events = result.get("events") or []
     processed = 0
+    mapping = dialog_chats if dialog_chats is not None else {}
     for event in events:
         try:
             if process_event(
@@ -165,6 +242,8 @@ def run_once(bitrix: Bitrix24Client, offset: int | None, limit: int = 100) -> tu
                 bot_token=settings.BITRIX24_BOT_TOKEN,
                 api_url=settings.BITRIX24_INTERNAL_API_URL,
                 api_key=settings.BITRIX24_INTERNAL_API_KEY,
+                dialog_chats=mapping,
+                offset_path=offset_path,
             ):
                 processed += 1
         except (requests.RequestException, Bitrix24Error, RuntimeError):
@@ -184,19 +263,39 @@ def main() -> int:
         return 1
 
     bitrix = Bitrix24Client(settings.BITRIX24_WEBHOOK_URL)
-    offset = load_offset(settings.BITRIX24_EVENT_OFFSET_PATH)
-    logger.info("Bitrix24 worker запущен, offset=%s", offset)
+    offset_path = settings.BITRIX24_EVENT_OFFSET_PATH
+    offset = load_offset(offset_path)
+    dialog_chats = load_dialog_chats(offset_path)
+    logger.info("Bitrix24 worker запущен, offset=%s, dialogs=%s", offset, len(dialog_chats))
 
     while True:
-        next_offset, processed = run_once(bitrix, offset, limit=args.limit)
-        if next_offset is not None:
-            offset = next_offset
-            save_offset(settings.BITRIX24_EVENT_OFFSET_PATH, offset)
-        logger.info("Цикл Bitrix24 завершён: обработано=%s, nextOffset=%s", processed, next_offset)
+        try:
+            next_offset, processed = run_once(
+                bitrix,
+                offset,
+                limit=args.limit,
+                dialog_chats=dialog_chats,
+                offset_path=offset_path,
+            )
+            if next_offset is not None:
+                offset = next_offset
+                save_offset(offset_path, offset)
+            logger.info("Цикл Bitrix24 завершён: обработано=%s, nextOffset=%s", processed, next_offset)
 
-        if args.once:
-            return 0
-        time.sleep(max(1, settings.BITRIX24_POLL_INTERVAL_SECONDS))
+            if args.once:
+                return 0
+            time.sleep(max(1, settings.BITRIX24_POLL_INTERVAL_SECONDS))
+        except KeyboardInterrupt:
+            print("\nОстановка...")
+            logger.info("Bitrix24 worker остановлен по KeyboardInterrupt")
+            break
+        except Exception:
+            logger.exception("Ошибка в основном цикле Bitrix24 worker")
+            if args.once:
+                return 1
+            time.sleep(5)
+
+    return 0
 
 
 if __name__ == "__main__":

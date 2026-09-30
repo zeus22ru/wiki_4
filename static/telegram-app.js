@@ -4,6 +4,8 @@
     const tg = window.Telegram?.WebApp;
     const state = {chatId: null, chats: [], busy: false, controller: null};
     let mermaidInitialized = false;
+    let mermaidTheme = null;
+    let markedConfigured = false;
     const $ = (id) => document.getElementById(id);
     const bootState = $('bootState');
     const errorState = $('errorState');
@@ -63,10 +65,19 @@
         return node.innerHTML;
     }
 
+    function ensureMarkedConfigured() {
+        if (markedConfigured || !window.marked) {
+            return;
+        }
+        marked.setOptions({breaks: true, gfm: true});
+        markedConfigured = true;
+    }
+
     function markdown(text) {
         if (window.marked) {
-            marked.setOptions({breaks: true, gfm: true});
+            ensureMarkedConfigured();
             const html = marked.parse(text || '');
+            // Без DOMPurify HTML не вставляем — только экранированный текст.
             return window.DOMPurify ? DOMPurify.sanitize(html) : escapeHtml(text);
         }
         return escapeHtml(text).replace(/\n/g, '<br>');
@@ -86,15 +97,17 @@
 
     function ensureMermaid() {
         if (!window.mermaid) return false;
-        if (mermaidInitialized) return true;
+        const theme = document.documentElement.dataset.theme === 'dark' ? 'dark' : 'default';
+        if (mermaidInitialized && mermaidTheme === theme) return true;
         try {
             mermaid.initialize({
                 startOnLoad: false,
                 securityLevel: 'strict',
                 suppressErrorRendering: true,
-                theme: document.documentElement.dataset.theme === 'dark' ? 'dark' : 'default',
+                theme,
             });
             mermaidInitialized = true;
+            mermaidTheme = theme;
             return true;
         } catch (_) {
             return false;

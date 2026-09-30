@@ -17,6 +17,25 @@ from models import ChatSession, Message, User
 
 logger = get_logger(__name__)
 
+# Алфавит кода привязки Telegram: без похожих символов 0/O/1/I.
+_TELEGRAM_LINK_CODE_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"
+_TELEGRAM_LINK_CODE_LENGTH = 8
+_TELEGRAM_LINK_SCHEMA_VERSION = 1
+
+
+class TelegramAlreadyLinkedError(Exception):
+    """Telegram-аккаунт уже привязан к другому пользователю."""
+
+
+def _escape_like_pattern(value: str) -> str:
+    """Экранировать спецсимволы LIKE (% _ \\) для безопасного поиска."""
+    return (
+        (value or "")
+        .replace("\\", "\\\\")
+        .replace("%", "\\%")
+        .replace("_", "\\_")
+    )
+
 
 class ChatHistoryManager:
     """Менеджер истории чатов"""
@@ -180,12 +199,12 @@ class ChatHistoryManager:
                 ON feedback(rating, created_at)
             ''')
 
-            # Таблица привязки Telegram-аккаунтов
+            # Таблица привязки Telegram-аккаунтов (UNIQUE на code снимается миграцией).
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS telegram_links (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     user_id INTEGER NOT NULL,
-                    code TEXT NOT NULL UNIQUE,
+                    code TEXT NOT NULL,
                     telegram_user_id INTEGER,
                     telegram_username TEXT,
                     created_at TEXT NOT NULL,
@@ -205,6 +224,7 @@ class ChatHistoryManager:
                 ON telegram_links(telegram_user_id)
             ''')
 
+            self._migrate_telegram_links_schema(cursor)
             conn.commit()
             logger.info("Таблицы истории чатов созданы или уже существуют")
 
@@ -214,6 +234,78 @@ class ChatHistoryManager:
         columns = {row[1] for row in cursor.fetchall()}
         if column not in columns:
             cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+
+    def _migrate_telegram_links_schema(self, cursor: sqlite3.Cursor) -> None:
+        """Убрать глобальный UNIQUE с code: уникальность только среди активных кодов."""
+        cursor.execute("PRAGMA user_version")
+        version = int(cursor.fetchone()[0] or 0)
+        if version >= _TELEGRAM_LINK_SCHEMA_VERSION:
+            return
+
+        cursor.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'telegram_links'"
+        )
+        row = cursor.fetchone()
+        table_sql = (row[0] or "") if row else ""
+        needs_rebuild = "UNIQUE" in table_sql.upper() and "CODE" in table_sql.upper()
+
+        if needs_rebuild:
+            cursor.execute('''
+                CREATE TABLE telegram_links_new (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    code TEXT NOT NULL,
+                    telegram_user_id INTEGER,
+                    telegram_username TEXT,
+                    created_at TEXT NOT NULL,
+                    expires_at TEXT NOT NULL,
+                    used_at TEXT,
+                    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+                )
+            ''')
+            cursor.execute('''
+                INSERT INTO telegram_links_new (
+                    id, user_id, code, telegram_user_id, telegram_username,
+                    created_at, expires_at, used_at
+                )
+                SELECT
+                    id, user_id, code, telegram_user_id, telegram_username,
+                    created_at, expires_at, used_at
+                FROM telegram_links
+            ''')
+            cursor.execute("DROP TABLE telegram_links")
+            cursor.execute("ALTER TABLE telegram_links_new RENAME TO telegram_links")
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_telegram_links_code ON telegram_links(code)"
+            )
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_telegram_links_tg_user "
+                "ON telegram_links(telegram_user_id)"
+            )
+            logger.info("Миграция telegram_links: снят UNIQUE с code")
+
+        cursor.execute(f"PRAGMA user_version = {_TELEGRAM_LINK_SCHEMA_VERSION}")
+
+    def _generate_telegram_link_code(self, cursor: sqlite3.Cursor, now_iso: str) -> str:
+        """Сгенерировать код, уникальный среди активных (неиспользованных и непросроченных)."""
+        for _ in range(5):
+            code = "".join(
+                secrets.choice(_TELEGRAM_LINK_CODE_ALPHABET)
+                for _ in range(_TELEGRAM_LINK_CODE_LENGTH)
+            )
+            cursor.execute(
+                '''
+                SELECT 1 FROM telegram_links
+                WHERE code = ?
+                  AND used_at IS NULL
+                  AND expires_at > ?
+                LIMIT 1
+                ''',
+                (code, now_iso),
+            )
+            if cursor.fetchone() is None:
+                return code
+        raise RuntimeError("Не удалось сгенерировать уникальный код привязки Telegram")
 
     # ========== Методы для работы с пользователями ==========
 
@@ -299,7 +391,7 @@ class ChatHistoryManager:
     # ========== Методы для привязки Telegram ==========
 
     def create_telegram_link(self, user_id: int) -> dict:
-        """Вернуть активный код привязки Telegram или создать новый (6 цифр)."""
+        """Вернуть активный код привязки Telegram или создать новый (8 символов)."""
         now = datetime.now()
         now_iso = now.isoformat()
 
@@ -319,16 +411,7 @@ class ChatHistoryManager:
                 return {"code": existing["code"], "expires_at": existing["expires_at"]}
 
             expires_at = now + timedelta(seconds=settings.TELEGRAM_LINK_CODE_TTL_SECONDS)
-            code = f"{secrets.randbelow(1_000_000):06d}"
-
-            # Инвалидировать просроченные/остаточные активные коды этого пользователя
-            cursor.execute('''
-                UPDATE telegram_links
-                SET expires_at = ?
-                WHERE user_id = ?
-                  AND used_at IS NULL
-                  AND expires_at > ?
-            ''', (now_iso, user_id, now_iso))
+            code = self._generate_telegram_link_code(cursor, now_iso)
 
             cursor.execute('''
                 INSERT INTO telegram_links (user_id, code, telegram_user_id, telegram_username, created_at, expires_at, used_at)
@@ -339,8 +422,17 @@ class ChatHistoryManager:
         logger.info(f"Создан код привязки Telegram для user_id={user_id}")
         return {"code": code, "expires_at": expires_at.isoformat()}
 
-    def verify_telegram_link(self, code: str, telegram_user_id: int, telegram_username: Optional[str] = None) -> Optional[dict]:
-        """Проверить код привязки и активировать связь с Telegram."""
+    def verify_telegram_link(
+        self,
+        code: str,
+        telegram_user_id: int,
+        telegram_username: Optional[str] = None,
+    ) -> Optional[dict]:
+        """Проверить код привязки и активировать связь с Telegram.
+
+        Raises:
+            TelegramAlreadyLinkedError: если telegram_user_id уже привязан к другому пользователю.
+        """
         now = datetime.now().isoformat()
         with self._get_connection() as conn:
             cursor = conn.cursor()
@@ -358,13 +450,27 @@ class ChatHistoryManager:
             link_id = row["id"]
             user_id = row["user_id"]
 
+            # Один Telegram = один аккаунт
+            cursor.execute('''
+                SELECT l.user_id
+                FROM telegram_links l
+                WHERE l.telegram_user_id = ?
+                  AND l.used_at IS NOT NULL
+                ORDER BY l.used_at DESC
+                LIMIT 1
+            ''', (telegram_user_id,))
+            existing = cursor.fetchone()
+            if existing and int(existing["user_id"]) != int(user_id):
+                raise TelegramAlreadyLinkedError(
+                    "Этот Telegram уже привязан к другому аккаунту"
+                )
+
             cursor.execute('''
                 UPDATE telegram_links
                 SET used_at = ?, telegram_user_id = ?, telegram_username = ?
                 WHERE id = ?
             ''', (now, telegram_user_id, telegram_username, link_id))
 
-            # Получить роль пользователя
             cursor.execute('SELECT role FROM users WHERE id = ?', (user_id,))
             user_row = cursor.fetchone()
             conn.commit()
@@ -398,6 +504,23 @@ class ChatHistoryManager:
                 "telegram_username": row["telegram_username"],
                 "used_at": row["used_at"],
             }
+
+    def unlink_telegram(self, user_id: int) -> bool:
+        """Отвязать Telegram от аккаунта пользователя (обнулить telegram_user_id)."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                UPDATE telegram_links
+                SET telegram_user_id = NULL, telegram_username = NULL
+                WHERE user_id = ?
+                  AND used_at IS NOT NULL
+                  AND telegram_user_id IS NOT NULL
+            ''', (user_id,))
+            conn.commit()
+            unlinked = cursor.rowcount > 0
+        if unlinked:
+            logger.info("Отвязан Telegram от user_id=%s", user_id)
+        return unlinked
 
     # ========== Методы для работы с сессиями ==========
     
@@ -711,10 +834,13 @@ class ChatHistoryManager:
         self,
         query: str,
         limit: int = 20,
-        user_id: Optional[int] = None
+        user_id: Optional[int] = None,
+        offset: int = 0,
     ) -> List[ChatSession]:
         """Найти сессии по заголовку или тексту сообщений."""
-        like = f"%{query}%"
+        like = f"%{_escape_like_pattern(query)}%"
+        offset = max(0, int(offset or 0))
+        limit = max(1, int(limit or 20))
         with self._get_connection() as conn:
             cursor = conn.cursor()
             if user_id is None:
@@ -722,20 +848,68 @@ class ChatHistoryManager:
                     SELECT DISTINCT s.id, s.user_id, s.title, s.created_at, s.updated_at
                     FROM chat_sessions s
                     LEFT JOIN messages m ON m.session_id = s.id
-                    WHERE s.title LIKE ? OR m.content LIKE ?
+                    WHERE s.title LIKE ? ESCAPE '\\' OR m.content LIKE ? ESCAPE '\\'
                     ORDER BY s.updated_at DESC
-                    LIMIT ?
-                ''', (like, like, limit))
+                    LIMIT ? OFFSET ?
+                ''', (like, like, limit, offset))
             else:
                 cursor.execute('''
                     SELECT DISTINCT s.id, s.user_id, s.title, s.created_at, s.updated_at
                     FROM chat_sessions s
                     LEFT JOIN messages m ON m.session_id = s.id
-                    WHERE s.user_id = ? AND (s.title LIKE ? OR m.content LIKE ?)
+                    WHERE s.user_id = ? AND (s.title LIKE ? ESCAPE '\\' OR m.content LIKE ? ESCAPE '\\')
                     ORDER BY s.updated_at DESC
-                    LIMIT ?
-                ''', (user_id, like, like, limit))
+                    LIMIT ? OFFSET ?
+                ''', (user_id, like, like, limit, offset))
             return [ChatSession.from_row(row) for row in cursor.fetchall()]
+
+    def message_belongs_to_session(self, message_id: int, session_id: int) -> bool:
+        """Проверить, что сообщение принадлежит указанной сессии."""
+        try:
+            message_id = int(message_id)
+            session_id = int(session_id)
+        except (TypeError, ValueError):
+            return False
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT 1 FROM messages WHERE id = ? AND session_id = ? LIMIT 1",
+                (message_id, session_id),
+            )
+            return cursor.fetchone() is not None
+
+    def mark_message_failed(self, message_id: int, code: str) -> bool:
+        """Пометить user-сообщение как неудачное (metadata.failed=true, error=code)."""
+        try:
+            message_id = int(message_id)
+        except (TypeError, ValueError):
+            return False
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT metadata_json FROM messages WHERE id = ?",
+                (message_id,),
+            )
+            row = cursor.fetchone()
+            if not row:
+                return False
+            metadata: dict = {}
+            raw = row["metadata_json"] if isinstance(row, sqlite3.Row) else row[0]
+            if raw:
+                try:
+                    parsed = json.loads(raw)
+                    if isinstance(parsed, dict):
+                        metadata = parsed
+                except json.JSONDecodeError:
+                    metadata = {}
+            metadata["failed"] = True
+            metadata["error"] = str(code or "error")
+            cursor.execute(
+                "UPDATE messages SET metadata_json = ? WHERE id = ?",
+                (json.dumps(metadata, ensure_ascii=False), message_id),
+            )
+            conn.commit()
+            return cursor.rowcount > 0
 
     def add_feedback(
         self,

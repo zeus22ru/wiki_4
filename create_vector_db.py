@@ -7,16 +7,16 @@
 """
 
 import re
+import shutil
+import subprocess
 import sys
-import requests
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from bs4 import BeautifulSoup
 import chromadb
-from chromadb.config import Settings
 import json
-from typing import Any, List, Dict, Optional, Callable, Set
+from typing import Any, List, Dict, Optional, Callable, Set, Tuple
 import hashlib
 
 # Импорт конфигурации и логирования
@@ -33,6 +33,7 @@ from core.index_manifest import (
     load_index_manifest,
     manifest_path,
     save_index_manifest,
+    settings_fingerprint,
 )
 from core.retrieval import bm25_index_path, load_bm25_corpus, save_bm25_index
 
@@ -363,31 +364,104 @@ def extract_text_from_pptx(pptx_path: Path) -> Optional[Dict[str, str]]:
         return None
 
 
-def extract_text_from_doc(doc_path: Path) -> Optional[Dict[str, str]]:
-    """Извлечь текст и метаданные из DOC файла (старый формат Word)"""
-    if not DOC_AVAILABLE:
-        logger.warning(f"Библиотека docx2txt не установлена. Пропуск: {doc_path.name}")
+def _normalize_doc_paragraphs(raw: str) -> Tuple[str, str]:
+    """Заголовок — первая непустая строка до схлопывания; абзацы сохраняем."""
+    lines = (raw or "").splitlines()
+    title = ""
+    for line in lines:
+        stripped = line.strip()
+        if stripped:
+            title = stripped[:100]
+            break
+    normalized = [re.sub(r"[ \t]+", " ", line).strip() for line in lines]
+    content = re.sub(r"\n{3,}", "\n\n", "\n".join(normalized)).strip()
+    return title, content
+
+
+def _extract_text_as_docx_zip(doc_path: Path) -> Optional[str]:
+    """Попробовать прочитать файл как DOCX (ZIP) с неверным расширением .doc."""
+    import zipfile
+
+    if not zipfile.is_zipfile(doc_path):
         return None
-    
     try:
-        text = docx2txt.process(doc_path)
-        
-        # Очистка текста
-        text = re.sub(r'\s+', ' ', text)
-        text = text.strip()
-        
-        # Берем первую строку как заголовок
-        lines = text.split('\n')
-        title = lines[0].strip()[:100] if lines else Path(doc_path).stem
-        
-        return {
-            "title": title,
-            "content": text,
-            "path": _relative_source_path(doc_path)
-        }
+        if DOCX_AVAILABLE:
+            doc = Document(doc_path)
+            paragraphs = [p.text.strip() for p in doc.paragraphs if p.text and p.text.strip()]
+            for table in doc.tables:
+                for row in table.rows:
+                    cells = [c.text.strip() for c in row.cells if c.text and c.text.strip()]
+                    if cells:
+                        paragraphs.append(" | ".join(cells))
+            if paragraphs:
+                return "\n".join(paragraphs)
+        if DOC_AVAILABLE:
+            text = docx2txt.process(str(doc_path))
+            if text and str(text).strip():
+                return str(text)
     except Exception as e:
-        logger.error(f"Ошибка при чтении DOC {doc_path}: {e}")
+        logger.debug("DOC как DOCX-ZIP не прочитан (%s): %s", doc_path.name, e)
+    return None
+
+
+def _extract_doc_via_external_tool(doc_path: Path) -> Optional[str]:
+    """Извлечь текст через antiword / catdoc / textutil с таймаутом."""
+    candidates: List[List[str]] = []
+    if shutil.which("antiword"):
+        candidates.append(["antiword", str(doc_path)])
+    if shutil.which("catdoc"):
+        candidates.append(["catdoc", "-w", str(doc_path)])
+    if sys.platform == "darwin" and shutil.which("textutil"):
+        candidates.append(["textutil", "-convert", "txt", "-stdout", str(doc_path)])
+
+    for cmd in candidates:
+        try:
+            completed = subprocess.run(
+                cmd,
+                capture_output=True,
+                timeout=60,
+                check=False,
+            )
+            if completed.returncode != 0:
+                logger.warning(
+                    "Утилита %s вернула код %s для %s",
+                    cmd[0],
+                    completed.returncode,
+                    doc_path.name,
+                )
+                continue
+            text = completed.stdout.decode("utf-8", errors="replace")
+            if text.strip():
+                return text
+        except subprocess.TimeoutExpired:
+            logger.warning("Таймаут утилиты %s при чтении %s", cmd[0], doc_path.name)
+        except Exception as e:
+            logger.warning("Ошибка утилиты %s для %s: %s", cmd[0], doc_path.name, e)
+    return None
+
+
+def extract_text_from_doc(doc_path: Path) -> Optional[Dict[str, str]]:
+    """Извлечь текст из .doc: сначала как DOCX-ZIP, иначе через системные утилиты."""
+    raw = _extract_text_as_docx_zip(doc_path)
+    if raw is None:
+        raw = _extract_doc_via_external_tool(doc_path)
+    if raw is None:
+        logger.warning(
+            "Пропуск DOC %s: docx2txt не читает бинарный .doc; "
+            "установите antiword/catdoc (или textutil на macOS) либо сохраните как .docx",
+            doc_path.name,
+        )
         return None
+
+    title, content = _normalize_doc_paragraphs(raw)
+    if not content:
+        logger.warning("DOC %s не содержит извлекаемого текста", doc_path.name)
+        return None
+    return {
+        "title": title or Path(doc_path).stem,
+        "content": content,
+        "path": _relative_source_path(doc_path),
+    }
 
 
 def chunk_text(text: str, chunk_size: int = None, overlap: int = None) -> List[str]:
@@ -432,17 +506,51 @@ def get_file_handlers() -> Dict[str, Callable[[Path], Optional[Dict[str, str]]]]
     }
 
 
+def _is_under_dir(path: Path, root: Optional[Path]) -> bool:
+    if root is None:
+        return False
+    try:
+        path.resolve().relative_to(root.resolve())
+        return True
+    except (ValueError, OSError):
+        return False
+
+
 def scan_supported_files(data_dir: str) -> List[Path]:
     """Найти все поддерживаемые исходные файлы в стабильном порядке."""
     data_path = Path(data_dir)
     file_handlers = get_file_handlers()
-    all_files: List[Path] = []
-    for ext in file_handlers.keys():
-        all_files.extend(data_path.rglob(f"*{ext}"))
+    supported_exts = {ext.lower() for ext in file_handlers.keys()}
+    excluded_extensions = {".crdownload", ".tmp", ".temp", ".bak"}
+    skip_dir_names = {".git", "__pycache__"}
 
-    excluded_extensions = {'.crdownload', '.tmp', '.temp', '.bak'}
+    attachments_dir: Optional[Path] = None
+    raw_attachments = getattr(settings, "CHAT_ATTACHMENTS_DIR", None)
+    if raw_attachments:
+        try:
+            attachments_dir = Path(str(raw_attachments)).resolve()
+        except OSError:
+            attachments_dir = None
+
+    all_files: List[Path] = []
+    for path in data_path.rglob("*"):
+        if not path.is_file():
+            continue
+        if any(part in skip_dir_names for part in path.parts):
+            continue
+        if path.name.startswith("~$"):
+            continue
+        if _is_under_dir(path, attachments_dir):
+            continue
+        suffix = path.suffix.lower()
+        if suffix not in supported_exts:
+            continue
+        if suffix in excluded_extensions:
+            continue
+        all_files.append(path)
+
     return sorted(
-        [f for f in all_files if f.is_file() and f.suffix.lower() not in excluded_extensions],
+        all_files,
         key=lambda path: str(path).replace("\\", "/").lower(),
     )
 
@@ -467,7 +575,7 @@ def process_file(file_path: Path, extract_func: Callable[[Path], Optional[Dict[s
         return []
 
     chunk_started = time.perf_counter()
-    chunk_items = build_chunks_for_file(file_path, doc_data, extract_func)
+    chunk_items = build_chunks_for_file(file_path, doc_data)
     chunk_ms = int((time.perf_counter() - chunk_started) * 1000)
     documents = []
 
@@ -488,9 +596,11 @@ def process_file(file_path: Path, extract_func: Callable[[Path], Optional[Dict[s
             prefix = _contextual_prefix_for_chunk(doc_data.get("title") or "", section_path, body)
 
         embed_text = f"{prefix}\n\n{body}".strip() if prefix else body
+        chunk_id_src = f"{doc_data['path']}_{j}"
+        chunk_id = hashlib.md5(chunk_id_src.encode()).hexdigest()
 
         documents.append({
-            "id": f"{hashlib.md5(f'{doc_data['path']}_{j}'.encode()).hexdigest()}",
+            "id": chunk_id,
             "text": body,
             "embed_text": embed_text,
             "metadata": {
@@ -596,7 +706,7 @@ def preview_document(file_path: Path, duplicate_exists: bool = False) -> Dict:
         }
 
     content = doc_data["content"]
-    chunk_objs = build_chunks_for_file(path, doc_data, handlers[ext])
+    chunk_objs = build_chunks_for_file(path, doc_data)
     chunks = [c.get("text", "").strip() for c in chunk_objs if (c.get("text") or "").strip()]
     if not chunks:
         chunks = chunk_text(content)
@@ -621,11 +731,16 @@ def preview_document(file_path: Path, duplicate_exists: bool = False) -> Dict:
 
 
 def process_files(file_paths: List[Path]) -> List[Dict]:
-    """Обработать выбранные поддерживаемые файлы."""
+    """Обработать выбранные поддерживаемые файлы.
+
+    Возвращает чанки. Счётчики skipped/failed пишутся в logger и в
+    ``process_files.last_stats`` для diagnostics reindex.
+    """
     started = time.perf_counter()
     documents = []
     skipped_files = 0
     failed_files = 0
+    failed_file_names: List[str] = []
 
     file_handlers = get_file_handlers()
     all_files = list(file_paths)
@@ -654,6 +769,7 @@ def process_files(file_paths: List[Path]) -> List[Dict]:
                 file_documents = process_file(file_path, file_handlers[ext])
             except Exception as e:
                 failed_files += 1
+                failed_file_names.append(file_path.name)
                 logger.error(f"Ошибка при обработке {file_path}: {e}")
                 continue
             if not file_documents:
@@ -689,6 +805,7 @@ def process_files(file_paths: List[Path]) -> List[Dict]:
                     )
                 except Exception as e:
                     failed_files += 1
+                    failed_file_names.append(file_path.name)
                     logger.error(f"Ошибка при обработке {file_path}: {e}")
 
         for file_documents in results:
@@ -703,6 +820,13 @@ def process_files(file_paths: List[Path]) -> List[Dict]:
         failed_files,
         int((time.perf_counter() - started) * 1000),
     )
+    process_files.last_stats = {  # type: ignore[attr-defined]
+        "skipped_files": skipped_files,
+        "failed_files": failed_files,
+        "failed_file_names": failed_file_names,
+        "files": len(all_files),
+        "chunks": len(documents),
+    }
     return documents
 
 
@@ -824,37 +948,87 @@ def create_vector_db(documents: List[Dict], progress_callback: Optional[Callable
     report_progress(86, "saving", f"Сохранение в ChromaDB: 0/{len(ids)}")
     save_started = time.perf_counter()
 
-    # Переключаем коллекцию только после успешной генерации эмбеддингов.
+    collection_name = settings.CHROMA_COLLECTION_NAME
+    temp_name = f"{collection_name}__new"
+    # Убрать незавершённую временную коллекцию от прошлого сбоя.
     try:
-        client.delete_collection(settings.CHROMA_COLLECTION_NAME)
+        client.delete_collection(temp_name)
     except Exception:
         pass
 
     collection = client.create_collection(
-        name=settings.CHROMA_COLLECTION_NAME,
-        metadata={"description": "База знаний из XWiki"}
+        name=temp_name,
+        metadata={"description": "База знаний из XWiki"},
     )
 
     MAX_BATCH_SIZE = 5000  # Оставляем запас от лимита 5461
-    
+
     total_docs = len(ids)
     saved = 0
-    
-    while saved < total_docs:
-        batch_end = min(saved + MAX_BATCH_SIZE, total_docs)
-        
-        logger.info(f"Сохранение {saved+1}-{batch_end}/{total_docs} документов...")
-        
-        collection.add(
-            ids=ids[saved:batch_end],
-            documents=texts[saved:batch_end],
-            metadatas=metadatas[saved:batch_end],
-            embeddings=embeddings[saved:batch_end]
+
+    try:
+        while saved < total_docs:
+            batch_end = min(saved + MAX_BATCH_SIZE, total_docs)
+
+            logger.info(f"Сохранение {saved+1}-{batch_end}/{total_docs} документов...")
+
+            collection.add(
+                ids=ids[saved:batch_end],
+                documents=texts[saved:batch_end],
+                metadatas=metadatas[saved:batch_end],
+                embeddings=embeddings[saved:batch_end]
+            )
+
+            saved = batch_end
+            save_progress = 86 + int((saved / max(total_docs, 1)) * 13)
+            report_progress(save_progress, "saving", f"Сохранение в ChromaDB: {saved}/{total_docs}")
+    except Exception:
+        # При ошибке add временную коллекцию удаляем; старая остаётся нетронутой.
+        try:
+            client.delete_collection(temp_name)
+        except Exception:
+            pass
+        raise
+
+    # Атомарная подмена: удалить старую, переименовать временную.
+    try:
+        client.delete_collection(collection_name)
+    except Exception:
+        pass
+
+    renamed = False
+    try:
+        collection.modify(name=collection_name)
+        renamed = True
+    except Exception as e:
+        logger.warning(
+            "Переименование коллекции %s -> %s недоступно (%s); "
+            "пересоздаём под целевым именем",
+            temp_name,
+            collection_name,
+            e,
         )
-        
-        saved = batch_end
-        save_progress = 86 + int((saved / max(total_docs, 1)) * 13)
-        report_progress(save_progress, "saving", f"Сохранение в ChromaDB: {saved}/{total_docs}")
+
+    if not renamed:
+        collection = client.create_collection(
+            name=collection_name,
+            metadata={"description": "База знаний из XWiki"},
+        )
+        saved = 0
+        while saved < total_docs:
+            batch_end = min(saved + MAX_BATCH_SIZE, total_docs)
+            collection.add(
+                ids=ids[saved:batch_end],
+                documents=texts[saved:batch_end],
+                metadatas=metadatas[saved:batch_end],
+                embeddings=embeddings[saved:batch_end],
+            )
+            saved = batch_end
+        try:
+            client.delete_collection(temp_name)
+        except Exception:
+            pass
+
     timings_ms["chroma_save_ms"] = int((time.perf_counter() - save_started) * 1000)
     
     logger.info(f"Векторная база данных создана! Всего документов: {len(ids)}")
@@ -985,6 +1159,7 @@ def reindex_vector_db(
 ) -> Dict[str, Any]:
     """Переиндексировать базу: incremental по manifest, иначе безопасный full fallback."""
     started = time.perf_counter()
+    settings.ensure_directories()
 
     def report(progress: int, stage: str, message: str, **extra: Any) -> None:
         if progress_callback:
@@ -1005,6 +1180,7 @@ def reindex_vector_db(
 
     manifest = load_index_manifest()
     manifest_files = manifest.get("files") or {}
+    current_fingerprint = settings_fingerprint()
     full_reason = None
     if not incremental:
         full_reason = "incremental_disabled"
@@ -1012,6 +1188,9 @@ def reindex_vector_db(
         full_reason = "manifest_missing"
     elif manifest.get("collection") != settings.CHROMA_COLLECTION_NAME:
         full_reason = "manifest_collection_mismatch"
+    elif manifest.get("settings_fingerprint") != current_fingerprint:
+        # Старый manifest без отпечатка тоже считается несовпадающим.
+        full_reason = "settings_changed"
     elif load_bm25_corpus() is None:
         full_reason = "bm25_corpus_missing"
 
@@ -1023,6 +1202,9 @@ def reindex_vector_db(
         result = create_vector_db(documents, progress_callback=progress_callback)
         result["full_reason"] = full_reason
         result["files_total"] = len(all_files)
+        stats = getattr(process_files, "last_stats", {}) or {}
+        result["skipped_files"] = stats.get("skipped_files", 0)
+        result["failed_files"] = stats.get("failed_files", 0)
         return result
 
     changed_paths: List[str] = []
@@ -1069,16 +1251,34 @@ def reindex_vector_db(
 
     changed_files = [current_by_path[path] for path in paths_to_process]
     changed_documents = process_files(changed_files) if changed_files else []
+    process_stats = getattr(process_files, "last_stats", {}) or {}
     changed_docs_by_path = _documents_by_path(changed_documents)
-    missing_changed_chunks = [path for path in changed_paths if path not in changed_docs_by_path]
-    if missing_changed_chunks:
-        raise RuntimeError(
-            "Не удалось подготовить чанки для изменённых документов: "
-            + ", ".join(missing_changed_chunks[:5])
+
+    # Изменённые файлы без чанков: не валим весь reindex, чистим старые чанки.
+    failed_changed_paths = [
+        path for path in changed_paths if path not in changed_docs_by_path
+    ]
+    # Новые файлы без чанков: помечаем skipped в manifest, чтобы не гонять каждый раз.
+    skipped_new_paths = [
+        path for path in new_paths if path not in changed_docs_by_path
+    ]
+    if failed_changed_paths:
+        logger.warning(
+            "Изменённые файлы без чанков (удаляем старые записи): %s",
+            ", ".join(failed_changed_paths[:10]),
+        )
+    if skipped_new_paths:
+        logger.warning(
+            "Новые файлы без чанков (skipped в manifest): %s",
+            ", ".join(skipped_new_paths[:10]),
         )
 
     report(15, "embedding", f"Подготовлено изменённых чанков: {len(changed_documents)}", diagnostics=diagnostics)
-    embedded_documents = _embed_documents_or_raise(changed_documents, progress_callback=progress_callback)
+    embedded_documents = (
+        _embed_documents_or_raise(changed_documents, progress_callback=progress_callback)
+        if changed_documents
+        else []
+    )
 
     client = chromadb.PersistentClient(path=settings.CHROMA_PERSIST_DIR)
     try:
@@ -1097,12 +1297,17 @@ def reindex_vector_db(
     embeddings = [doc["embedding"] for doc in embedded_documents]
     new_id_set: Set[str] = set(ids)
 
+    # Удаляем чанки удалённых, успешно переиндексированных и «провалившихся» изменённых файлов.
+    paths_needing_old_cleanup = deleted_paths + [
+        p for p in changed_paths if p not in failed_changed_paths
+    ] + failed_changed_paths
+
     affected_old_ids: Set[str] = set()
     ids_to_delete: Set[str] = set()
-    for rel_path in deleted_paths + changed_paths:
+    for rel_path in paths_needing_old_cleanup:
         old_ids = {str(chunk_id) for chunk_id in (manifest_files.get(rel_path, {}).get("chunk_ids") or [])}
         affected_old_ids.update(old_ids)
-        if rel_path in deleted_paths:
+        if rel_path in deleted_paths or rel_path in failed_changed_paths:
             ids_to_delete.update(old_ids)
         else:
             ids_to_delete.update(old_ids - new_id_set)
@@ -1133,18 +1338,43 @@ def reindex_vector_db(
     else:
         retained_ids = []
         retained_texts = []
-    save_bm25_index(retained_ids + ids, retained_texts + [doc.get("embed_text") or doc["text"] for doc in embedded_documents])
+    # Желательно atomic=True в save_bm25_index (поток D): пока вызываем как есть.
+    save_bm25_index(
+        retained_ids + ids,
+        retained_texts + [doc.get("embed_text") or doc["text"] for doc in embedded_documents],
+    )
 
     partial_manifest = build_index_manifest(embedded_documents)
     next_files = {
         rel_path: entry
         for rel_path, entry in manifest_files.items()
-        if rel_path not in set(deleted_paths + changed_paths)
+        if rel_path not in set(deleted_paths + changed_paths + skipped_new_paths)
     }
     next_files.update(partial_manifest.get("files") or {})
+
+    # Провалившиеся изменённые — убираем из manifest (чанки уже удалены).
+    for rel_path in failed_changed_paths:
+        next_files.pop(rel_path, None)
+
+    data_root = Path(settings.DATA_DIR)
+    for rel_path in skipped_new_paths:
+        source = current_by_path.get(rel_path)
+        if source is None or not source.is_file():
+            continue
+        entry = file_signature(source, data_root)
+        entry.update({
+            "title": Path(rel_path).stem,
+            "file_type": Path(rel_path).suffix.lower(),
+            "chunk_ids": [],
+            "exists": True,
+            "skipped": True,
+        })
+        next_files[rel_path] = entry
+
     next_manifest = {
         "version": 1,
         "collection": settings.CHROMA_COLLECTION_NAME,
+        "settings_fingerprint": current_fingerprint,
         "generated_at": partial_manifest.get("generated_at"),
         "files": dict(sorted(next_files.items())),
     }
@@ -1155,15 +1385,25 @@ def reindex_vector_db(
         "chunks_added": len(ids),
         "chunks_deleted": len(ids_to_delete),
         "manifest_files": len(next_manifest["files"]),
+        "failed_files": failed_changed_paths,
+        "skipped_files": skipped_new_paths,
+        "skipped_files_count": len(skipped_new_paths) + int(process_stats.get("skipped_files") or 0),
+        "failed_files_count": len(failed_changed_paths) + int(process_stats.get("failed_files") or 0),
         "total_ms": int((time.perf_counter() - started) * 1000),
     })
-    logger.info("Reindex incremental summary: %s", diagnostics)
+    logger.info(
+        "Reindex incremental summary: %s (skipped=%s failed=%s)",
+        diagnostics,
+        diagnostics["skipped_files_count"],
+        diagnostics["failed_files_count"],
+    )
     report(100, "done", "Incremental reindex завершён", diagnostics=diagnostics)
     return diagnostics
 
 
 def main():
     """Главная функция"""
+    settings.ensure_directories()
     logger.info("=" * 60)
     logger.info("Создание векторной базы знаний")
     logger.info("=" * 60)

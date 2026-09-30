@@ -470,8 +470,9 @@ def test_telegram_link_code_generation(monkeypatch):
 
     result = chat_history.create_telegram_link(user.id)
     code = result["code"]
-    assert len(code) == 6
-    assert code.isdigit()
+    assert len(code) == 8
+    assert code.isalnum()
+    assert all(ch not in "0O1I" for ch in code)
     assert "expires_at" in result
 
     expires = datetime.fromisoformat(result["expires_at"])
@@ -599,6 +600,8 @@ def test_telegram_api_link(client, monkeypatch):
 
 def test_telegram_api_verify(client, monkeypatch):
     monkeypatch.setattr("api.routes.telegram.settings.TELEGRAM_ENABLED", True)
+    monkeypatch.setattr("api.routes.telegram.settings.TELEGRAM_INTERNAL_API_KEY", "test-internal-key")
+    monkeypatch.setattr("api.middleware.internal_auth.settings.TELEGRAM_INTERNAL_API_KEY", "test-internal-key")
     from core.chat_history import get_chat_history
 
     chat_history = get_chat_history()
@@ -608,6 +611,7 @@ def test_telegram_api_verify(client, monkeypatch):
     rv = client.post(
         "/api/telegram/verify",
         json={"code": link["code"], "telegram_user_id": 222},
+        headers={"X-API-Key": "test-internal-key"},
     )
     assert rv.status_code == 200
     body = rv.get_json()
@@ -615,8 +619,79 @@ def test_telegram_api_verify(client, monkeypatch):
     assert body["role"] == "user"
 
 
+def test_telegram_api_verify_requires_api_key(client, monkeypatch):
+    monkeypatch.setattr("api.routes.telegram.settings.TELEGRAM_ENABLED", True)
+    monkeypatch.setattr("api.routes.telegram.settings.TELEGRAM_INTERNAL_API_KEY", "test-internal-key")
+    monkeypatch.setattr("api.middleware.internal_auth.settings.TELEGRAM_INTERNAL_API_KEY", "test-internal-key")
+
+    rv = client.post(
+        "/api/telegram/verify",
+        json={"code": "ABCD2345", "telegram_user_id": 1},
+    )
+    assert rv.status_code == 401
+
+
+def test_telegram_api_verify_empty_key_returns_503(client, monkeypatch):
+    monkeypatch.setattr("api.routes.telegram.settings.TELEGRAM_ENABLED", True)
+    monkeypatch.setattr("api.routes.telegram.settings.TELEGRAM_INTERNAL_API_KEY", "")
+    monkeypatch.setattr("api.middleware.internal_auth.settings.TELEGRAM_INTERNAL_API_KEY", "")
+
+    rv = client.post(
+        "/api/telegram/verify",
+        json={"code": "ABCD2345", "telegram_user_id": 1},
+        headers={"X-API-Key": "anything"},
+    )
+    assert rv.status_code == 503
+
+
+def test_telegram_api_verify_rate_limit(client, monkeypatch):
+    import api.routes.telegram as telegram_route
+    from core.chat_history import get_chat_history
+
+    monkeypatch.setattr("api.routes.telegram.settings.TELEGRAM_ENABLED", True)
+    monkeypatch.setattr("api.routes.telegram.settings.TELEGRAM_INTERNAL_API_KEY", "test-internal-key")
+    monkeypatch.setattr("api.middleware.internal_auth.settings.TELEGRAM_INTERNAL_API_KEY", "test-internal-key")
+    telegram_route._verify_limiter.reset()
+
+    clock = {"now": 1_000_000.0}
+
+    def fake_time():
+        return clock["now"]
+
+    monkeypatch.setattr(telegram_route.time, "time", fake_time)
+
+    headers = {"X-API-Key": "test-internal-key"}
+    payload = {"code": "NOPE1234", "telegram_user_id": 4242}
+    for _ in range(5):
+        rv = client.post("/api/telegram/verify", json=payload, headers=headers)
+        assert rv.status_code == 404
+
+    rv = client.post("/api/telegram/verify", json=payload, headers=headers)
+    assert rv.status_code == 429
+    assert "Слишком много попыток" in rv.get_json()["error"]
+
+    # Пока lockout активен — тоже 429
+    clock["now"] += 60
+    rv = client.post("/api/telegram/verify", json=payload, headers=headers)
+    assert rv.status_code == 429
+
+    # После lockout окно сбрасывается
+    clock["now"] += 900
+    chat_history = get_chat_history()
+    user = _create_test_user()
+    link = chat_history.create_telegram_link(user.id)
+    rv = client.post(
+        "/api/telegram/verify",
+        json={"code": link["code"], "telegram_user_id": 4242},
+        headers=headers,
+    )
+    assert rv.status_code == 200
+
+
 def test_telegram_api_resolve(client, monkeypatch):
     monkeypatch.setattr("api.routes.telegram.settings.TELEGRAM_ENABLED", True)
+    monkeypatch.setattr("api.routes.telegram.settings.TELEGRAM_INTERNAL_API_KEY", "test-internal-key")
+    monkeypatch.setattr("api.middleware.internal_auth.settings.TELEGRAM_INTERNAL_API_KEY", "test-internal-key")
     from core.chat_history import get_chat_history
 
     chat_history = get_chat_history()
@@ -624,9 +699,11 @@ def test_telegram_api_resolve(client, monkeypatch):
     link = chat_history.create_telegram_link(user.id)
     chat_history.verify_telegram_link(link["code"], telegram_user_id=555)
 
+    headers = {"X-API-Key": "test-internal-key"}
     rv = client.post(
         "/api/telegram/resolve",
         json={"telegram_user_id": 555},
+        headers=headers,
     )
     assert rv.status_code == 200
     body = rv.get_json()
@@ -636,6 +713,7 @@ def test_telegram_api_resolve(client, monkeypatch):
     missing = client.post(
         "/api/telegram/resolve",
         json={"telegram_user_id": 999001},
+        headers=headers,
     )
     assert missing.status_code == 404
 
@@ -649,6 +727,8 @@ def test_hydrate_session_from_resolve(monkeypatch):
     def mock_post(url, json=None, headers=None, timeout=None):
         calls.append({"url": url, "json": json, "headers": dict(headers or {})})
         response = MagicMock()
+        response.__enter__.return_value = response
+        response.__exit__.return_value = False
         response.status_code = 200
         response.json.return_value = {"user_id": 42, "role": "user"}
         return response
@@ -680,6 +760,8 @@ def test_hydrate_session_not_linked(monkeypatch):
 
     def mock_post(url, json=None, headers=None, timeout=None):
         response = MagicMock()
+        response.__enter__.return_value = response
+        response.__exit__.return_value = False
         response.status_code = 404
         response.json.return_value = {"error": "not found"}
         return response
@@ -701,11 +783,12 @@ def test_hydrate_session_not_linked(monkeypatch):
 
 @patch("web_app.initialize_database")
 @patch("web_app.inference_server_reachable")
-def test_resolve_chat_session_with_telegram_user_id(mock_reachable, mock_init, client):
+def test_resolve_chat_session_with_telegram_user_id(mock_reachable, mock_init, client, monkeypatch):
     mock_reachable.return_value = True
     rag = MagicMock()
     mock_init.return_value = (MagicMock(), rag)
     rag.query.return_value = RAGResult(answer="Ответ", citations=[], sources=[])
+    monkeypatch.setattr("api.middleware.internal_auth.settings.TELEGRAM_INTERNAL_API_KEY", "test-internal-key")
 
     from core.chat_history import get_chat_history
 
@@ -715,8 +798,18 @@ def test_resolve_chat_session_with_telegram_user_id(mock_reachable, mock_init, c
     chat_history.verify_telegram_link(link["code"], telegram_user_id=999)
 
     client.post("/api/auth/logout")
+    headers = {"X-API-Key": "test-internal-key"}
 
-    rv = client.post("/api/chat", json={"message": "вопрос", "telegram_user_id": 999})
+    # Без ключа telegram_user_id игнорируется (гостевая сессия)
+    anon = client.post("/api/chat", json={"message": "вопрос", "telegram_user_id": 999})
+    assert anon.status_code == 200
+    assert get_chat_history().get_session(anon.get_json()["chat_id"]).user_id is None
+
+    rv = client.post(
+        "/api/chat",
+        json={"message": "вопрос", "telegram_user_id": 999},
+        headers=headers,
+    )
     assert rv.status_code == 200
     body = rv.get_json()
     chat_id = body["chat_id"]
@@ -727,6 +820,7 @@ def test_resolve_chat_session_with_telegram_user_id(mock_reachable, mock_init, c
     rv = client.post(
         "/api/chat",
         json={"message": "уточнение", "chat_id": chat_id, "telegram_user_id": 999},
+        headers=headers,
     )
     assert rv.status_code == 200
     assert rv.get_json()["chat_id"] == chat_id
@@ -735,12 +829,13 @@ def test_resolve_chat_session_with_telegram_user_id(mock_reachable, mock_init, c
 @patch("web_app.initialize_database")
 @patch("web_app.inference_server_reachable")
 def test_resolve_chat_session_telegram_cannot_access_foreign_chat(
-    mock_reachable, mock_init, client
+    mock_reachable, mock_init, client, monkeypatch
 ):
     mock_reachable.return_value = True
     rag = MagicMock()
     mock_init.return_value = (MagicMock(), rag)
     rag.query.return_value = RAGResult(answer="Ответ", citations=[], sources=[])
+    monkeypatch.setattr("api.middleware.internal_auth.settings.TELEGRAM_INTERNAL_API_KEY", "test-internal-key")
 
     from core.chat_history import get_chat_history
 
@@ -766,6 +861,7 @@ def test_resolve_chat_session_telegram_cannot_access_foreign_chat(
             "chat_id": foreign_chat.id,
             "telegram_user_id": 888,
         },
+        headers={"X-API-Key": "test-internal-key"},
     )
     assert rv.status_code == 403
     assert rv.get_json()["error"] == "Нет доступа к чату"
@@ -774,12 +870,13 @@ def test_resolve_chat_session_telegram_cannot_access_foreign_chat(
 @patch("web_app.initialize_database")
 @patch("web_app.inference_server_reachable")
 def test_resolve_chat_session_telegram_recovers_stale_guest_chat_id(
-    mock_reachable, mock_init, client
+    mock_reachable, mock_init, client, monkeypatch
 ):
     mock_reachable.return_value = True
     rag = MagicMock()
     mock_init.return_value = (MagicMock(), rag)
     rag.query.return_value = RAGResult(answer="Ответ", citations=[], sources=[])
+    monkeypatch.setattr("api.middleware.internal_auth.settings.TELEGRAM_INTERNAL_API_KEY", "test-internal-key")
 
     from core.chat_history import get_chat_history
 
@@ -799,6 +896,7 @@ def test_resolve_chat_session_telegram_recovers_stale_guest_chat_id(
             "chat_id": guest_chat.id,
             "telegram_user_id": 777,
         },
+        headers={"X-API-Key": "test-internal-key"},
     )
     assert rv.status_code == 200
     body = rv.get_json()
@@ -920,6 +1018,12 @@ def test_handle_question_rich_messages_draft_then_final(monkeypatch):
     )
 
     class FakeResp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
         def raise_for_status(self):
             return None
 
@@ -1000,6 +1104,12 @@ def test_handle_question_rich_failure_falls_back(monkeypatch):
             return {"ok": True}
 
     class FakeResp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
         def raise_for_status(self):
             return None
 
@@ -1083,6 +1193,12 @@ def test_handle_question_rich_failure_fallback_not_truncated(monkeypatch):
             raise AssertionError("classic edit should not be used")
 
     class FakeResp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
         def raise_for_status(self):
             return None
 
@@ -1336,6 +1452,12 @@ def test_handle_question_photo_only_skips_trivial_text(monkeypatch):
             raise AssertionError("classic edit should not be used")
 
     class FakeResp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
         def raise_for_status(self):
             return None
 
@@ -1426,6 +1548,12 @@ def test_handle_question_sends_mermaid_photos_after_text(monkeypatch):
             raise AssertionError("classic edit should not be used")
 
     class FakeResp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
         def raise_for_status(self):
             return None
 
@@ -1459,3 +1587,217 @@ def test_handle_question_sends_mermaid_photos_after_text(monkeypatch):
     final_idx = next(i for i, c in enumerate(calls) if c[0] == "final")
     photo_idx = next(i for i, c in enumerate(calls) if c[0] == "photo")
     assert final_idx < photo_idx
+
+def test_handle_start_hides_role(monkeypatch):
+    from scripts.telegram_bot_worker import handle_start, _sessions
+
+    _sessions.clear()
+    monkeypatch.setattr(
+        "scripts.telegram_bot_worker.settings.TELEGRAM_INTERNAL_API_URL",
+        "http://127.0.0.1:5000",
+    )
+    monkeypatch.setattr(
+        "scripts.telegram_bot_worker.settings.TELEGRAM_INTERNAL_API_KEY",
+        "secret",
+    )
+
+    def mock_post(url, json=None, headers=None, timeout=None):
+        response = MagicMock()
+        response.__enter__.return_value = response
+        response.__exit__.return_value = False
+        response.status_code = 200
+        response.json.return_value = {"user_id": 9, "role": "admin"}
+        return response
+
+    monkeypatch.setattr("scripts.telegram_bot_worker.requests.post", mock_post)
+    reply = handle_start("CODE1234", 55, MagicMock())
+    assert "Аккаунт привязан" in reply
+    assert "admin" not in reply
+    assert "роль" not in reply.lower()
+
+
+def test_handle_question_normalizes_mode_in_payload(monkeypatch):
+    from scripts.telegram_bot_worker import TelegramSession, _sessions, handle_question
+
+    _sessions.clear()
+    captured = {}
+    monkeypatch.setattr("scripts.telegram_bot_worker.settings.TELEGRAM_RICH_MESSAGES", False)
+    monkeypatch.setattr("scripts.telegram_bot_worker.settings.TELEGRAM_MERMAID_IMAGES", False)
+    monkeypatch.setattr("scripts.telegram_bot_worker.settings.TELEGRAM_SHOW_SOURCES", False)
+    monkeypatch.setattr(
+        "scripts.telegram_bot_worker.settings.TELEGRAM_STREAM_EDIT_INTERVAL_MS", 0
+    )
+    monkeypatch.setattr(
+        "scripts.telegram_bot_worker.settings.TELEGRAM_INTERNAL_API_URL",
+        "http://127.0.0.1:5000",
+    )
+    monkeypatch.setattr(
+        "scripts.telegram_bot_worker.settings.TELEGRAM_INTERNAL_API_KEY",
+        "secret",
+    )
+    monkeypatch.setattr(
+        "scripts.telegram_bot_worker.hydrate_session",
+        lambda session, tg_user_id: setattr(session, "user_id", 1) or True,
+    )
+
+    class FakeClient:
+        def send_chat_action(self, *a, **k):
+            return {"ok": True}
+
+        def send_message(self, chat_id, text, **k):
+            return {"ok": True, "result": {"message_id": 1}}
+
+        def edit_message_text(self, *a, **k):
+            return {"ok": True}
+
+    class FakeResp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def raise_for_status(self):
+            return None
+
+        def iter_lines(self, decode_unicode=True):
+            yield 'data: {"type":"done","answer":"ok","chat_id":5,"sources":[],"citations":[]}'
+            yield "data: [DONE]"
+
+    def fake_post(url, json=None, headers=None, stream=False, timeout=None):
+        captured["json"] = dict(json or {})
+        return FakeResp()
+
+    monkeypatch.setattr("scripts.telegram_bot_worker.requests.post", fake_post)
+
+    session = TelegramSession()
+    session.answer_mode = "кратко"
+    update = {
+        "update_id": 1,
+        "message": {"chat": {"id": 10}, "from": {"id": 20}, "text": "вопрос"},
+    }
+    handle_question(update, session, FakeClient(), text="вопрос")
+    assert captured["json"]["answer_mode"] == "brief"
+
+
+def test_handle_question_interrupted_stream_marks_partial(monkeypatch):
+    from scripts.telegram_bot_worker import TelegramSession, _sessions, handle_question
+
+    _sessions.clear()
+    finals = []
+    monkeypatch.setattr("scripts.telegram_bot_worker.settings.TELEGRAM_RICH_MESSAGES", False)
+    monkeypatch.setattr("scripts.telegram_bot_worker.settings.TELEGRAM_MERMAID_IMAGES", False)
+    monkeypatch.setattr("scripts.telegram_bot_worker.settings.TELEGRAM_SHOW_SOURCES", False)
+    monkeypatch.setattr(
+        "scripts.telegram_bot_worker.settings.TELEGRAM_STREAM_EDIT_INTERVAL_MS", 0
+    )
+    monkeypatch.setattr(
+        "scripts.telegram_bot_worker.settings.TELEGRAM_INTERNAL_API_URL",
+        "http://127.0.0.1:5000",
+    )
+    monkeypatch.setattr(
+        "scripts.telegram_bot_worker.settings.TELEGRAM_INTERNAL_API_KEY",
+        "secret",
+    )
+    monkeypatch.setattr(
+        "scripts.telegram_bot_worker.hydrate_session",
+        lambda session, tg_user_id: setattr(session, "user_id", 1) or True,
+    )
+
+    class FakeClient:
+        def send_chat_action(self, *a, **k):
+            return {"ok": True}
+
+        def send_message(self, chat_id, text, **k):
+            return {"ok": True, "result": {"message_id": 1}}
+
+        def edit_message_text(self, chat_id, message_id, text, **k):
+            finals.append(text)
+            return {"ok": True}
+
+    class FakeResp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def raise_for_status(self):
+            return None
+
+        def iter_lines(self, decode_unicode=True):
+            yield 'data: {"type":"delta","text":"частичный"}'
+
+    monkeypatch.setattr(
+        "scripts.telegram_bot_worker.requests.post",
+        lambda *a, **k: FakeResp(),
+    )
+
+    update = {
+        "update_id": 3,
+        "message": {"chat": {"id": 10}, "from": {"id": 20}, "text": "вопрос"},
+    }
+    handle_question(update, TelegramSession(), FakeClient(), text="вопрос")
+    assert finals
+    assert "Ответ прерван" in finals[-1]
+    assert "частичный" in finals[-1]
+
+
+def test_sessions_lru_evicts_old(monkeypatch):
+    from scripts import telegram_bot_worker as worker
+
+    worker._sessions.clear()
+    monkeypatch.setattr(worker, "_MAX_SESSIONS", 3)
+    worker.get_session(1)
+    worker.get_session(2)
+    worker.get_session(3)
+    worker.get_session(4)
+    assert 1 not in worker._sessions
+    assert set(worker._sessions) == {2, 3, 4}
+
+
+def test_main_rejects_empty_internal_api_key(monkeypatch, capsys):
+    from scripts.telegram_bot_worker import main
+
+    monkeypatch.setattr("scripts.telegram_bot_worker.settings.TELEGRAM_ENABLED", True)
+    monkeypatch.setattr("scripts.telegram_bot_worker.settings.TELEGRAM_BOT_TOKEN", "token")
+    monkeypatch.setattr("scripts.telegram_bot_worker.settings.TELEGRAM_INTERNAL_API_KEY", "")
+    monkeypatch.setattr("sys.argv", ["telegram_bot_worker.py"])
+    assert main() == 1
+    assert "TELEGRAM_INTERNAL_API_KEY" in capsys.readouterr().out
+
+
+def test_telegram_api_unlink_and_conflict(client, monkeypatch):
+    from core.chat_history import get_chat_history
+    from werkzeug.security import generate_password_hash
+
+    monkeypatch.setattr("api.routes.telegram.settings.TELEGRAM_ENABLED", True)
+    monkeypatch.setattr("api.routes.telegram.settings.TELEGRAM_INTERNAL_API_KEY", "test-internal-key")
+    monkeypatch.setattr("api.middleware.internal_auth.settings.TELEGRAM_INTERNAL_API_KEY", "test-internal-key")
+
+    history = get_chat_history()
+    u1 = history.create_user("tg1", "tg1@example.com", generate_password_hash("password123"))
+    u2 = history.create_user("tg2", "tg2@example.com", generate_password_hash("password123"))
+    code1 = history.create_telegram_link(u1.id)["code"]
+    headers = {"X-API-Key": "test-internal-key"}
+    assert client.post(
+        "/api/telegram/verify",
+        json={"code": code1, "telegram_user_id": 9001},
+        headers=headers,
+    ).status_code == 200
+
+    code2 = history.create_telegram_link(u2.id)["code"]
+    conflict = client.post(
+        "/api/telegram/verify",
+        json={"code": code2, "telegram_user_id": 9001},
+        headers=headers,
+    )
+    assert conflict.status_code == 409
+
+    client.post(
+        "/api/auth/login",
+        json={"identifier": "tg1", "password": "password123"},
+    )
+    unlink = client.post("/api/telegram/unlink")
+    assert unlink.status_code == 200
+    assert unlink.get_json()["unlinked"] is True

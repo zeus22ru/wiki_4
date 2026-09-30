@@ -22,7 +22,7 @@ from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
-from urllib.parse import parse_qsl, quote, unquote_plus, urljoin, urlparse, urlunparse
+from urllib.parse import quote, unquote_plus, urljoin, urlparse, urlunparse
 
 import requests
 from bs4 import BeautifulSoup

@@ -4,43 +4,60 @@
 Система кэширования эмбеддингов и данных
 """
 
+from __future__ import annotations
+
+import atexit
 import hashlib
 import json
-import pickle
+import struct
 import time
+from array import array
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional, Dict, List, Tuple
-from dataclasses import dataclass, asdict
-from datetime import datetime, timedelta
+from typing import Any, Dict, List, Optional
 import threading
 
 from config import settings, get_logger
 
 logger = get_logger(__name__)
 
+# Магический заголовок бинарного файла эмбеддинга (array('f'))
+_EMB_MAGIC = b"EMBF1"
+_INDEX_SAVE_EVERY = 100
+
 
 @dataclass
 class CacheEntry:
-    """Запись в кэше"""
+    """Метаданные записи в индексе кэша (значение лежит в файле)."""
     key: str
-    value: Any
     created_at: float
     expires_at: float
-    access_count: int = 0
     last_accessed: float = 0.0
-    
+
     def is_expired(self) -> bool:
-        """Проверка истечения срока действия"""
+        """Проверка истечения срока действия."""
         return time.time() > self.expires_at
-    
-    def touch(self):
-        """Обновление времени последнего доступа"""
+
+    def touch(self) -> None:
+        """Обновление времени последнего доступа."""
         self.last_accessed = time.time()
-        self.access_count += 1
-    
-    def to_dict(self) -> Dict:
-        """Преобразование в словарь"""
-        return asdict(self)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "key": self.key,
+            "created_at": self.created_at,
+            "expires_at": self.expires_at,
+            "last_accessed": self.last_accessed,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "CacheEntry":
+        return cls(
+            key=str(data.get("key") or ""),
+            created_at=float(data.get("created_at") or 0.0),
+            expires_at=float(data.get("expires_at") or 0.0),
+            last_accessed=float(data.get("last_accessed") or data.get("created_at") or 0.0),
+        )
 
 
 @dataclass
@@ -50,279 +67,308 @@ class CacheStats:
     misses: int = 0
     evictions: int = 0
     size: int = 0
-    
+
     @property
     def hit_rate(self) -> float:
-        """Коэффициент попадания"""
         total = self.hits + self.misses
         return self.hits / total if total > 0 else 0.0
-    
+
     def to_dict(self) -> Dict:
-        """Преобразование в словарь"""
         return {
-            'hits': self.hits,
-            'misses': self.misses,
-            'evictions': self.evictions,
-            'size': self.size,
-            'hit_rate': f"{self.hit_rate:.2%}"
+            "hits": self.hits,
+            "misses": self.misses,
+            "evictions": self.evictions,
+            "size": self.size,
+            "hit_rate": f"{self.hit_rate:.2%}",
         }
 
 
+def _write_float_array(path: Path, values: List[float]) -> None:
+    """Записать список float в бинарный файл (без pickle)."""
+    arr = array("f", (float(v) for v in values))
+    with open(path, "wb") as f:
+        f.write(_EMB_MAGIC)
+        f.write(struct.pack("<I", len(arr)))
+        arr.tofile(f)
+
+
+def _read_float_array(path: Path) -> Optional[List[float]]:
+    """Прочитать эмбеддинг: новый формат EMBF1 или JSON-массив (миграция)."""
+    raw = path.read_bytes()
+    if raw.startswith(_EMB_MAGIC):
+        if len(raw) < 9:
+            return None
+        (n,) = struct.unpack_from("<I", raw, 5)
+        arr = array("f")
+        arr.frombytes(raw[9 : 9 + n * arr.itemsize])
+        if len(arr) != n:
+            return None
+        return list(arr)
+    # Миграция: JSON-массив float
+    try:
+        data = json.loads(raw.decode("utf-8"))
+        if isinstance(data, list) and data and all(isinstance(x, (int, float)) for x in data):
+            return [float(x) for x in data]
+    except Exception:
+        pass
+    return None
+
+
 class FileCache:
-    """Файловый кэш с поддержкой TTL"""
-    
+    """Файловый кэш с поддержкой TTL и персистентным индексом."""
+
     def __init__(
         self,
         cache_dir: Optional[str] = None,
         default_ttl: int = 3600,
-        max_size: int = 10000
+        max_size: int = 10000,
     ):
-        """
-        Инициализация файлового кэша
-        
-        Args:
-            cache_dir: Директория для хранения кэша
-            default_ttl: Время жизни по умолчанию (секунды)
-            max_size: Максимальное количество записей
-        """
         self.cache_dir = Path(cache_dir or settings.CACHE_DIR)
         self.default_ttl = default_ttl
         self.max_size = max_size
         self.stats = CacheStats()
         self._lock = threading.RLock()
-        
-        # Создаём директорию кэша
+        self._sets_since_save = 0
+        self._index_dirty = False
+
         self.cache_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Индекс кэша в памяти
         self._index: Dict[str, CacheEntry] = {}
-        
-        # Загружаем индекс при инициализации
         self._load_index()
-        
-        logger.info(f"Файловый кэш инициализирован: {self.cache_dir}, TTL: {default_ttl}с")
-    
+        atexit.register(self._atexit_save)
+
+        logger.info(
+            "Файловый кэш инициализирован: %s, TTL: %sс",
+            self.cache_dir,
+            default_ttl,
+        )
+
     def _get_cache_path(self, key: str) -> Path:
-        """Получить путь к файлу кэша"""
-        # Используем хеш ключа для имени файла
         hash_key = hashlib.md5(key.encode()).hexdigest()
         return self.cache_dir / f"{hash_key}.cache"
-    
-    def _load_index(self):
-        """Загрузка индекса кэша"""
+
+    def _atexit_save(self) -> None:
+        try:
+            with self._lock:
+                if self._index_dirty or self._sets_since_save:
+                    self._save_index()
+        except Exception:
+            pass
+
+    def _load_index(self) -> None:
+        """Загрузка индекса с сверкой файлов на диске."""
         index_file = self.cache_dir / "index.json"
-        
+        loaded: Dict[str, CacheEntry] = {}
+
         if index_file.exists():
             try:
-                with open(index_file, 'r', encoding='utf-8') as f:
+                with open(index_file, "r", encoding="utf-8") as f:
                     index_data = json.load(f)
-                
-                for key, entry_data in index_data.items():
-                    entry = CacheEntry(**entry_data)
-                    if not entry.is_expired():
-                        self._index[key] = entry
-                        self.stats.size += 1
-                
-                logger.info(f"Загружен индекс кэша: {len(self._index)} записей")
+                for key, entry_data in (index_data or {}).items():
+                    try:
+                        # Совместимость со старым форматом (value/access_count)
+                        if "value" in entry_data:
+                            entry_data = {
+                                k: v
+                                for k, v in entry_data.items()
+                                if k in ("key", "created_at", "expires_at", "last_accessed")
+                            }
+                            entry_data.setdefault("key", key)
+                        entry = CacheEntry.from_dict(entry_data)
+                        if entry.key != key:
+                            entry.key = key
+                        if not entry.is_expired():
+                            loaded[key] = entry
+                    except Exception:
+                        continue
+                logger.info("Загружен индекс кэша: %s записей (до сверки)", len(loaded))
             except Exception as e:
-                logger.error(f"Ошибка загрузки индекса кэша: {e}")
-    
-    def _save_index(self):
-        """Сохранение индекса кэша"""
+                logger.error("Ошибка загрузки индекса кэша: %s", e)
+
+        # Сверка с файлами: записи без файла — выкинуть; осиротевшие *.cache — удалить
+        indexed_paths = {self._get_cache_path(k) for k in loaded}
+        for cache_file in self.cache_dir.glob("*.cache"):
+            if cache_file not in indexed_paths:
+                try:
+                    cache_file.unlink()
+                    logger.debug("Удалён осиротевший файл кэша: %s", cache_file.name)
+                except OSError as e:
+                    logger.warning("Не удалось удалить осиротевший %s: %s", cache_file, e)
+
+        cleaned: Dict[str, CacheEntry] = {}
+        for key, entry in loaded.items():
+            path = self._get_cache_path(key)
+            if path.is_file():
+                cleaned[key] = entry
+            else:
+                logger.debug("Запись без файла удалена из индекса: %s", key[:16])
+
+        self._index = cleaned
+        self.stats.size = len(self._index)
+        if len(cleaned) != len(loaded):
+            self._save_index()
+
+    def _save_index(self) -> None:
         index_file = self.cache_dir / "index.json"
-        
         try:
-            index_data = {
-                key: entry.to_dict()
-                for key, entry in self._index.items()
-            }
-            
-            with open(index_file, 'w', encoding='utf-8') as f:
-                json.dump(index_data, f, ensure_ascii=False, indent=2)
+            index_data = {key: entry.to_dict() for key, entry in self._index.items()}
+            tmp = index_file.with_suffix(".json.tmp")
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(index_data, f, ensure_ascii=False)
+            tmp.replace(index_file)
+            self._sets_since_save = 0
+            self._index_dirty = False
         except Exception as e:
-            logger.error(f"Ошибка сохранения индекса кэша: {e}")
-    
-    def _evict_expired(self):
-        """Удаление истёкших записей"""
-        expired_keys = [
-            key for key, entry in self._index.items()
-            if entry.is_expired()
-        ]
-        
+            logger.error("Ошибка сохранения индекса кэша: %s", e)
+
+    def _evict_expired(self) -> None:
+        expired_keys = [key for key, entry in self._index.items() if entry.is_expired()]
         for key in expired_keys:
             self.delete(key)
-        
         if expired_keys:
-            logger.debug(f"Удалено {len(expired_keys)} истёкших записей")
-    
-    def _evict_lru(self, count: int = 1):
-        """Удаление наименее используемых записей"""
+            logger.debug("Удалено %s истёкших записей", len(expired_keys))
+
+    def _evict_lru(self, count: Optional[int] = None) -> None:
+        """Пакетная эвикция ~10% при переполнении (без сортировки на каждой вставке)."""
         if not self._index:
             return
-        
-        # Сортируем по времени последнего доступа
+        if count is None:
+            count = max(1, len(self._index) // 10)
+        # Один проход сортировки на пакет
         sorted_entries = sorted(
             self._index.items(),
-            key=lambda x: x[1].last_accessed
+            key=lambda x: x[1].last_accessed,
         )
-        
         for key, _ in sorted_entries[:count]:
             self.delete(key)
             self.stats.evictions += 1
-        
-        logger.debug(f"LRU эвикция: {count} записей")
-    
+        logger.debug("LRU эвикция: %s записей", count)
+
     def get(self, key: str) -> Optional[Any]:
-        """
-        Получение значения из кэша
-        
-        Args:
-            key: Ключ кэша
-            
-        Returns:
-            Значение или None если не найдено или истёк
-        """
         with self._lock:
-            # Проверяем индекс
             if key not in self._index:
                 self.stats.misses += 1
                 return None
-            
+
             entry = self._index[key]
-            
-            # Проверяем срок действия
             if entry.is_expired():
                 self.delete(key)
                 self.stats.misses += 1
                 return None
-            
-            # Загружаем значение из файла
+
             cache_path = self._get_cache_path(key)
             if not cache_path.exists():
                 del self._index[key]
+                self.stats.size = len(self._index)
+                self._index_dirty = True
                 self.stats.misses += 1
                 return None
-            
+
             try:
-                with open(cache_path, 'rb') as f:
-                    value = pickle.load(f)
-                
+                value = _read_float_array(cache_path)
+                if value is None:
+                    # Неэмбеддинг / битый файл
+                    self.delete(key)
+                    self.stats.misses += 1
+                    return None
                 entry.touch()
+                self._index_dirty = True
                 self.stats.hits += 1
-                logger.debug(f"Кэш hit: {key}")
+                logger.debug("Кэш hit: %s", key[:16])
                 return value
             except Exception as e:
-                logger.error(f"Ошибка чтения кэша {key}: {e}")
+                logger.error("Ошибка чтения кэша %s: %s", key[:16], e)
                 self.delete(key)
                 self.stats.misses += 1
                 return None
-    
+
     def set(self, key: str, value: Any, ttl: Optional[int] = None) -> bool:
-        """
-        Сохранение значения в кэш
-        
-        Args:
-            key: Ключ кэша
-            value: Значение для кэширования
-            ttl: Время жизни в секундах (используется default_ttl если None)
-            
-        Returns:
-            True если успешно
-        """
         with self._lock:
             ttl = ttl or self.default_ttl
             now = time.time()
-            
-            # Проверяем размер кэша
+
             if len(self._index) >= self.max_size:
                 self._evict_lru()
-            
-            # Создаём запись
+
             entry = CacheEntry(
                 key=key,
-                value=None,  # Значение хранится в файле
                 created_at=now,
                 expires_at=now + ttl,
-                last_accessed=now
+                last_accessed=now,
             )
-            
-            # Сохраняем значение в файл
+
             cache_path = self._get_cache_path(key)
             try:
-                with open(cache_path, 'wb') as f:
-                    pickle.dump(value, f)
-                
+                if isinstance(value, list) and value and all(
+                    isinstance(x, (int, float)) for x in value
+                ):
+                    _write_float_array(cache_path, [float(x) for x in value])
+                else:
+                    # Универсальный fallback: JSON
+                    with open(cache_path, "w", encoding="utf-8") as f:
+                        json.dump(value, f, ensure_ascii=False)
+
                 self._index[key] = entry
                 self.stats.size = len(self._index)
-                
-                # Периодически сохраняем индекс
-                if self.stats.size % 100 == 0:
+                self._sets_since_save += 1
+                self._index_dirty = True
+
+                if self._sets_since_save >= _INDEX_SAVE_EVERY:
                     self._save_index()
-                
-                logger.debug(f"Кэш set: {key}, TTL: {ttl}с")
+
+                logger.debug("Кэш set: %s, TTL: %sс", key[:16], ttl)
                 return True
             except Exception as e:
-                logger.error(f"Ошибка записи в кэш {key}: {e}")
+                logger.error("Ошибка записи в кэш %s: %s", key[:16], e)
                 return False
-    
+
     def delete(self, key: str) -> bool:
-        """
-        Удаление записи из кэша
-        
-        Args:
-            key: Ключ кэша
-            
-        Returns:
-            True если успешно
-        """
         with self._lock:
             if key in self._index:
                 del self._index[key]
                 self.stats.size = len(self._index)
-            
+                self._index_dirty = True
+
             cache_path = self._get_cache_path(key)
             if cache_path.exists():
                 try:
                     cache_path.unlink()
                     return True
                 except Exception as e:
-                    logger.error(f"Ошибка удаления файла кэша {key}: {e}")
-            
+                    logger.error("Ошибка удаления файла кэша %s: %s", key[:16], e)
             return False
-    
-    def clear(self):
-        """Очистка всего кэша"""
+
+    def clear(self) -> None:
         with self._lock:
-            # Удаляем все файлы кэша
             for cache_file in self.cache_dir.glob("*.cache"):
                 try:
                     cache_file.unlink()
                 except Exception as e:
-                    logger.error(f"Ошибка удаления файла {cache_file}: {e}")
-            
-            # Очищаем индекс
+                    logger.error("Ошибка удаления файла %s: %s", cache_file, e)
+
             self._index.clear()
             self.stats.size = 0
-            
-            # Удаляем индекс
+            self._index_dirty = False
+            self._sets_since_save = 0
+
             index_file = self.cache_dir / "index.json"
             if index_file.exists():
-                index_file.unlink()
-            
+                try:
+                    index_file.unlink()
+                except OSError:
+                    pass
+
             logger.info("Кэш очищен")
-    
+
     def get_stats(self) -> CacheStats:
-        """Получение статистики кэша"""
         with self._lock:
             return CacheStats(
                 hits=self.stats.hits,
                 misses=self.stats.misses,
                 evictions=self.stats.evictions,
-                size=self.stats.size
+                size=self.stats.size,
             )
-    
-    def cleanup(self):
-        """Очистка истёкших записей"""
+
+    def cleanup(self) -> None:
         with self._lock:
             self._evict_expired()
             self._save_index()
@@ -330,191 +376,122 @@ class FileCache:
 
 class EmbeddingCache:
     """Кэш для эмбеддингов"""
-    
+
     def __init__(self, cache_dir: Optional[str] = None, ttl: int = 3600):
-        """
-        Инициализация кэша эмбеддингов
-        
-        Args:
-            cache_dir: Директория для хранения кэша
-            ttl: Время жизни эмбеддингов (секунды)
-        """
         self.cache = FileCache(
             cache_dir=cache_dir or settings.CACHE_DIR,
             default_ttl=ttl,
-            max_size=10000
+            max_size=10000,
         )
         logger.info("Кэш эмбеддингов инициализирован")
-    
+
     def _generate_key(self, text: str, model: str) -> str:
-        """Генерация ключа для эмбеддинга"""
-        # Используем хеш текста и модели
-        content = f"{model}:{text}"
+        """Ключ включает модель, API-режим и размерность эмбеддинга."""
+        mode = str(getattr(settings, "EMBEDDING_API_MODE", "ollama") or "ollama")
+        dims = getattr(settings, "EMBEDDING_DIMENSIONS", None)
+        dims_part = str(dims) if dims is not None else "auto"
+        content = f"{mode}:{dims_part}:{model}:{text}"
         return hashlib.sha256(content.encode()).hexdigest()
-    
+
     def get(self, text: str, model: str) -> Optional[List[float]]:
-        """
-        Получение эмбеддинга из кэша
-        
-        Args:
-            text: Текст для которого нужен эмбеддинг
-            model: Модель эмбеддингов
-            
-        Returns:
-            Эмбеддинг или None
-        """
         key = self._generate_key(text, model)
-        return self.cache.get(key)
-    
-    def set(self, text: str, model: str, embedding: List[float], ttl: Optional[int] = None) -> bool:
-        """
-        Сохранение эмбеддинга в кэш
-        
-        Args:
-            text: Текст
-            model: Модель эмбеддингов
-            embedding: Эмбеддинг
-            ttl: Время жизни (секунды)
-            
-        Returns:
-            True если успешно
-        """
+        value = self.cache.get(key)
+        if value is None:
+            return None
+        if isinstance(value, list):
+            return value
+        return None
+
+    def set(
+        self,
+        text: str,
+        model: str,
+        embedding: List[float],
+        ttl: Optional[int] = None,
+    ) -> bool:
         key = self._generate_key(text, model)
         return self.cache.set(key, embedding, ttl)
-    
-    def invalidate(self, text: Optional[str] = None, model: Optional[str] = None):
-        """
-        Инвалидация кэша эмбеддингов
-        
-        Args:
-            text: Текст для инвалидации (опционально)
-            model: Модель для инвалидации (опционально)
-        """
+
+    def invalidate(self, text: Optional[str] = None, model: Optional[str] = None) -> None:
         if text and model:
-            # Инвалидируем конкретный эмбеддинг
             key = self._generate_key(text, model)
             self.cache.delete(key)
-            logger.debug(f"Инвалидирован эмбеддинг для текста: {text[:50]}...")
+            logger.debug("Инвалидирован эмбеддинг для текста: %s...", text[:50])
         elif model:
-            # Инвалидируем все эмбеддинги модели
-            # Для файлового кэша это требует перебора всех ключей
             logger.warning("Инвалидация по модели не реализована для файлового кэша")
         else:
-            # Очищаем весь кэш
             self.cache.clear()
             logger.info("Кэш эмбеддингов очищен")
-    
+
     def get_stats(self) -> Dict:
-        """Получение статистики кэша"""
-        stats = self.cache.get_stats()
-        return stats.to_dict()
-    
-    def cleanup(self):
-        """Очистка истёкших записей"""
+        return self.cache.get_stats().to_dict()
+
+    def cleanup(self) -> None:
         self.cache.cleanup()
 
 
-# ============================================
-# Глобальные экземпляры кэша
-# ============================================
-
-# Кэш эмбеддингов (создаётся при первом использовании)
 _embedding_cache: Optional[EmbeddingCache] = None
 
 
 def get_embedding_cache() -> EmbeddingCache:
-    """
-    Получение глобального экземпляра кэша эмбеддингов
-    
-    Returns:
-        Экземпляр EmbeddingCache
-    """
+    """Глобальный экземпляр кэша эмбеддингов (лениво)."""
     global _embedding_cache
-    
+
     if _embedding_cache is None:
         if settings.CACHE_ENABLED:
-            _embedding_cache = EmbeddingCache(
-                ttl=settings.CACHE_TTL
-            )
+            _embedding_cache = EmbeddingCache(ttl=settings.CACHE_TTL)
             logger.info("Кэш эмбеддингов включён")
         else:
             logger.info("Кэш эмбеддингов отключён")
-    
+
     return _embedding_cache
 
 
 def cache_embedding(text: str, model: str, embedding: List[float]) -> bool:
-    """
-    Кэширование эмбеддинга
-    
-    Args:
-        text: Текст
-        model: Модель
-        embedding: Эмбеддинг
-        
-    Returns:
-        True если успешно
-    """
     if not settings.CACHE_ENABLED:
         return False
-    
     cache = get_embedding_cache()
+    if cache is None:
+        return False
     return cache.set(text, model, embedding)
 
 
 def get_cached_embedding(text: str, model: str) -> Optional[List[float]]:
-    """
-    Получение кэшированного эмбеддинга
-    
-    Args:
-        text: Текст
-        model: Модель
-        
-    Returns:
-        Эмбеддинг или None
-    """
     if not settings.CACHE_ENABLED:
         return None
-    
     cache = get_embedding_cache()
+    if cache is None:
+        return None
     return cache.get(text, model)
 
 
-def invalidate_embedding_cache(text: Optional[str] = None, model: Optional[str] = None):
-    """
-    Инвалидация кэша эмбеддингов
-    
-    Args:
-        text: Текст для инвалидации (опционально)
-        model: Модель для инвалидации (опционально)
-    """
+def invalidate_embedding_cache(
+    text: Optional[str] = None,
+    model: Optional[str] = None,
+) -> None:
     if not settings.CACHE_ENABLED:
         return
-    
     cache = get_embedding_cache()
+    if cache is None:
+        return
     cache.invalidate(text, model)
 
 
 def get_cache_stats() -> Dict:
-    """
-    Получение статистики кэша
-    
-    Returns:
-        Словарь со статистикой
-    """
     if not settings.CACHE_ENABLED:
-        return {'enabled': False}
-    
+        return {"enabled": False}
     cache = get_embedding_cache()
+    if cache is None:
+        return {"enabled": False}
     stats = cache.get_stats()
-    stats['enabled'] = True
+    stats["enabled"] = True
     return stats
 
 
-def cleanup_cache():
-    """Очистка истёкших записей кэша"""
+def cleanup_cache() -> None:
     if not settings.CACHE_ENABLED:
         return
-    
     cache = get_embedding_cache()
+    if cache is None:
+        return
     cache.cleanup()

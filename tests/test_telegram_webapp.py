@@ -76,9 +76,9 @@ def test_telegram_app_page(client):
     assert rv.status_code == 200
     html = rv.get_data(as_text=True)
     assert "telegram-web-app.js" in html
-    assert "mermaid@10/dist/mermaid.min.js" in html
+    assert "mermaid.min.js" in html
     assert "telegram-app.js') }}?v=3" not in html
-    assert "telegram-app.js?v=3" in html
+    assert "telegram-app.js?v=" in html
 
 
 def test_telegram_app_renders_mermaid_blocks():

@@ -5,16 +5,19 @@ Flask веб-приложение для вопрос-ответной сист�
 
 from flask import Flask, render_template, request, jsonify, Response, stream_with_context
 from flask_cors import CORS
+from werkzeug.middleware.proxy_fix import ProxyFix
 import chromadb
 import threading
 import time
 import json
 import traceback
-from functools import wraps
 
 # Импорт конфигурации и логирования
 from config import settings, get_logger, inference_server_reachable, fetch_remote_model_ids
 from config.chat_runtime import rag_chat_defaults, resolve_chat_rag_options
+
+# Каталоги нужны до инициализации БД / RAG
+settings.ensure_directories()
 
 # Импорт RAG системы
 from core.rag import (
@@ -35,7 +38,7 @@ from core.chat_attachments import (
 from core.chat_history import get_chat_history
 from utils.embeddings import ChatCompletionError
 
-# Импорт общих функций для работы с эмбеддингами
+# Импорт маршрутов
 from api.routes.chat import chat_bp
 from api.routes.documents import documents_bp
 from api.routes.admin import admin_bp
@@ -44,9 +47,28 @@ from api.routes.chat_attachments import chat_attachments_bp
 from api.routes.issues import issues_bp
 from api.routes.telegram import telegram_bp
 from api.middleware.auth import can_access_chat, current_user_id, remember_guest_chat
+from api.middleware.internal_auth import is_trusted_internal_request
 
 # Получаем логгер для этого модуля
 logger = get_logger(__name__)
+
+_SENSITIVE_BODY_KEYS = frozenset({
+    "password", "password_hash", "token", "secret", "init_data", "code",
+})
+
+_CSP_POLICY = (
+    "default-src 'self'; "
+    "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com "
+    "https://telegram.org https://*.telegram.org; "
+    "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com "
+    "https://fonts.googleapis.com; "
+    "font-src 'self' https://fonts.gstatic.com https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; "
+    "img-src 'self' data: blob: https:; "
+    "connect-src 'self' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://telegram.org; "
+    "frame-ancestors 'self' https://web.telegram.org https://*.telegram.org; "
+    "base-uri 'self'; "
+    "form-action 'self'"
+)
 
 
 def _rag_result_to_api_dict(rag_result: RAGResult) -> dict:
@@ -115,6 +137,18 @@ def _load_chat_attachment_bundle(attachment_ids: list) -> AttachmentBundle | Non
     return bundle
 
 
+def _require_string_field(data: dict, field: str, *, allow_empty: bool = False):
+    """Вернуть строку поля или (None, error_response) при неверном типе."""
+    if field not in data:
+        return ("" if allow_empty else None), None
+    value = data.get(field)
+    if value is None and allow_empty:
+        return "", None
+    if not isinstance(value, str):
+        return None, (jsonify({"error": f"Поле {field} должно быть строкой"}), 400)
+    return value, None
+
+
 def _normalize_chat_query(data: dict):
     if not data:
         logger.warning("Получен пустой запрос чата")
@@ -126,14 +160,13 @@ def _normalize_chat_query(data: dict):
         return None, (jsonify({"error": "Сообщение должно быть строкой"}), 400)
 
     raw_message = data.get("message", "")
-    if raw_message is None:
-        raw_message = ""
     if not isinstance(raw_message, str):
         logger.warning("Некорректный тип сообщения: %s", type(raw_message).__name__)
         return None, (jsonify({"error": "Сообщение должно быть строкой"}), 400)
 
     query = raw_message.strip()
     has_attachments = bool(attachment_ids)
+    max_chars = int(getattr(settings, "CHAT_MESSAGE_MAX_CHARS", 1000) or 1000)
 
     if not query and not has_attachments:
         logger.warning("Получено пустое сообщение без вложений")
@@ -141,9 +174,12 @@ def _normalize_chat_query(data: dict):
     if query and len(query) < 3 and not has_attachments:
         logger.warning(f"Слишком короткий запрос: {len(query)} символов")
         return None, (jsonify({"error": "Слишком короткий запрос. Минимальная длина: 3 символа"}), 400)
-    if len(query) > 1000:
+    if len(query) > max_chars:
         logger.warning(f"Слишком длинный запрос: {len(query)} символов")
-        return None, (jsonify({"error": "Слишком длинный запрос. Максимальная длина: 1000 символов"}), 400)
+        return None, (
+            jsonify({"error": f"Слишком длинный запрос. Максимальная длина: {max_chars} символов"}),
+            400,
+        )
 
     return {"query": query, "attachment_ids": attachment_ids}, None
 
@@ -154,6 +190,13 @@ def _chat_options(data: dict) -> dict:
 
 class ChatNotFoundError(Exception):
     """Запрошенный чат отсутствует."""
+
+
+def _trusted_telegram_user_id(data: dict):
+    """telegram_user_id из тела только для доверенного внутреннего запроса."""
+    if not is_trusted_internal_request():
+        return None
+    return data.get("telegram_user_id") if isinstance(data, dict) else None
 
 
 def _telegram_linked_user_id(chat_history, telegram_user_id) -> int | None:
@@ -169,12 +212,13 @@ def _telegram_linked_user_id(chat_history, telegram_user_id) -> int | None:
 
 
 def _can_access_chat_for_request(chat_history, chat_session, data: dict) -> bool:
-    """Проверка доступа: веб-сессия, гостевые cookie или Telegram-привязка."""
+    """Проверка доступа: веб-сессия, гостевые cookie или доверенная Telegram-привязка."""
     if can_access_chat(chat_session):
         return True
     if current_user_id():
         return False
-    linked_user_id = _telegram_linked_user_id(chat_history, data.get("telegram_user_id"))
+    tg_user_id = _trusted_telegram_user_id(data)
+    linked_user_id = _telegram_linked_user_id(chat_history, tg_user_id)
     return linked_user_id is not None and chat_session.user_id == linked_user_id
 
 
@@ -182,6 +226,8 @@ def _resolve_chat_session(data: dict, query: str, attachments: AttachmentBundle 
     chat_history = get_chat_history()
     raw_chat_id = data.get("chat_id")
     chat_id = _int_or_none(raw_chat_id)
+    tg_user_id = _trusted_telegram_user_id(data)
+
     if raw_chat_id not in (None, ""):
         if chat_id is None or chat_id <= 0:
             raise ValueError("Некорректный chat_id")
@@ -189,7 +235,7 @@ def _resolve_chat_session(data: dict, query: str, attachments: AttachmentBundle 
         if not chat_session:
             raise ChatNotFoundError("Чат не найден")
         if not _can_access_chat_for_request(chat_history, chat_session, data):
-            linked_user_id = _telegram_linked_user_id(chat_history, data.get("telegram_user_id"))
+            linked_user_id = _telegram_linked_user_id(chat_history, tg_user_id)
             if (
                 linked_user_id is not None
                 and not current_user_id()
@@ -204,8 +250,7 @@ def _resolve_chat_session(data: dict, query: str, attachments: AttachmentBundle 
             raise PermissionError("Нет доступа к чату")
         return chat_history, chat_id
 
-    # Telegram-идентификация (если передан telegram_user_id и нет web-сессии)
-    tg_user_id = data.get("telegram_user_id")
+    # Telegram-идентификация только для доверенного внутреннего запроса
     if tg_user_id is not None and not current_user_id():
         try:
             tg_user_id_int = int(tg_user_id)
@@ -232,11 +277,17 @@ def _conversation_history_for_rag(chat_history, chat_id: int, limit: int | None 
     """Последние сообщения текущего чата для понимания уточняющих вопросов."""
     if limit is None:
         limit = max(2, int(settings.RAG_QUERY_EXPANSION_MAX_MESSAGES))
-    return [
-        {"role": msg.role, "content": msg.content}
-        for msg in chat_history.get_recent_messages(chat_id, limit=limit)
-        if msg.role in {"user", "assistant"} and msg.content
-    ]
+    # Берём с запасом, чтобы после фильтра failed осталось достаточно контекста
+    recent = chat_history.get_recent_messages(chat_id, limit=limit * 2)
+    history: list[dict] = []
+    for msg in recent:
+        if msg.role not in {"user", "assistant"} or not msg.content:
+            continue
+        meta = msg.metadata if isinstance(msg.metadata, dict) else {}
+        if meta.get("failed"):
+            continue
+        history.append({"role": msg.role, "content": msg.content})
+    return history[-limit:]
 
 
 def _maybe_update_chat_title(chat_history, chat_id: int, query: str) -> None:
@@ -249,6 +300,25 @@ def _maybe_update_chat_title(chat_history, chat_id: int, query: str) -> None:
         title = title[:57].rstrip() + "..."
     if title:
         chat_history.update_session(chat_id, title=title)
+
+
+def _mark_user_message_failed(chat_history, message_id: int | None, code: str) -> None:
+    """Пометить user-сообщение как failed (контракт B: mark_message_failed)."""
+    if message_id is None:
+        return
+    marker = getattr(chat_history, "mark_message_failed", None)
+    if callable(marker):
+        try:
+            marker(message_id, code)
+            return
+        except Exception:
+            logger.warning("mark_message_failed не удался для message_id=%s", message_id)
+    updater = getattr(chat_history, "update_message_metadata", None)
+    if callable(updater):
+        try:
+            updater(message_id, {"failed": True, "error": code})
+        except Exception:
+            logger.warning("update_message_metadata не удался для message_id=%s", message_id)
 
 
 def _sse_event(payload: dict) -> str:
@@ -270,6 +340,85 @@ def _chat_error_payload(
     return payload
 
 
+def _mask_request_body(body: dict) -> dict:
+    """Скопировать dict тела запроса с маскировкой секретов."""
+    safe = {}
+    for key, value in body.items():
+        if str(key).lower() in _SENSITIVE_BODY_KEYS:
+            safe[key] = "***"
+        else:
+            safe[key] = value
+    return safe
+
+
+def _prepare_chat_request(data: dict):
+    """
+    Общая подготовка /api/chat и /api/chat/stream.
+
+    Returns:
+        (ctx, error_response) — ctx dict или None при ошибке.
+    """
+    normalized, error_response = _normalize_chat_query(data)
+    if error_response:
+        return None, error_response
+
+    query = normalized["query"]
+    attachment_ids = normalized["attachment_ids"]
+    options = _chat_options(data)
+
+    coll, rag = initialize_database()
+    if not coll or not rag:
+        logger.error("База данных или RAG система недоступна")
+        return None, (jsonify({"error": "База данных недоступна"}), 500)
+
+    if not inference_server_reachable():
+        logger.error("Сервер LLM недоступен по OLLAMA_URL (ожидается /api/tags или /v1/models)")
+        return None, (
+            jsonify({
+                "error": "Сервер LLM недоступен. Проверьте OLLAMA_URL и запуск Ollama или LM Studio.",
+            }),
+            500,
+        )
+
+    try:
+        attachment_bundle = _load_chat_attachment_bundle(attachment_ids)
+    except ChatAttachmentError as e:
+        return None, (jsonify({"error": str(e)}), 400)
+
+    try:
+        chat_history, chat_id = _resolve_chat_session(data, query, attachment_bundle)
+    except ValueError:
+        return None, (jsonify({"error": "Некорректный chat_id"}), 400)
+    except ChatNotFoundError:
+        return None, (jsonify({"error": "Чат не найден"}), 404)
+    except PermissionError:
+        return None, (jsonify({"error": "Нет доступа к чату"}), 403)
+
+    conversation_history = _conversation_history_for_rag(chat_history, chat_id)
+    user_metadata = {"answer_mode": options["answer_mode"]}
+    if attachment_bundle and attachment_bundle.items:
+        user_metadata["attachments"] = attachment_bundle.metadata_list()
+    user_message = chat_history.add_message(
+        session_id=chat_id,
+        role="user",
+        content=user_message_display_text(query, attachment_bundle),
+        metadata=user_metadata,
+    )
+
+    return {
+        "query": query,
+        "attachment_ids": attachment_ids,
+        "options": options,
+        "coll": coll,
+        "rag": rag,
+        "attachment_bundle": attachment_bundle,
+        "chat_history": chat_history,
+        "chat_id": chat_id,
+        "conversation_history": conversation_history,
+        "user_message_id": user_message.id,
+    }, None
+
+
 app = Flask(__name__)
 app.secret_key = settings.SECRET_KEY
 app.config.update(
@@ -277,12 +426,17 @@ app.config.update(
     SESSION_COOKIE_SAMESITE="Lax",
     MAX_CONTENT_LENGTH=settings.MAX_FILE_SIZE,
 )
-_cors = settings.CORS_ORIGINS.strip()
-if _cors in ("*", ""):
-    CORS(app)
-else:
+
+if getattr(settings, "TRUST_PROXY", False):
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
+
+_cors = (settings.CORS_ORIGINS or "").strip()
+if _cors == "*":
+    CORS(app, supports_credentials=False)
+elif _cors:
     _origin_list = [o.strip() for o in _cors.split(",") if o.strip()]
-    CORS(app, origins=_origin_list or ["http://127.0.0.1:5000", "http://localhost:5000"])
+    if _origin_list:
+        CORS(app, origins=_origin_list, supports_credentials=False)
 
 app.register_blueprint(chat_bp)
 app.register_blueprint(documents_bp)
@@ -292,57 +446,9 @@ app.register_blueprint(chat_attachments_bp)
 app.register_blueprint(issues_bp)
 app.register_blueprint(telegram_bp)
 
-if not settings.FLASK_DEBUG:
-    settings.validate()
+# K2: хук сброса RAG после переиндексации (поток A регистрирует set_reindex_callback)
+# Глобальные переменные объявлены ниже; reset_rag_state регистрируется после определения.
 
-
-# ============================================
-# Декораторы для логирования
-# ============================================
-
-def log_api_request(f):
-    """Декоратор для логирования API запросов и ответов"""
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        start_time = time.time()
-        
-        # Логируем запрос
-        logger.info(f"API запрос: {request.method} {request.path}")
-        logger.debug(f"IP клиента: {request.remote_addr}")
-        logger.debug(f"User-Agent: {request.user_agent}")
-        
-        # Логируем тело запроса (без чувствительных данных)
-        if request.is_json and request.data:
-            try:
-                data = request.get_json()
-                # Удаляем чувствительные данные
-                safe_data = {k: v for k, v in data.items()
-                           if k not in ['password', 'password_hash', 'token', 'secret']}
-                logger.debug(f"Тело запроса: {safe_data}")
-            except (ValueError, TypeError, json.JSONDecodeError):
-                pass
-        
-        try:
-            # Выполняем функцию
-            response = f(*args, **kwargs)
-            
-            # Вычисляем время выполнения
-            duration = time.time() - start_time
-            
-            # Логируем ответ
-            if hasattr(response, 'status_code'):
-                logger.info(f"API ответ: {request.path} - Статус: {response.status_code} - Время: {duration:.3f}с")
-            else:
-                logger.info(f"API ответ: {request.path} - Время: {duration:.3f}с")
-            
-            return response
-        except Exception as e:
-            # Логируем ошибку
-            duration = time.time() - start_time
-            logger.error(f"API ошибка: {request.path} - {str(e)} - Время: {duration:.3f}с")
-            raise
-    
-    return decorated_function
 
 # Глобальные переменные для подключения к базе данных
 collection = None
@@ -351,23 +457,37 @@ db_initialized = False
 init_lock = threading.Lock()
 
 
+def reset_rag_state() -> None:
+    """Сбросить долгоживущее состояние RAG после успешной переиндексации."""
+    global collection, rag_system, db_initialized
+    with init_lock:
+        collection = None
+        rag_system = None
+        db_initialized = False
+        try:
+            from core.retrieval import invalidate_bm25_cache
+            invalidate_bm25_cache()
+        except Exception:
+            logger.warning("Не удалось инвалидировать BM25-кэш при сбросе RAG")
+
+
 def initialize_database():
     """Инициализация подключения к ChromaDB и RAG системы"""
     global collection, rag_system, db_initialized
-    
+
     with init_lock:
         if db_initialized:
             return collection, rag_system
-        
+
         try:
             client = chromadb.PersistentClient(path=settings.CHROMA_PERSIST_DIR)
-            
+
             collection = client.get_collection(name=settings.CHROMA_COLLECTION_NAME)
             count = collection.count()
-            
+
             # Инициализируем RAG систему
             rag_system = RAGSystem(settings.CHROMA_COLLECTION_NAME)
-            
+
             db_initialized = True
             logger.info(f"Загружена векторная база данных: {count} документов")
             logger.info("RAG система инициализирована")
@@ -377,8 +497,21 @@ def initialize_database():
             return None, None
 
 
+try:
+    from api.routes import documents as documents_module
+    set_cb = getattr(documents_module, "set_reindex_callback", None)
+    if callable(set_cb):
+        set_cb(reset_rag_state)
+except Exception:
+    logger.debug("set_reindex_callback недоступен — хук переиндексации не зарегистрирован")
+
+if not settings.FLASK_DEBUG:
+    settings.validate()
+    # После возможной генерации SECRET_KEY обновить Flask
+    app.secret_key = settings.SECRET_KEY
+
+
 @app.route('/')
-@log_api_request
 def index():
     """Главная страница"""
     defaults = rag_chat_defaults()
@@ -390,7 +523,6 @@ def index():
 
 
 @app.route('/telegram-app')
-@log_api_request
 def telegram_mini_app():
     """Мобильный интерфейс БочкарИИ, запускаемый внутри Telegram."""
     return render_template(
@@ -400,81 +532,58 @@ def telegram_mini_app():
 
 
 @app.route('/api/rag/defaults', methods=['GET'])
-@log_api_request
 def rag_defaults():
     """Публичные дефолты RAG для панели чата (синхронизация с runtime-настройками)."""
     return jsonify(rag_chat_defaults())
 
 
 @app.route('/api/health', methods=['GET'])
-@log_api_request
 def health_check():
     """Проверка здоровья системы"""
     ollama_status = inference_server_reachable()
     logger.debug(f"Сервер инференса (Ollama/LM Studio) доступен: {ollama_status}")
-    
+
     coll, rag = initialize_database()
     db_status = coll is not None
     rag_status = rag is not None
     logger.debug(f"База данных статус: {db_status}, RAG статус: {rag_status}")
-    
+
+    if ollama_status and db_status and rag_status:
+        status = "ok"
+    elif db_status:
+        status = "degraded"
+    else:
+        status = "error"
+
     return jsonify({
         "ollama": ollama_status,
         "database": db_status,
         "rag": rag_status,
-        "status": "ok" if ollama_status and db_status else "error"
+        "status": status,
     })
 
 
 @app.route('/api/chat', methods=['POST'])
-@log_api_request
 def chat():
     """Обработка запроса чата с использованием RAG системы"""
     data = _get_json_body()
-
-    normalized, error_response = _normalize_chat_query(data)
+    ctx, error_response = _prepare_chat_request(data)
     if error_response:
         return error_response
-    query = normalized["query"]
-    attachment_ids = normalized["attachment_ids"]
-    options = _chat_options(data)
-    logger.info(f"Запрос чата: '{query[:100]}...' (вложений: {len(attachment_ids)})")
-    
-    # Инициализируем базу данных и RAG систему
-    coll, rag = initialize_database()
-    if not coll or not rag:
-        logger.error("База данных или RAG система недоступна")
-        return jsonify({"error": "База данных недоступна"}), 500
-    
-    if not inference_server_reachable():
-        logger.error("Сервер LLM недоступен по OLLAMA_URL (ожидается /api/tags или /v1/models)")
-        return jsonify({"error": "Сервер LLM недоступен. Проверьте OLLAMA_URL и запуск Ollama или LM Studio."}), 500
-    
-    # Полная RAG-цепочка одним вызовом (порог и top_k — из settings.RAG_MIN_SCORE / RAG_TOP_K)
+
+    query = ctx["query"]
+    options = ctx["options"]
+    rag = ctx["rag"]
+    attachment_bundle = ctx["attachment_bundle"]
+    chat_history = ctx["chat_history"]
+    chat_id = ctx["chat_id"]
+    conversation_history = ctx["conversation_history"]
+    user_message_id = ctx["user_message_id"]
+
+    logger.info(f"Запрос чата: '{query[:100]}...' (вложений: {len(ctx['attachment_ids'])})")
     logger.info(f"Выполнение RAG запроса: '{query}'")
+
     try:
-        try:
-            attachment_bundle = _load_chat_attachment_bundle(attachment_ids)
-        except ChatAttachmentError as e:
-            return jsonify({"error": str(e)}), 400
-        try:
-            chat_history, chat_id = _resolve_chat_session(data, query, attachment_bundle)
-        except ValueError:
-            return jsonify({"error": "Некорректный chat_id"}), 400
-        except ChatNotFoundError:
-            return jsonify({"error": "Чат не найден"}), 404
-        except PermissionError:
-            return jsonify({"error": "Нет доступа к чату"}), 403
-        conversation_history = _conversation_history_for_rag(chat_history, chat_id)
-        user_metadata = {"answer_mode": options["answer_mode"]}
-        if attachment_bundle and attachment_bundle.items:
-            user_metadata["attachments"] = attachment_bundle.metadata_list()
-        chat_history.add_message(
-            session_id=chat_id,
-            role="user",
-            content=user_message_display_text(query, attachment_bundle),
-            metadata=user_metadata,
-        )
         started = time.time()
         try:
             rag_result = rag.query(
@@ -488,18 +597,21 @@ def chat():
             )
         except ChatCompletionError as e:
             logger.error("Ошибка генерации LLM для чата %s: %s", chat_id, e)
+            _mark_user_message_failed(chat_history, user_message_id, e.code)
             return jsonify(_chat_error_payload(e.code, e.message, chat_id=chat_id)), 500
         latency_ms = int((time.time() - started) * 1000)
         logger.info(f"Сгенерирован ответ длиной {len(rag_result.answer)} символов")
         logger.info(f"Извлечено {len(rag_result.citations)} цитат")
     except Exception:
         logger.error("Ошибка при выполнении RAG запроса:\n%s", traceback.format_exc())
+        _mark_user_message_failed(chat_history, user_message_id, "internal_error")
         return jsonify({"error": "Ошибка при обработке запроса. Подробности в журнале сервера."}), 500
 
     if rag_result.retrieve_error == "embedding_unavailable":
         logger.error(
             "Эмбеддинг запроса не получен — в Chroma есть векторы, но поиск без эмбеддинга вопроса невозможен"
         )
+        _mark_user_message_failed(chat_history, user_message_id, "embedding_unavailable")
         return jsonify(_chat_error_payload(
             "embedding_unavailable",
             rag_result.answer,
@@ -509,6 +621,7 @@ def chat():
 
     if rag_result.retrieve_error == "search_error":
         logger.error("Ошибка Chroma при поиске")
+        _mark_user_message_failed(chat_history, user_message_id, "search_error")
         return jsonify(_chat_error_payload(
             "search_error",
             "Ошибка поиска в векторной базе",
@@ -544,53 +657,27 @@ def chat():
 
 
 @app.route('/api/chat/stream', methods=['POST'])
-@log_api_request
 def chat_stream():
     """RAG-чат с потоковой передачей текста (SSE). Итоговые sources/citations — в событии type=done."""
     data = _get_json_body()
-
-    normalized, error_response = _normalize_chat_query(data)
+    ctx, error_response = _prepare_chat_request(data)
     if error_response:
         return error_response
-    query = normalized["query"]
-    attachment_ids = normalized["attachment_ids"]
-    options = _chat_options(data)
 
-    coll, rag = initialize_database()
-    if not coll or not rag:
-        return jsonify({"error": "База данных недоступна"}), 500
-
-    if not inference_server_reachable():
-        return jsonify({
-            "error": "Сервер LLM недоступен. Проверьте OLLAMA_URL и запуск Ollama или LM Studio.",
-        }), 500
-
-    try:
-        attachment_bundle = _load_chat_attachment_bundle(attachment_ids)
-    except ChatAttachmentError as e:
-        return jsonify({"error": str(e)}), 400
-    try:
-        chat_history, chat_id = _resolve_chat_session(data, query, attachment_bundle)
-    except ValueError:
-        return jsonify({"error": "Некорректный chat_id"}), 400
-    except ChatNotFoundError:
-        return jsonify({"error": "Чат не найден"}), 404
-    except PermissionError:
-        return jsonify({"error": "Нет доступа к чату"}), 403
-    conversation_history = _conversation_history_for_rag(chat_history, chat_id)
-    user_metadata = {"answer_mode": options["answer_mode"]}
-    if attachment_bundle and attachment_bundle.items:
-        user_metadata["attachments"] = attachment_bundle.metadata_list()
-    chat_history.add_message(
-        session_id=chat_id,
-        role="user",
-        content=user_message_display_text(query, attachment_bundle),
-        metadata=user_metadata,
-    )
+    query = ctx["query"]
+    options = ctx["options"]
+    rag = ctx["rag"]
+    attachment_bundle = ctx["attachment_bundle"]
+    chat_history = ctx["chat_history"]
+    chat_id = ctx["chat_id"]
+    conversation_history = ctx["conversation_history"]
+    user_message_id = ctx["user_message_id"]
     has_attachments = bool(attachment_bundle and attachment_bundle.items)
+
     try:
         attachment_enrichment = enrich_query_from_attachments(query, attachment_bundle)
     except ChatCompletionError as e:
+        _mark_user_message_failed(chat_history, user_message_id, e.code)
         return jsonify(_chat_error_payload(e.code, e.message, chat_id=chat_id)), 500
     search_query = attachment_enrichment.get("search_query") or query
 
@@ -601,7 +688,7 @@ def chat_stream():
     }
 
     def generate():
-        # Комментарий SSE: первый байты уходят клиенту до первого токена LLM (лучше для прокси/буферов).
+        # Комментарий SSE: первые байты уходят клиенту до первого токена LLM (лучше для прокси/буферов).
         yield ": stream-open\n\n"
         started = time.time()
         try:
@@ -642,6 +729,7 @@ def chat_stream():
             retrieval_query = expansion.get("rewritten") or search_query
 
             if retrieve_error == "embedding_unavailable":
+                _mark_user_message_failed(chat_history, user_message_id, "embedding_unavailable")
                 yield _sse_event({
                     "type": "error",
                     **_chat_error_payload(
@@ -662,6 +750,7 @@ def chat_stream():
                 return
 
             if retrieve_error == "search_error":
+                _mark_user_message_failed(chat_history, user_message_id, "search_error")
                 yield _sse_event({
                     "type": "error",
                     **_chat_error_payload(
@@ -718,7 +807,6 @@ def chat_stream():
                         return
                     payload = _rag_result_to_api_dict(rag_result)
                     diag = dict(payload.get("diagnostics") or {})
-                    # retrieve_diag уже содержит deep-диагностику при включенном DEEP_RETRIEVAL_ENABLED
                     diag["retrieval"] = retrieve_diag
                     diag["expansion"] = {
                         "rewritten": expansion.get("rewritten"),
@@ -759,12 +847,14 @@ def chat_stream():
                     })
         except ChatCompletionError as e:
             logger.error("Ошибка генерации LLM в потоке для чата %s: %s", chat_id, e)
+            _mark_user_message_failed(chat_history, user_message_id, e.code)
             yield _sse_event({
                 "type": "error",
                 **_chat_error_payload(e.code, e.message, chat_id=chat_id),
             })
         except Exception:
             logger.error("Ошибка в потоке /api/chat/stream:\n%s", traceback.format_exc())
+            _mark_user_message_failed(chat_history, user_message_id, "internal_error")
             yield _sse_event({
                 "type": "error",
                 "message": "Ошибка при обработке запроса. Подробности в журнале сервера.",
@@ -774,12 +864,17 @@ def chat_stream():
 
 
 @app.route('/api/mermaid/fix', methods=['POST'])
-@log_api_request
 def mermaid_fix():
     """Починить синтаксис одного блока Mermaid (fallback после ошибки рендера в браузере)."""
     data = _get_json_body()
-    code = (data.get("code") or "").strip()
-    parse_error = (data.get("parse_error") or "").strip()
+    code, err = _require_string_field(data, "code")
+    if err:
+        return err
+    parse_error, err = _require_string_field(data, "parse_error", allow_empty=True)
+    if err:
+        return err
+    code = (code or "").strip()
+    parse_error = (parse_error or "").strip()
     if not code:
         return jsonify({"error": "Не указан code"}), 400
     if len(code) > 12000:
@@ -802,11 +897,13 @@ def mermaid_fix():
 
 
 @app.route('/api/chat/verify', methods=['POST'])
-@log_api_request
 def verify_chat_answer():
     """Проверить ответ ассистента по сохраненным цитатам."""
     data = _get_json_body()
-    answer = (data.get("answer") or "").strip()
+    answer, err = _require_string_field(data, "answer")
+    if err:
+        return err
+    answer = (answer or "").strip()
     citations = data.get("citations") or []
     sources = data.get("sources") or []
 
@@ -834,11 +931,13 @@ def verify_chat_answer():
 
 
 @app.route('/api/chat/suggestions', methods=['POST'])
-@log_api_request
 def suggest_chat_questions():
     """Сгенерировать уточняющие вопросы к готовому ответу."""
     data = _get_json_body()
-    answer = (data.get("answer") or "").strip()
+    answer, err = _require_string_field(data, "answer", allow_empty=True)
+    if err:
+        return err
+    answer = (answer or "").strip()
     citations = data.get("citations") or []
     sources = data.get("sources") or []
 
@@ -878,8 +977,7 @@ def get_models():
 
 @app.before_request
 def log_request_info():
-    """Логирование входящих запросов"""
-    # Пропускаем логирование статических файлов
+    """Логирование входящих запросов и опциональная проверка API key."""
     if request.path.startswith('/static'):
         return
     internal_telegram_path = request.path in {
@@ -901,38 +999,51 @@ def log_request_info():
                 return jsonify({"error": "Требуется админ-доступ"}), 401
         elif api_key != settings.API_KEY and admin_key != settings.ADMIN_API_KEY:
             return jsonify({"error": "Требуется API key"}), 401
-    
+
     logger.info(
         f"Request: {request.method} {request.path} | "
         f"IP: {request.remote_addr} | "
         f"User-Agent: {request.user_agent}"
     )
-    # Логируем тело запроса для POST/PUT
+
+    # Не логируем тела /api/auth/* и /api/telegram/*
+    if request.path.startswith('/api/auth') or request.path.startswith('/api/telegram'):
+        return
     if request.method in ['POST', 'PUT'] and request.is_json:
         try:
-            body = request.get_json()
-            # Логируем только первые 200 символов для безопасности
-            body_str = str(body)[:200]
-            logger.debug(f"Request body: {body_str}...")
+            body = request.get_json(silent=True)
+            if isinstance(body, dict):
+                safe = _mask_request_body(body)
+                body_str = str(safe)[:200]
+                logger.debug("Request body: %s...", body_str)
         except Exception:
             pass
 
 
 @app.after_request
-def log_response_info(response):
-    """Логирование исходящих ответов"""
-    # Пропускаем логирование статических файлов
+def after_request_hooks(response):
+    """Логирование ответа и заголовки безопасности."""
     if request.path.startswith('/static'):
         return response
-    
+
     logger.info(
         f"Response: {response.status_code} | "
         f"Path: {request.path}"
     )
+
+    if getattr(settings, "SECURITY_HEADERS_ENABLED", True):
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("Referrer-Policy", "same-origin")
+        # Telegram Mini App открывается во встроенном WebView — без X-Frame-Options
+        if request.path != "/telegram-app":
+            response.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
+        response.headers.setdefault("Content-Security-Policy", _CSP_POLICY)
+
     return response
 
 
 if __name__ == '__main__':
+    settings.ensure_directories()
     # Инициализируем базу данных при запуске
     logger.info("Запуск Flask приложения")
     logger.info(f"OLLAMA_URL: {settings.OLLAMA_URL}")
@@ -945,6 +1056,6 @@ if __name__ == '__main__':
     logger.info(f"Модель эмбеддингов: {settings.OLLAMA_EMBEDDING_MODEL}")
     logger.info(f"Модель чата: {settings.OLLAMA_CHAT_MODEL}")
     logger.info(f"Хост: {settings.API_HOST}, Порт: {settings.API_PORT}")
-    
+
     initialize_database()
     app.run(host=settings.API_HOST, port=settings.API_PORT, debug=settings.FLASK_DEBUG)

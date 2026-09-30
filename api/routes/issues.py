@@ -6,6 +6,8 @@ from __future__ import annotations
 
 import hashlib
 import re
+import threading
+import time
 from typing import Any
 
 from flask import Blueprint, jsonify, request
@@ -39,6 +41,9 @@ _ISSUE_TYPES = {
 }
 
 _rate_limiter = IssueRateLimiter(settings.GITHUB_ISSUES_RATE_LIMIT_PER_HOUR)
+_STATUS_CACHE_TTL_SECONDS = 300.0
+_status_probe_cache: dict[str, Any] = {"ts": 0.0, "data": None}
+_status_probe_lock = threading.Lock()
 
 
 def _clip_text(value: str | None, limit: int) -> str:
@@ -57,6 +62,40 @@ def _issue_title(issue_type: str, title: str) -> str:
     prefix = _ISSUE_TYPES.get(issue_type, "Report")
     clean_title = _clip_text(title, 180)
     return _clip_text(f"[{prefix}] {clean_title}", 200)
+
+
+def _client_ip() -> str:
+    """IP клиента; X-Forwarded-For учитывается только при TRUST_PROXY."""
+    if getattr(settings, "TRUST_PROXY", False):
+        forwarded = (request.headers.get("X-Forwarded-For") or "").strip()
+        if forwarded:
+            first = forwarded.split(",")[0].strip()
+            if first:
+                return first
+    return (request.remote_addr or "unknown").strip() or "unknown"
+
+
+def _cached_write_access(token: str, repo: str) -> dict[str, Any]:
+    """Кэшировать probe_github_issue_write_access на 5 минут; наружу без деталей ошибки."""
+    now = time.time()
+    with _status_probe_lock:
+        cached = _status_probe_cache.get("data")
+        cached_ts = float(_status_probe_cache.get("ts") or 0.0)
+        if cached is not None and (now - cached_ts) < _STATUS_CACHE_TTL_SECONDS:
+            return dict(cached)
+
+    raw = probe_github_issue_write_access(token, repo)
+    hint = raw.get("hint")
+    if hint:
+        logger.warning("GitHub Issues write probe: %s", hint)
+    sanitized = {
+        "writable": raw.get("writable"),
+        "hint": None if raw.get("writable") else "Нет доступа на запись в репозиторий",
+    }
+    with _status_probe_lock:
+        _status_probe_cache["ts"] = now
+        _status_probe_cache["data"] = dict(sanitized)
+    return sanitized
 
 
 def _find_message_context(session_id: int | None, message_id: int | None) -> dict[str, Any] | None:
@@ -129,7 +168,7 @@ def _build_issue_body(
     if contact:
         lines.extend(["## Контакт", contact, ""])
 
-    ip_hash = hashlib.sha256((request.remote_addr or "unknown").encode("utf-8")).hexdigest()[:12]
+    ip_hash = hashlib.sha256(_client_ip().encode("utf-8")).hexdigest()[:12]
     meta = [
         "---",
         f"_Reported via БочкарИИ · role `{role}`",
@@ -151,10 +190,7 @@ def issue_status():
     stub = settings.GITHUB_ISSUES_ENABLED and not configured
     write_access = {"writable": None, "hint": None}
     if configured and not stub:
-        write_access = probe_github_issue_write_access(
-            settings.GITHUB_TOKEN,
-            settings.GITHUB_REPO,
-        )
+        write_access = _cached_write_access(settings.GITHUB_TOKEN, settings.GITHUB_REPO)
     return jsonify({
         "enabled": settings.GITHUB_ISSUES_ENABLED,
         "configured": configured,
@@ -206,8 +242,8 @@ def create_issue():
         if not can_access_chat(session):
             return jsonify({"error": "Нет доступа к указанному чату"}), 403
 
-    guest_id = ensure_guest_id()
-    rate_key = f"{request.remote_addr or 'unknown'}:{guest_id}"
+    ensure_guest_id()
+    rate_key = _client_ip()
     if not _rate_limiter.allow(rate_key):
         return jsonify({"error": "Слишком много обращений. Попробуйте позже."}), 429
 
@@ -217,7 +253,7 @@ def create_issue():
         issue_type=issue_type,
         description=description,
         contact=contact,
-        guest_id=guest_id,
+        guest_id=ensure_guest_id(),
         role=current_role(),
         username=user.username if user else None,
         user_agent=str(request.user_agent or ""),
@@ -234,7 +270,7 @@ def create_issue():
         )
     except GitHubIssuesError as exc:
         logger.error("Ошибка GitHub Issues: %s", exc)
-        return jsonify({"error": str(exc)}), 502
+        return jsonify({"error": "Не удалось создать issue. Попробуйте позже."}), 502
 
     payload = result.to_dict()
     payload["message"] = (

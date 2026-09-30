@@ -17,6 +17,7 @@ from api.middleware.auth import (
     forget_guest_chat,
     get_current_user,
     get_guest_chat_ids,
+    is_admin,
     remember_guest_chat,
 )
 
@@ -26,6 +27,7 @@ logger = get_logger(__name__)
 chat_bp = Blueprint('chat', __name__, url_prefix='/api/chats')
 CHAT_LIST_DEFAULT_LIMIT = 50
 CHAT_LIST_MAX_LIMIT = 100
+FEEDBACK_LIST_MAX_LIMIT = 500
 
 
 def _bounded_int_arg(name: str, default: int, minimum: int, maximum: int) -> int:
@@ -37,6 +39,27 @@ def _bounded_int_arg(name: str, default: int, minimum: int, maximum: int) -> int
     return max(minimum, min(maximum, value))
 
 
+def _message_belongs_to_session(chat_history, message_id: int, session_id: int) -> bool:
+    """Проверка принадлежности сообщения сессии (контракт B9 + fallback)."""
+    checker = getattr(chat_history, "message_belongs_to_session", None)
+    if callable(checker):
+        try:
+            return bool(checker(message_id, session_id))
+        except Exception:
+            pass
+    for msg in chat_history.get_messages(session_id):
+        if msg.id == message_id:
+            return True
+    return False
+
+
+def _get_message_role(chat_history, message_id: int, session_id: int) -> Optional[str]:
+    for msg in chat_history.get_messages(session_id):
+        if msg.id == message_id:
+            return msg.role
+    return None
+
+
 @chat_bp.route('', methods=['GET'])
 def get_chats():
     """Получить список всех чатов"""
@@ -44,15 +67,30 @@ def get_chats():
         limit = _bounded_int_arg('limit', CHAT_LIST_DEFAULT_LIMIT, 1, CHAT_LIST_MAX_LIMIT)
         offset = _bounded_int_arg('offset', 0, 0, 1_000_000)
         search = (request.args.get('q') or '').strip()
-        
+
         chat_history = get_chat_history()
         user = get_current_user()
         if user:
             if search:
-                sessions = chat_history.search_sessions(search, limit=limit, user_id=user.id)
+                import inspect
+                try:
+                    has_offset = "offset" in inspect.signature(chat_history.search_sessions).parameters
+                except (TypeError, ValueError):
+                    has_offset = False
+                # Полный список найденных для total; offset — через параметр B или локально
+                if has_offset:
+                    all_found = chat_history.search_sessions(
+                        search, limit=10_000, offset=0, user_id=user.id
+                    )
+                else:
+                    all_found = chat_history.search_sessions(
+                        search, limit=10_000, user_id=user.id
+                    )
+                total = len(all_found)
+                sessions = all_found[offset:offset + limit]
             else:
                 sessions = chat_history.get_sessions(user_id=user.id, limit=limit, offset=offset)
-            total = chat_history.get_session_count(user_id=user.id)
+                total = chat_history.get_session_count(user_id=user.id)
         else:
             guest_ids = get_guest_chat_ids()
             sessions = [
@@ -65,9 +103,9 @@ def get_chats():
             sessions.sort(key=lambda item: item.updated_at, reverse=True)
             total = len(sessions)
             sessions = sessions[offset:offset + limit]
-        
+
         logger.info(f"Получен список чатов: {len(sessions)} сессий")
-        
+
         return jsonify({
             'chats': [session.to_dict() for session in sessions],
             'total': total
@@ -83,17 +121,17 @@ def get_chat(chat_id: int):
     try:
         chat_history = get_chat_history()
         session = chat_history.get_session(chat_id)
-        
+
         if not session:
             logger.warning(f"Чат {chat_id} не найден")
             return jsonify({'error': 'Чат не найден'}), 404
         if not can_access_chat(session):
             return jsonify({'error': 'Нет доступа к чату'}), 403
-        
+
         messages = chat_history.get_messages(chat_id)
-        
+
         logger.info(f"Получен чат {chat_id}: {len(messages)} сообщений")
-        
+
         return jsonify({
             'chat': session.to_dict(),
             'messages': [msg.to_dict() for msg in messages]
@@ -108,15 +146,15 @@ def create_chat():
     """Создать новый чат"""
     try:
         data = request.get_json(silent=True) or {}
-        
+
         title = data.get('title', 'Новый чат')
         chat_history = get_chat_history()
         session = chat_history.create_session(user_id=current_user_id(), title=title)
         if session.user_id is None:
             remember_guest_chat(session.id)
-        
+
         logger.info(f"Создан новый чат: {session.id}")
-        
+
         return jsonify(session.to_dict()), 201
     except Exception as e:
         logger.error(f"Ошибка при создании чата: {e}")
@@ -153,10 +191,10 @@ def update_chat(chat_id: int):
     try:
         data = request.get_json(silent=True) or {}
         title = data.get('title')
-        
+
         if not title:
             return jsonify({'error': 'Не указан заголовок чата'}), 400
-        
+
         chat_history = get_chat_history()
         session = chat_history.get_session(chat_id)
         if not session:
@@ -165,13 +203,13 @@ def update_chat(chat_id: int):
         if not can_access_chat(session):
             return jsonify({'error': 'Нет доступа к чату'}), 403
         updated = chat_history.update_session(chat_id, title=title)
-        
+
         if not updated:
             logger.warning(f"Чат {chat_id} не найден для обновления")
             return jsonify({'error': 'Чат не найден'}), 404
-        
+
         logger.info(f"Обновлён чат {chat_id}")
-        
+
         return jsonify({'success': True})
     except Exception as e:
         logger.error(f"Ошибка при обновлении чата {chat_id}: {e}")
@@ -191,13 +229,13 @@ def delete_chat(chat_id: int):
             return jsonify({'error': 'Нет доступа к чату'}), 403
         deleted = chat_history.delete_session(chat_id)
         forget_guest_chat(chat_id)
-        
+
         if not deleted:
             logger.warning(f"Чат {chat_id} не найден для удаления")
             return jsonify({'error': 'Чат не найден'}), 404
-        
+
         logger.info(f"Удалён чат {chat_id}")
-        
+
         return jsonify({'success': True})
     except Exception as e:
         logger.error(f"Ошибка при удалении чата {chat_id}: {e}")
@@ -209,21 +247,25 @@ def add_message(chat_id: int):
     """Добавить сообщение в чат"""
     try:
         data = request.get_json(silent=True) or {}
-        
+
         role = data.get('role', 'user')
         content = data.get('content', '')
         sources = data.get('sources', [])
         citations = data.get('citations', [])
         metadata = data.get('metadata', {})
-        
+
         if not content:
             return jsonify({'error': 'Не указано содержание сообщения'}), 400
-        
+
         if role not in ['user', 'assistant']:
             return jsonify({'error': 'Неверная роль сообщения'}), 400
-        
+
+        # Клиент не должен подделывать ответы ассистента
+        if role == 'assistant' and not is_admin():
+            return jsonify({'error': 'Роль assistant доступна только администратору'}), 403
+
         chat_history = get_chat_history()
-        
+
         # Проверяем существование чата
         session = chat_history.get_session(chat_id)
         if not session:
@@ -231,7 +273,7 @@ def add_message(chat_id: int):
             return jsonify({'error': 'Чат не найден'}), 404
         if not can_access_chat(session):
             return jsonify({'error': 'Нет доступа к чату'}), 403
-        
+
         message = chat_history.add_message(
             session_id=chat_id,
             role=role,
@@ -240,9 +282,9 @@ def add_message(chat_id: int):
             citations=citations,
             metadata=metadata
         )
-        
+
         logger.info(f"Добавлено сообщение в чат {chat_id}")
-        
+
         return jsonify(message.to_dict()), 201
     except Exception as e:
         logger.error(f"Ошибка при добавлении сообщения в чат {chat_id}: {e}")
@@ -254,7 +296,7 @@ def get_messages(chat_id: int):
     """Получить все сообщения чата"""
     try:
         chat_history = get_chat_history()
-        
+
         # Проверяем существование чата
         session = chat_history.get_session(chat_id)
         if not session:
@@ -262,11 +304,11 @@ def get_messages(chat_id: int):
             return jsonify({'error': 'Чат не найден'}), 404
         if not can_access_chat(session):
             return jsonify({'error': 'Нет доступа к чату'}), 403
-        
+
         messages = chat_history.get_messages(chat_id)
-        
+
         logger.info(f"Получены сообщения чата {chat_id}: {len(messages)} сообщений")
-        
+
         return jsonify({
             'messages': [msg.to_dict() for msg in messages]
         })
@@ -280,7 +322,7 @@ def get_messages(chat_id: int):
 def get_feedback():
     """Получить последние оценки ответов"""
     try:
-        limit = request.args.get('limit', 50, type=int)
+        limit = _bounded_int_arg('limit', 50, 1, FEEDBACK_LIST_MAX_LIMIT)
         chat_history = get_chat_history()
         return jsonify({'feedback': chat_history.get_feedback(limit=limit)})
     except Exception as e:
@@ -299,13 +341,39 @@ def add_feedback():
 
         chat_history = get_chat_history()
         session_id = data.get('session_id')
+        message_id = data.get('message_id')
+
+        if not is_admin():
+            if session_id is None:
+                return jsonify({'error': 'Требуется session_id'}), 400
+
         if session_id is not None:
+            try:
+                session_id = int(session_id)
+            except (TypeError, ValueError):
+                return jsonify({'error': 'Некорректный session_id'}), 400
             session = chat_history.get_session(session_id)
+            if not session:
+                return jsonify({'error': 'Чат не найден'}), 404
             if not can_access_chat(session):
                 return jsonify({'error': 'Нет доступа к чату'}), 403
+
+        if message_id is not None:
+            try:
+                message_id = int(message_id)
+            except (TypeError, ValueError):
+                return jsonify({'error': 'Некорректный message_id'}), 400
+            if session_id is None:
+                return jsonify({'error': 'Для message_id требуется session_id'}), 400
+            if not _message_belongs_to_session(chat_history, message_id, session_id):
+                return jsonify({'error': 'Сообщение не принадлежит указанному чату'}), 403
+            role = _get_message_role(chat_history, message_id, session_id)
+            if role != 'assistant':
+                return jsonify({'error': 'Оценка допускается только для сообщений ассистента'}), 400
+
         feedback = chat_history.add_feedback(
             session_id=session_id,
-            message_id=data.get('message_id'),
+            message_id=message_id,
             rating=rating,
             comment=data.get('comment'),
         )

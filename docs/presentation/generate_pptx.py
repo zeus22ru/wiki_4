@@ -774,7 +774,6 @@ def build():
     _add_architecture_slide(prs)
 
     def add_demo_slide(eyebrow: str, title: str, image_name: str, bullets: list[str]):
-        nonlocal prs
         slide = _blank_slide(prs)
         _section_header(slide, eyebrow, title)
         img_path = IMAGES / image_name

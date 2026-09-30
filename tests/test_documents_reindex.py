@@ -1,9 +1,6 @@
 # -*- coding: utf-8 -*-
 """Регрессии для фоновой переиндексации документов."""
 
-import sys
-import threading
-from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -61,18 +58,13 @@ def test_reindex_rejects_parallel_job(client, monkeypatch):
     assert body["active_job"]["id"] == first.get_json()["job"]["id"]
 
 
-def test_run_reindex_resets_long_lived_rag_state(monkeypatch):
+def test_run_reindex_invokes_callback_on_success(monkeypatch):
+    """A6/K2: после успешного job вызывается зарегистрированный callback."""
     from api.routes import documents
     import create_vector_db
 
-    rag = SimpleNamespace(_bm25_bundle=("old", []))
-    fake_web_app = SimpleNamespace(
-        init_lock=threading.Lock(),
-        collection=object(),
-        rag_system=rag,
-        db_initialized=True,
-    )
-    monkeypatch.setitem(sys.modules, "web_app", fake_web_app)
+    calls: list[str] = []
+    documents.set_reindex_callback(lambda: calls.append("ok"))
     monkeypatch.setattr(
         create_vector_db,
         "reindex_vector_db",
@@ -80,16 +72,40 @@ def test_run_reindex_resets_long_lived_rag_state(monkeypatch):
     )
 
     documents._set_job("job-1", id="job-1", status="pending", started_at="2026-06-02T00:00:00")
-    documents._run_reindex("job-1")
+    try:
+        documents._run_reindex("job-1")
+    finally:
+        documents.set_reindex_callback(None)
 
     with documents._jobs_lock:
         job = documents._jobs["job-1"]
     assert job["status"] == "done"
-    assert fake_web_app.collection is None
-    assert fake_web_app.rag_system is None
-    assert fake_web_app.db_initialized is False
-    assert rag._bm25_bundle is None
+    assert calls == ["ok"]
     assert job["diagnostics"]["index_mode"] == "incremental"
+
+
+def test_run_reindex_skips_callback_on_failure(monkeypatch):
+    """A6: при падении reindex callback не вызывается."""
+    from api.routes import documents
+    import create_vector_db
+
+    calls: list[str] = []
+    documents.set_reindex_callback(lambda: calls.append("ok"))
+
+    def _boom(progress_callback=None):
+        raise RuntimeError("reindex failed")
+
+    monkeypatch.setattr(create_vector_db, "reindex_vector_db", _boom)
+    documents._set_job("job-fail", id="job-fail", status="pending", started_at="2026-06-02T00:00:00")
+    try:
+        documents._run_reindex("job-fail")
+    finally:
+        documents.set_reindex_callback(None)
+
+    with documents._jobs_lock:
+        job = documents._jobs["job-fail"]
+    assert job["status"] == "failed"
+    assert calls == []
 
 
 def test_create_vector_db_partial_embeddings_preserves_active_collection(monkeypatch):
@@ -281,3 +297,188 @@ def test_incremental_reindex_removes_deleted_document(monkeypatch, tmp_path):
 
     saved_manifest = load_index_manifest(tmp_path / "chroma" / "index_manifest.json")
     assert list(saved_manifest["files"].keys()) == ["keep.txt"]
+
+
+# --- Тесты роутов потока A (не индексатора) ---
+
+
+def test_upload_conflict_returns_409_without_overwrite(client, tmp_path, monkeypatch):
+    """A2: повторная загрузка без overwrite -> 409 с existing."""
+    from api.routes import documents
+
+    _login_admin(client)
+    uploads = tmp_path / "uploads"
+    uploads.mkdir()
+    existing = uploads / "note.txt"
+    existing.write_text("old", encoding="utf-8")
+    monkeypatch.setattr(documents.settings, "DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(documents.settings, "UPLOAD_DIR", str(uploads))
+    documents._invalidate_documents_cache()
+
+    import io
+
+    rv = client.post(
+        "/api/documents/upload",
+        data={"file": (io.BytesIO(b"new"), "note.txt")},
+        content_type="multipart/form-data",
+    )
+    assert rv.status_code == 409
+    body = rv.get_json()
+    assert body["error"] == "exists"
+    assert body["existing"]["filename"] == "note.txt"
+    assert existing.read_text(encoding="utf-8") == "old"
+
+
+def test_upload_overwrite_true_replaces_file(client, tmp_path, monkeypatch):
+    """A2: overwrite=true перезаписывает файл."""
+    from api.routes import documents
+
+    _login_admin(client)
+    uploads = tmp_path / "uploads"
+    uploads.mkdir()
+    existing = uploads / "note.txt"
+    existing.write_text("old", encoding="utf-8")
+    monkeypatch.setattr(documents.settings, "DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(documents.settings, "UPLOAD_DIR", str(uploads))
+    documents._invalidate_documents_cache()
+
+    import io
+
+    rv = client.post(
+        "/api/documents/upload?overwrite=true",
+        data={"file": (io.BytesIO(b"new-content"), "note.txt")},
+        content_type="multipart/form-data",
+    )
+    assert rv.status_code == 201
+    assert existing.read_bytes() == b"new-content"
+
+
+def test_upload_cyrillic_filename_returns_201(client, tmp_path, monkeypatch):
+    """A1: кириллическое имя документа сохраняется при загрузке в KB."""
+    from api.routes import documents
+
+    _login_admin(client)
+    uploads = tmp_path / "uploads"
+    uploads.mkdir()
+    monkeypatch.setattr(documents.settings, "DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(documents.settings, "UPLOAD_DIR", str(uploads))
+    documents._invalidate_documents_cache()
+
+    import io
+
+    name = "Снимок экрана.txt"
+    rv = client.post(
+        "/api/documents/upload",
+        data={"file": (io.BytesIO(b"hello"), name)},
+        content_type="multipart/form-data",
+    )
+    assert rv.status_code == 201
+    doc = rv.get_json()["document"]
+    assert "Снимок" in doc["filename"]
+    assert doc["filename"].endswith(".txt")
+    assert (uploads / doc["filename"]).is_file()
+
+
+def test_upload_screenshot_png_via_chat_attachments(client, tmp_path, monkeypatch):
+    """Приёмка A: загрузка «Снимок экрана.png» в chat attachments -> 201."""
+    monkeypatch.setattr("core.chat_attachments.settings.CHAT_ATTACHMENTS_DIR", str(tmp_path / "att"))
+    monkeypatch.setattr(
+        "core.chat_attachments.settings.CHAT_ATTACHMENT_ALLOWED_EXTENSIONS",
+        ["png", "jpg", "txt"],
+    )
+    import io
+
+    rv = client.post(
+        "/api/chat/attachments",
+        data={"files": (io.BytesIO(b"\x89PNG\r\n\x1a\n"), "Снимок экрана.png")},
+        content_type="multipart/form-data",
+    )
+    assert rv.status_code == 201
+    att = rv.get_json()["attachments"][0]
+    assert "Снимок" in att["filename"]
+    assert att["mime"] == "image/png"
+
+def test_open_html_served_as_text_plain_attachment(client, tmp_path, monkeypatch):
+    """A4: .html отдаётся как text/plain + attachment + nosniff."""
+    from api.routes import documents
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    html_path = data_dir / "page.html"
+    html_path.write_text("<script>alert(1)</script>", encoding="utf-8")
+    monkeypatch.setattr(documents.settings, "DATA_DIR", str(data_dir))
+    documents._invalidate_documents_cache()
+
+    rv = client.get("/api/documents/open", query_string={"path": "page.html"})
+    assert rv.status_code == 200
+    assert "text/plain" in (rv.mimetype or "")
+    assert rv.headers.get("X-Content-Type-Options") == "nosniff"
+    cd = rv.headers.get("Content-Disposition", "")
+    assert "attachment" in cd.lower()
+
+
+def test_open_rejects_chat_attachments_dir(client, tmp_path, monkeypatch):
+    """A7: open не отдаёт файлы из каталога вложений."""
+    from api.routes import documents
+
+    data_dir = tmp_path / "data"
+    att_dir = data_dir / "chat_attachments"
+    att_dir.mkdir(parents=True)
+    secret = att_dir / "secret.txt"
+    secret.write_text("private", encoding="utf-8")
+    monkeypatch.setattr(documents.settings, "DATA_DIR", str(data_dir))
+    monkeypatch.setattr(documents.settings, "CHAT_ATTACHMENTS_DIR", str(att_dir))
+    monkeypatch.setattr(documents.settings, "UPLOAD_DIR", str(data_dir / "uploads"))
+    documents._invalidate_documents_cache()
+
+    rv = client.get("/api/documents/open", query_string={"path": "chat_attachments/secret.txt"})
+    assert rv.status_code == 404
+
+
+def test_scan_documents_skips_attachments_dir(tmp_path, monkeypatch):
+    """A7: _scan_documents пропускает CHAT_ATTACHMENTS_DIR."""
+    from api.routes import documents
+
+    data_dir = tmp_path / "data"
+    kb = data_dir / "kb"
+    att = data_dir / "chat_attachments"
+    kb.mkdir(parents=True)
+    att.mkdir(parents=True)
+    (kb / "public.txt").write_text("pub", encoding="utf-8")
+    (att / "private.txt").write_text("priv", encoding="utf-8")
+
+    monkeypatch.setattr(documents.settings, "DATA_DIR", str(data_dir))
+    monkeypatch.setattr(documents.settings, "CHAT_ATTACHMENTS_DIR", str(att))
+    monkeypatch.setattr(documents.settings, "UPLOAD_DIR", str(data_dir / "uploads"))
+    documents._invalidate_documents_cache()
+
+    docs = documents._scan_documents()
+    paths = {d["path"] for d in docs}
+    assert any("public.txt" in p for p in paths)
+    assert not any("private.txt" in p for p in paths)
+
+
+def test_documents_cache_used_by_related(tmp_path, monkeypatch):
+    """A7: related использует кэш и не сканирует диск каждый раз."""
+    from api.routes import documents
+
+    data_dir = tmp_path / "data"
+    base = data_dir / "wiki"
+    base.mkdir(parents=True)
+    (base / "a.txt").write_text("a", encoding="utf-8")
+    (base / "b.txt").write_text("b", encoding="utf-8")
+    monkeypatch.setattr(documents.settings, "DATA_DIR", str(data_dir))
+    monkeypatch.setattr(documents.settings, "CHAT_ATTACHMENTS_DIR", str(tmp_path / "att"))
+    documents._invalidate_documents_cache()
+
+    calls = {"n": 0}
+    real_scan = documents._scan_documents
+
+    def counting_scan():
+        calls["n"] += 1
+        return real_scan()
+
+    monkeypatch.setattr(documents, "_scan_documents", counting_scan)
+    documents._find_related_documents([{"path": "wiki/a.txt", "title": "A"}])
+    documents._find_related_documents([{"path": "wiki/a.txt", "title": "A"}])
+    assert calls["n"] == 1

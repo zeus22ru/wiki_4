@@ -157,7 +157,7 @@ if (-not $venvReady) {
     if ($LASTEXITCODE -ne 0) { throw "uv venv failed with exit code $LASTEXITCODE." }
 }
 
-Write-Host "Installing Python packages. This includes PyTorch because sentence-transformers is in requirements.txt."
+Write-Host "Installing Python packages from requirements.txt (без sentence-transformers; см. requirements-rerank.txt)."
 & $uvExe pip install --python $venvPython --managed-python --no-config -r (Join-Path $projectRoot "requirements.txt")
 if ($LASTEXITCODE -ne 0) { throw "uv pip install failed with exit code $LASTEXITCODE." }
 

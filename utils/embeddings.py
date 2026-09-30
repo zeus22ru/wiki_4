@@ -12,21 +12,7 @@ import re
 import requests
 from typing import List, Dict, Optional, Iterator, Any, Union
 from config import settings, get_logger
-
-# Импорт кэширования (опционально)
-try:
-    from utils.cache import get_cached_embedding, cache_embedding, invalidate_embedding_cache
-    USE_CACHE = True
-except ImportError:
-    USE_CACHE = False
-
-# Импорт ChromaDB для кастомной функции эмбеддингов
-try:
-    import chromadb
-    from chromadb import Documents, EmbeddingFunction, Embeddings
-    CHROMADB_AVAILABLE = True
-except ImportError:
-    CHROMADB_AVAILABLE = False
+from utils.cache import get_cached_embedding, cache_embedding, invalidate_embedding_cache  # noqa: F401 (реэкспорт для create_vector_db)
 
 logger = get_logger(__name__)
 
@@ -43,7 +29,6 @@ _THINK_BLOCK_RE = re.compile(
     r"<(?:think|redacted_thinking)\b[^>]*>[\s\S]*?</(?:think|redacted_thinking)\b[^>]*>",
     re.IGNORECASE,
 )
-_CYRILLIC_RE = re.compile(r"[\u0400-\u04FF]")
 _COT_PREFIX_MARKERS = (
     "the user is asking",
     "looking at the context",
@@ -90,9 +75,39 @@ def _unmask_code_fences(text: str, fences: List[str]) -> str:
     return out.strip()
 
 
+def _has_cot_prefix_markers(text: str) -> bool:
+    """Есть ли явный английский CoT-префикс в первых 400 символах."""
+    lower_head = (text or "")[:400].lower()
+    return any(marker in lower_head for marker in _COT_PREFIX_MARKERS)
+
+
+def _first_cyrillic_paragraph_start(text: str) -> Optional[int]:
+    """Индекс начала первого абзаца, начинающегося с кириллицы (после опц. markdown-маркеров)."""
+    for match in re.finditer(
+        r"(?:^|\n\n+)([#>*\-\s]*[\u0400-\u04FF])",
+        text or "",
+        flags=re.MULTILINE,
+    ):
+        # start() указывает на \n\n или начало; берём содержимое абзаца
+        group_start = match.start(1)
+        # откатиться к началу абзаца (после \n\n)
+        para_boundary = text.rfind("\n\n", 0, group_start)
+        if para_boundary >= 0:
+            return para_boundary + 2
+        return 0
+    return None
+
+
 def strip_model_reasoning(text: str) -> str:
     """
-    Убрать из ответа модели блоки thinking и типичный chain-of-thought до финального текста.
+    Убрать из ответа модели блоки thinking и явный английский CoT-префикс.
+
+    Вырезает только:
+    - блоки ``<think>...</think>`` / ``<redacted_thinking>...``;
+    - английский CoT-префикс (маркеры ``_COT_PREFIX_MARKERS`` в первых 400 символах)
+      до первого абзаца, начинающегося с кириллицы.
+
+    Ответ без CoT-маркеров (в т.ч. начинающийся с латиницы/цифр) возвращается без изменений.
     """
     if not text:
         return ""
@@ -104,25 +119,12 @@ def strip_model_reasoning(text: str) -> str:
 
     masked, fences = _mask_code_fences(cleaned)
 
-    if _CYRILLIC_RE.search(masked):
-        for match in re.finditer(r"(?:^|\n\n+)([#>*\-\s]*[\u0400-\u04FF])", masked, flags=re.MULTILINE):
-            return _unmask_code_fences(masked[match.start() :].lstrip(), fences)
-        idx = _CYRILLIC_RE.search(masked)
-        if idx:
-            para = masked.rfind("\n\n", 0, idx.start())
-            if para >= 0:
-                return _unmask_code_fences(masked[para:].lstrip(), fences)
-            return _unmask_code_fences(masked[idx.start() :].lstrip(), fences)
-
-    lower_head = masked[:400].lower()
-    if any(marker in lower_head for marker in _COT_PREFIX_MARKERS):
-        parts = re.split(r"\n\n\n+", masked, maxsplit=1)
-        if len(parts) > 1 and _CYRILLIC_RE.search(parts[1]):
-            return _unmask_code_fences(parts[1].lstrip(), fences)
-        blocks = re.split(r"\n\n+", masked)
-        for i, block in enumerate(blocks):
-            if _CYRILLIC_RE.search(block):
-                return _unmask_code_fences("\n\n".join(blocks[i:]).lstrip(), fences)
+    if _has_cot_prefix_markers(masked):
+        start = _first_cyrillic_paragraph_start(masked)
+        if start is not None:
+            return _unmask_code_fences(masked[start:].lstrip(), fences)
+        # CoT есть, но кириллического абзаца нет — оставить как есть после think-блоков
+        return _unmask_code_fences(masked, fences)
 
     return _unmask_code_fences(masked, fences)
 
@@ -264,7 +266,7 @@ def _openai_chat_stream_request(payload: dict, timeout: int) -> Iterator[str]:
                     yield content
     except requests.exceptions.HTTPError as e:
         body = e.response.text[:800] if e.response is not None else ""
-        code = e.response.status_code if e.response else "?"
+        code = e.response.status_code if e.response is not None else "?"
         logger.error("HTTP ошибка chat/completions (stream): %s %s", code, body)
         if e.response is not None and e.response.status_code in (400, 422):
             raise ChatCompletionError(_vision_error_message(body), code="vision_unsupported") from e
@@ -322,18 +324,41 @@ def chat_completion_messages_stream_filtered(
 
 
 def _filter_reasoning_stream(chunks: Iterator[str]) -> Iterator[str]:
-    """Не отдавать в UI фрагменты, пока в буфере только reasoning/CoT."""
+    """
+    Не отдавать в UI фрагменты, которые потом исчезнут после strip_model_reasoning.
+
+    Для английского CoT-префикса ждём первую кириллицу; иначе отдаём сразу
+    (после вырезания закрытых ``<think>``-блоков).
+    """
     if not _chat_disable_thinking():
         yield from chunks
         return
 
     buf = ""
     emitted = 0
+    waiting_for_cyrillic = False
     for piece in chunks:
         if not piece:
             continue
         buf += piece
-        public = strip_model_reasoning(buf)
+
+        # Закрытые think-блоки можно вырезать сразу
+        cleaned = _THINK_BLOCK_RE.sub("", buf)
+        if not cleaned.strip():
+            continue
+
+        if _looks_like_json_string_array(cleaned.strip()):
+            public = cleaned.strip()
+        elif _has_cot_prefix_markers(cleaned) or waiting_for_cyrillic:
+            waiting_for_cyrillic = True
+            start = _first_cyrillic_paragraph_start(cleaned)
+            if start is None:
+                continue
+            waiting_for_cyrillic = False
+            public = strip_model_reasoning(buf)
+        else:
+            public = strip_model_reasoning(buf)
+
         if len(public) <= emitted:
             continue
         delta = public[emitted:]
@@ -399,6 +424,9 @@ def _fetch_embeddings_from_api(texts: List[str]) -> List[List[float]]:
             "model": settings.OLLAMA_EMBEDDING_MODEL,
             "input": texts if len(texts) > 1 else texts[0],
         }
+        dims = getattr(settings, "EMBEDDING_DIMENSIONS", None)
+        if dims is not None:
+            payload["dimensions"] = int(dims)
         try:
             response = requests.post(
                 url, json=payload, timeout=120, headers=_embedding_headers()
@@ -410,7 +438,7 @@ def _fetch_embeddings_from_api(texts: List[str]) -> List[List[float]]:
             logger.error(
                 "Ошибка HTTP при эмбеддинге (openai %s): %s %s",
                 url,
-                e.response.status_code if e.response else "?",
+                e.response.status_code if e.response is not None else "?",
                 body,
             )
             return []
@@ -420,10 +448,13 @@ def _fetch_embeddings_from_api(texts: List[str]) -> List[List[float]]:
 
     # Ollama
     url = f"{base}/api/embed"
-    for use_dimensions in (True, False):
-        payload = {"model": settings.OLLAMA_EMBEDDING_MODEL, "input": texts}
-        if use_dimensions:
-            payload["dimensions"] = 1024
+    dims = getattr(settings, "EMBEDDING_DIMENSIONS", None)
+    # Сначала с dimensions (если заданы), затем без — совместимость со старыми серверами
+    attempts: List[bool] = [True, False] if dims is not None else [False]
+    for use_dimensions in attempts:
+        payload: Dict[str, Any] = {"model": settings.OLLAMA_EMBEDDING_MODEL, "input": texts}
+        if use_dimensions and dims is not None:
+            payload["dimensions"] = int(dims)
         try:
             response = requests.post(
                 url, json=payload, timeout=120, headers=_embedding_headers()
@@ -439,14 +470,15 @@ def _fetch_embeddings_from_api(texts: List[str]) -> List[List[float]]:
                 and e.response.status_code == 400
             ):
                 logger.warning(
-                    "Ollama /api/embed с dimensions=1024 отклонён (400), повтор без dimensions"
+                    "Ollama /api/embed с dimensions=%s отклонён (400), повтор без dimensions",
+                    dims,
                 )
                 continue
             body = e.response.text[:800] if e.response is not None else ""
             logger.error(
                 "Ошибка HTTP при эмбеддинге (ollama %s): %s %s",
                 url,
-                e.response.status_code if e.response else "?",
+                e.response.status_code if e.response is not None else "?",
                 body,
             )
             return []
@@ -511,7 +543,7 @@ def chat_completion_stream(prompt: str, timeout: int = 120) -> Iterator[str]:
                 if piece:
                     yield piece
     except requests.exceptions.HTTPError as e:
-        code = e.response.status_code if e.response else "?"
+        code = e.response.status_code if e.response is not None else "?"
         logger.error("HTTP ошибка при потоковой генерации (/api/generate): %s", code)
         raise ChatCompletionError(f"Ошибка генерации ответа: HTTP {code}", code="generation_error") from e
     except requests.exceptions.Timeout as e:
@@ -548,23 +580,18 @@ def get_embedding(text: str) -> List[float]:
     Returns:
         Список чисел (эмбеддинг) или пустой список при ошибке
     """
-    # Проверяем кэш
-    if USE_CACHE:
-        cached = get_cached_embedding(text, settings.OLLAMA_EMBEDDING_MODEL)
-        if cached is not None:
-            logger.debug(f"Эмбеддинг получен из кэша для текста: {text[:50]}...")
-            return cached
+    cached = get_cached_embedding(text, settings.OLLAMA_EMBEDDING_MODEL)
+    if cached is not None:
+        logger.debug(f"Эмбеддинг получен из кэша для текста: {text[:50]}...")
+        return cached
     
     try:
         vectors = _fetch_embeddings_from_api([text])
         if not vectors or not vectors[0]:
             return []
         embedding = vectors[0]
-
-        if USE_CACHE:
-            cache_embedding(text, settings.OLLAMA_EMBEDDING_MODEL, embedding)
-            logger.debug(f"Эмбеддинг закэширован для текста: {text[:50]}...")
-
+        cache_embedding(text, settings.OLLAMA_EMBEDDING_MODEL, embedding)
+        logger.debug(f"Эмбеддинг закэширован для текста: {text[:50]}...")
         return embedding
     except Exception as e:
         logger.error(f"Ошибка при получении эмбеддинга: {e}")
@@ -573,38 +600,27 @@ def get_embedding(text: str) -> List[float]:
 
 def get_embeddings_batch(texts: List[str]) -> List[List[float]]:
     """
-    Получить эмбеддинги для нескольких текстов за один запрос (GPU-оптимизировано)
-    
-    Args:
-        texts: Список текстов для получения эмбеддингов
-        
-    Returns:
-        Список эмбеддингов
+    Получить эмбеддинги для нескольких текстов за один запрос.
+
+    Контракт: либо полный список той же длины, либо ``[]`` при любом сбое
+    (частичный результат не возвращается).
     """
     if not texts:
         return []
     
-    # Проверяем кэш для каждого текста
-    embeddings = []
-    texts_to_fetch = []
-    indices_to_fetch = []
+    embeddings: List[Optional[List[float]]] = [None] * len(texts)
+    texts_to_fetch: List[str] = []
+    indices_to_fetch: List[int] = []
     
-    if USE_CACHE:
-        for i, text in enumerate(texts):
-            cached = get_cached_embedding(text, settings.OLLAMA_EMBEDDING_MODEL)
-            if cached is not None:
-                embeddings.append(cached)
-                logger.debug(f"Эмбеддинг {i} получен из кэша")
-            else:
-                embeddings.append(None)
-                texts_to_fetch.append(text)
-                indices_to_fetch.append(i)
-    else:
-        embeddings = [None] * len(texts)
-        texts_to_fetch = texts
-        indices_to_fetch = list(range(len(texts)))
+    for i, text in enumerate(texts):
+        cached = get_cached_embedding(text, settings.OLLAMA_EMBEDDING_MODEL)
+        if cached is not None:
+            embeddings[i] = cached
+            logger.debug(f"Эмбеддинг {i} получен из кэша")
+        else:
+            texts_to_fetch.append(text)
+            indices_to_fetch.append(i)
     
-    # Получаем эмбеддинги для текстов, которых нет в кэше
     if texts_to_fetch:
         fetched_embeddings = _fetch_embeddings_from_api(texts_to_fetch)
         if not fetched_embeddings or len(fetched_embeddings) != len(texts_to_fetch):
@@ -613,17 +629,21 @@ def get_embeddings_batch(texts: List[str]) -> List[List[float]]:
                 len(texts_to_fetch),
                 len(fetched_embeddings) if fetched_embeddings else 0,
             )
-            return [emb for emb in embeddings if emb is not None]
+            return []
 
         for i, embedding in enumerate(fetched_embeddings):
+            if not embedding:
+                logger.error("Пакет эмбеддингов: пустой вектор в позиции %s", i)
+                return []
             text = texts_to_fetch[i]
             index = indices_to_fetch[i]
             embeddings[index] = embedding
-            if USE_CACHE:
-                cache_embedding(text, settings.OLLAMA_EMBEDDING_MODEL, embedding)
-                logger.debug(f"Эмбеддинг {index} закэширован")
+            cache_embedding(text, settings.OLLAMA_EMBEDDING_MODEL, embedding)
+            logger.debug(f"Эмбеддинг {index} закэширован")
     
-    return embeddings
+    if any(emb is None for emb in embeddings):
+        return []
+    return embeddings  # type: ignore[return-value]
 
 
 def search_documents(query: str, collection, top_k: int = None) -> List[Dict]:
@@ -741,6 +761,4 @@ class OllamaEmbeddingFunction:
         return _fetch_embeddings_from_api(list(input))
 
 
-# Переэкспорт функции инвалидации кэша для удобства импорта
-if USE_CACHE:
-    from utils.cache import invalidate_embedding_cache
+# invalidate_embedding_cache реэкспортируется из utils.cache (импорт выше)

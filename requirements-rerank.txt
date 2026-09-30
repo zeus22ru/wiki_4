@@ -1,0 +1,7 @@
+# Cross-encoder rerank (опционально).
+# Нужен только при RERANK_ENABLED=true.
+# Тянет torch — не ставить на CPU-only сервер без необходимости.
+#
+#   pip install -r requirements-rerank.txt
+#
+sentence-transformers==3.4.1

@@ -42,6 +42,7 @@
     --error-color: #c94a4a;
     --warning-color: #b7791f;
     --status-ok: #2f9e68;
+    --status-degraded: #c9a227;
     --status-down: #c94a4a;
 
     --input-bg: #FFFFFF;
@@ -151,6 +152,7 @@
     --error-color: #e06b6b;
     --warning-color: #e0a84a;
     --status-ok: #3cb878;
+    --status-degraded: #e0c35a;
     --status-down: #e06b6b;
 
     --input-bg: #1f2328;
@@ -406,6 +408,10 @@ a:hover {
 
 .status-dot.offline {
     background: var(--error-color);
+}
+
+.status-dot.degraded {
+    background: var(--warning-color, var(--status-degraded));
 }
 
 .status-dot.checking {

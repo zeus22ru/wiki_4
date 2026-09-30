@@ -30,8 +30,8 @@ def test_script_modules_import_without_side_effects():
         "qa_system",
         "scripts.eval_coverage_basket",
         "scripts.extract_long_paths",
-        "scripts.test_ollama_api",
-        "scripts.test_available_models",
+        "scripts.check_ollama_api",
+        "scripts.check_available_models",
         "scripts.telegram_bot_worker",
     ]:
         importlib.import_module(module_name)

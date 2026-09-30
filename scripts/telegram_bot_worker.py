@@ -24,7 +24,10 @@ for stream in (sys.stdout, sys.stderr):
     if hasattr(stream, "reconfigure"):
         stream.reconfigure(encoding="utf-8")
 
+from collections import OrderedDict  # noqa: E402
+
 from config import get_logger, settings  # noqa: E402
+from config.chat_runtime import normalize_answer_mode  # noqa: E402
 from core.chat_attachments import attachments_enabled  # noqa: E402
 from integrations.mermaid_telegram import (  # noqa: E402
     hide_mermaid_source,
@@ -46,6 +49,7 @@ logger = get_logger(__name__)
 
 VALID_MODES = {"обычный", "кратко", "подробно", "по_источникам", "по_шагам", "инструкция"}
 TELEGRAM_TYPING_INTERVAL_SECONDS: float = 5.0
+_MAX_SESSIONS = 1000
 
 BUTTON_HELP = "❓ Справка"
 BUTTON_RESET = "🔄 Новый диалог"
@@ -206,13 +210,19 @@ class TelegramSession:
         self.answer_mode: str = "обычный"
 
 
-_sessions: dict[int, TelegramSession] = {}
+_sessions: OrderedDict[int, TelegramSession] = OrderedDict()
 
 
 def get_session(tg_user_id: int) -> TelegramSession:
-    if tg_user_id not in _sessions:
-        _sessions[tg_user_id] = TelegramSession()
-    return _sessions[tg_user_id]
+    """Получить сессию с LRU-ограничением размера словаря."""
+    if tg_user_id in _sessions:
+        _sessions.move_to_end(tg_user_id)
+        return _sessions[tg_user_id]
+    session = TelegramSession()
+    _sessions[tg_user_id] = session
+    while len(_sessions) > _MAX_SESSIONS:
+        _sessions.popitem(last=False)
+    return session
 
 
 def hydrate_session(session: TelegramSession, tg_user_id: int) -> bool:
@@ -225,27 +235,27 @@ def hydrate_session(session: TelegramSession, tg_user_id: int) -> bool:
             "X-API-Key": settings.TELEGRAM_INTERNAL_API_KEY,
             "Content-Type": "application/json",
         }
-        resp = requests.post(
+        with requests.post(
             url,
             json={"telegram_user_id": tg_user_id},
             headers=headers,
             timeout=10,
-        )
-        if resp.status_code == 200:
-            data = resp.json()
-            user_id = data.get("user_id")
-            if isinstance(user_id, int):
-                session.user_id = user_id
-                return True
+        ) as resp:
+            if resp.status_code == 200:
+                data = resp.json()
+                user_id = data.get("user_id")
+                if isinstance(user_id, int):
+                    session.user_id = user_id
+                    return True
+                return False
+            if resp.status_code == 404:
+                return False
+            logger.warning(
+                "resolve Telegram-привязки вернул %s для tg_user_id=%s",
+                resp.status_code,
+                tg_user_id,
+            )
             return False
-        if resp.status_code == 404:
-            return False
-        logger.warning(
-            "resolve Telegram-привязки вернул %s для tg_user_id=%s",
-            resp.status_code,
-            tg_user_id,
-        )
-        return False
     except requests.RequestException:
         logger.exception("Ошибка resolve Telegram-привязки для tg_user_id=%s", tg_user_id)
         return False
@@ -333,28 +343,33 @@ def handle_start(code: str, tg_user_id: int, client: TelegramClient) -> str:
             "X-API-Key": settings.TELEGRAM_INTERNAL_API_KEY,
             "Content-Type": "application/json",
         }
-        resp = requests.post(
+        with requests.post(
             url,
             json={"code": code, "telegram_user_id": tg_user_id},
             headers=headers,
             timeout=10,
-        )
-        if resp.status_code == 200:
-            data = resp.json()
-            session = get_session(tg_user_id)
-            session.user_id = data.get("user_id")
-            session.chat_id = None
-            return (
-                f"✅ Аккаунт привязан! "
-                f"Ваш ID: {data['user_id']}, "
-                f"роль: {data.get('role', 'user')}"
-            )
-        if resp.status_code == 404:
-            return "❌ Код не найден или истёк. Запросите новый код в веб-интерфейсе."
-        return f"❌ Ошибка привязки: {resp.status_code}"
-    except requests.RequestException as exc:
+        ) as resp:
+            if resp.status_code == 200:
+                data = resp.json()
+                session = get_session(tg_user_id)
+                session.user_id = data.get("user_id")
+                session.chat_id = None
+                return "✅ Аккаунт привязан"
+            if resp.status_code == 404:
+                return "❌ Код не найден или истёк. Запросите новый код в веб-интерфейсе."
+            if resp.status_code == 429:
+                return "❌ Слишком много попыток. Подождите 15 минут."
+            if resp.status_code == 409:
+                try:
+                    detail = resp.json().get("error") or "Telegram уже привязан к другому аккаунту"
+                except ValueError:
+                    detail = "Telegram уже привязан к другому аккаунту"
+                return f"❌ {detail}"
+            logger.warning("Ошибка привязки Telegram: HTTP %s", resp.status_code)
+            return "❌ Ошибка привязки. Попробуйте позже."
+    except requests.RequestException:
         logger.exception("Ошибка привязки Telegram аккаунта для user_id=%s", tg_user_id)
-        return f"❌ Ошибка сети при привязке: {exc}"
+        return "❌ Ошибка сети при привязке. Попробуйте позже."
 
 
 def handle_reset(session: TelegramSession) -> str:
@@ -634,10 +649,10 @@ def handle_question(
             return
         try:
             attachment_ids = collect_image_attachment_ids(client, message)
-        except (TelegramError, RuntimeError) as exc:
+        except (TelegramError, RuntimeError):
             logger.exception("Ошибка загрузки фото из Telegram для tg_user_id=%s", tg_user_id)
             try:
-                client.send_message(chat_id, f"❌ Не удалось обработать фото: {exc}")
+                client.send_message(chat_id, "❌ Не удалось обработать фото")
             except TelegramError:
                 pass
             return
@@ -685,7 +700,7 @@ def handle_question(
     payload: dict[str, Any] = {
         "message": text,
         "chat_id": session.chat_id,
-        "answer_mode": session.answer_mode,
+        "answer_mode": normalize_answer_mode(session.answer_mode),
         "telegram_user_id": tg_user_id,
     }
     if attachment_ids:
@@ -697,101 +712,117 @@ def handle_question(
     last_edit = 0.0
     min_edit_interval = settings.TELEGRAM_STREAM_EDIT_INTERVAL_MS / 1000.0
     last_typing_at = 0.0
-    stream_success = False
+    stream_completed = False
+    stream_had_error = False
 
     try:
-        resp = requests.post(url, json=payload, headers=headers, stream=True, timeout=120)
-        resp.raise_for_status()
-    except requests.RequestException as exc:
+        with requests.post(url, json=payload, headers=headers, stream=True, timeout=120) as resp:
+            resp.raise_for_status()
+            sse_pattern = re.compile(r"^data:\s*(.*)$")
+            for line in resp.iter_lines(decode_unicode=True):
+                if not line:
+                    continue
+                match = sse_pattern.match(line)
+                if not match:
+                    continue
+                data = match.group(1)
+                if data == "[DONE]":
+                    break
+                try:
+                    chunk = json.loads(data)
+                except json.JSONDecodeError:
+                    continue
+
+                chunk_type = chunk.get("type")
+                if chunk_type == "delta":
+                    accumulated += chunk.get("text", "")
+                elif chunk_type == "done":
+                    if chunk.get("answer") is not None:
+                        accumulated = chunk["answer"]
+                    sources = chunk.get("sources", [])
+                    citations = chunk.get("citations", [])
+                    if chunk.get("chat_id") is not None:
+                        session.chat_id = chunk["chat_id"]
+                    stream_completed = True
+                    break
+                elif chunk_type == "error":
+                    error_msg = chunk.get("message", "Ошибка при обработке запроса")
+                    accumulated = f"❌ {error_msg}"
+                    stream_completed = True
+                    stream_had_error = True
+                    break
+                elif chunk_type == "status":
+                    pass
+
+                now = time.time()
+                if now - last_edit >= min_edit_interval and accumulated:
+                    try:
+                        preview = (
+                            hide_mermaid_source(accumulated)
+                            if settings.TELEGRAM_MERMAID_IMAGES
+                            else accumulated
+                        )
+                        if not preview.strip():
+                            preview = "⏳ Формирую схему…"
+                        if use_rich:
+                            client.send_rich_message_draft(
+                                chat_id,
+                                draft_id,
+                                {
+                                    "markdown": prepare_rich_markdown(
+                                        preview,
+                                        max_chars=settings.TELEGRAM_RICH_MAX_CHARS,
+                                    )
+                                },
+                            )
+                        elif message_id is not None:
+                            _edit_streaming_preview(client, chat_id, message_id, preview)
+                        last_edit = now
+                    except TelegramError:
+                        pass
+
+                if now - last_typing_at >= TELEGRAM_TYPING_INTERVAL_SECONDS:
+                    try:
+                        client.send_chat_action(chat_id, "typing")
+                        last_typing_at = now
+                    except TelegramError:
+                        pass
+    except requests.RequestException:
         logger.exception("Ошибка запроса к /api/chat/stream для tg_user_id=%s", tg_user_id)
         try:
             if message_id is not None:
-                client.edit_message_text(chat_id, message_id, f"❌ Ошибка связи с сервером: {exc}")
+                client.edit_message_text(chat_id, message_id, "❌ Ошибка связи с сервером")
             else:
-                client.send_message(chat_id, f"❌ Ошибка связи с сервером: {exc}")
+                client.send_message(chat_id, "❌ Ошибка связи с сервером")
         except TelegramError:
             pass
         return
-
-    try:
-        sse_pattern = re.compile(r"^data:\s*(.*)$")
-        for line in resp.iter_lines(decode_unicode=True):
-            if not line:
-                continue
-            match = sse_pattern.match(line)
-            if not match:
-                continue
-            data = match.group(1)
-            if data == "[DONE]":
-                break
-            try:
-                chunk = json.loads(data)
-            except json.JSONDecodeError:
-                continue
-
-            chunk_type = chunk.get("type")
-            if chunk_type == "delta":
-                accumulated += chunk.get("text", "")
-            elif chunk_type == "done":
-                if chunk.get("answer") is not None:
-                    accumulated = chunk["answer"]
-                sources = chunk.get("sources", [])
-                citations = chunk.get("citations", [])
-                if chunk.get("chat_id") is not None:
-                    session.chat_id = chunk["chat_id"]
-                stream_success = True
-                break
-            elif chunk_type == "error":
-                error_msg = chunk.get("message", "Ошибка при обработке запроса")
-                accumulated = f"❌ {error_msg}"
-                stream_success = True
-                break
-            elif chunk_type == "status":
-                # Можно игнорировать или показывать в placeholder
-                pass
-
-            now = time.time()
-            if now - last_edit >= min_edit_interval and accumulated:
-                try:
-                    preview = (
-                        hide_mermaid_source(accumulated)
-                        if settings.TELEGRAM_MERMAID_IMAGES
-                        else accumulated
-                    )
-                    if not preview.strip():
-                        preview = "⏳ Формирую схему…"
-                    if use_rich:
-                        client.send_rich_message_draft(
-                            chat_id,
-                            draft_id,
-                            {
-                                "markdown": prepare_rich_markdown(
-                                    preview,
-                                    max_chars=settings.TELEGRAM_RICH_MAX_CHARS,
-                                )
-                            },
-                        )
-                    elif message_id is not None:
-                        _edit_streaming_preview(client, chat_id, message_id, preview)
-                    last_edit = now
-                except TelegramError:
-                    pass
-
-            if now - last_typing_at >= TELEGRAM_TYPING_INTERVAL_SECONDS:
-                try:
-                    client.send_chat_action(chat_id, "typing")
-                    last_typing_at = now
-                except TelegramError:
-                    pass
     except Exception:
         logger.exception("Ошибка чтения SSE-потока для tg_user_id=%s", tg_user_id)
         accumulated = "❌ Ошибка при получении ответа."
+        stream_completed = True
+        stream_had_error = True
+
+    if not stream_completed:
+        logger.warning(
+            "SSE-поток завершился без done/error для tg_user_id=%s",
+            tg_user_id,
+        )
+        if accumulated.strip():
+            accumulated = (
+                "⚠️ Ответ прерван. Частичный текст:\n\n" + accumulated.strip()
+            )
+        else:
+            accumulated = "⚠️ Ответ прерван"
+        stream_had_error = True
 
     try:
         answer_text = accumulated
+        # При прерванном/ошибочном потоке не гоняем mermaid-рендер как «готовый» ответ
+        mermaid_enabled = settings.TELEGRAM_MERMAID_IMAGES and not stream_had_error
         mermaid = process_answer_mermaid(
             answer_text,
-            enabled=settings.TELEGRAM_MERMAID_IMAGES,
+            enabled=mermaid_enabled,
             max_diagrams=settings.TELEGRAM_MERMAID_MAX_DIAGRAMS,
             mmdc_cmd=settings.TELEGRAM_MMDC_CMD,
             timeout=float(settings.TELEGRAM_MMDC_TIMEOUT_SECONDS),
@@ -824,7 +855,6 @@ def handle_question(
                     _sanitize_answer_markdown(answer_for_text),
                 )
         elif not mermaid.images:
-            # Nothing useful to show
             fallback = answer_for_text.strip() or "⚠️ Пустой ответ."
             if use_rich:
                 try:
@@ -843,7 +873,7 @@ def handle_question(
         logger.exception("Не удалось отправить финальное сообщение")
 
     # Отправить источники отдельным сообщением
-    if settings.TELEGRAM_SHOW_SOURCES and (sources or citations):
+    if settings.TELEGRAM_SHOW_SOURCES and not stream_had_error and (sources or citations):
         sources_text_parts = ["📄 Источники:"]
         for i, src in enumerate(sources[:10], 1):
             title = src.get("title", "Без названия")
@@ -1043,6 +1073,10 @@ def main() -> int:
 
     if not settings.TELEGRAM_BOT_TOKEN:
         print("TELEGRAM_BOT_TOKEN не задан")
+        return 1
+
+    if not (settings.TELEGRAM_INTERNAL_API_KEY or "").strip():
+        print("TELEGRAM_INTERNAL_API_KEY пуст. Задайте ключ в .env перед запуском worker.")
         return 1
 
     lock_path = Path(f"{settings.TELEGRAM_OFFSET_PATH}.lock")

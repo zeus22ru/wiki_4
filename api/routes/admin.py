@@ -5,11 +5,10 @@
 from datetime import datetime, timedelta
 from pathlib import Path
 from collections import Counter
+import threading
 import time
 
-from flask import Blueprint, jsonify
-from flask import request
-import chromadb
+from flask import Blueprint, jsonify, request, current_app
 
 from api.middleware.auth import require_admin_access
 from config import (
@@ -20,11 +19,13 @@ from config import (
 )
 from core.chat_history import get_chat_history
 from core.retrieval import bm25_index_path
+from config.runtime_overrides import overrides_lock
 
 logger = get_logger(__name__)
 admin_bp = Blueprint("admin", __name__, url_prefix="/api/admin")
 _OVERVIEW_CACHE_TTL_SECONDS = 15
 _overview_cache: dict | None = None
+_overview_cache_lock = threading.Lock()
 
 
 @admin_bp.before_request
@@ -56,13 +57,25 @@ def _public_settings() -> dict:
 
 
 def _chroma_status() -> dict:
+    """Статус Chroma через уже инициализированный клиент web_app (без нового PersistentClient)."""
     try:
-        client = chromadb.PersistentClient(path=settings.CHROMA_PERSIST_DIR)
-        collection = client.get_collection(name=settings.CHROMA_COLLECTION_NAME)
+        import web_app as web_app_module
+
+        coll = getattr(web_app_module, "collection", None)
+        if coll is None:
+            init_fn = getattr(web_app_module, "initialize_database", None)
+            if callable(init_fn):
+                coll, _rag = init_fn()
+        if coll is None:
+            return {
+                "ok": False,
+                "collection": settings.CHROMA_COLLECTION_NAME,
+                "error": "Коллекция не инициализирована",
+            }
         return {
             "ok": True,
             "collection": settings.CHROMA_COLLECTION_NAME,
-            "count": collection.count(),
+            "count": coll.count(),
         }
     except Exception as exc:
         return {
@@ -208,7 +221,8 @@ def _cache_key(window_days: int) -> tuple:
 
 def _clear_overview_cache() -> None:
     global _overview_cache
-    _overview_cache = None
+    with _overview_cache_lock:
+        _overview_cache = None
 
 
 @admin_bp.route("/overview", methods=["GET"])
@@ -225,13 +239,15 @@ def overview():
     key = _cache_key(window_days)
     now = time.monotonic()
     force_refresh = request.args.get("refresh") in {"1", "true", "yes"}
-    if (
-        not force_refresh
-        and _overview_cache
-        and _overview_cache.get("key") == key
-        and _overview_cache.get("expires_at", 0) > now
-    ):
-        return jsonify(_overview_cache["payload"])
+    with _overview_cache_lock:
+        cached = _overview_cache
+        if (
+            not force_refresh
+            and cached
+            and cached.get("key") == key
+            and cached.get("expires_at", 0) > now
+        ):
+            return jsonify(cached["payload"])
 
     models = []
     models_error = None
@@ -303,11 +319,12 @@ def overview():
             "sizes": storage_sizes,
         },
     }
-    _overview_cache = {
-        "key": key,
-        "expires_at": now + _OVERVIEW_CACHE_TTL_SECONDS,
-        "payload": payload,
-    }
+    with _overview_cache_lock:
+        _overview_cache = {
+            "key": key,
+            "expires_at": now + _OVERVIEW_CACHE_TTL_SECONDS,
+            "payload": payload,
+        }
     return jsonify(payload)
 
 
@@ -366,6 +383,20 @@ def _coerce_value(type_name: str, value):
     return "" if value is None else str(value)
 
 
+def _validate_numeric_bounds(spec, coerced):
+    """Проверка min/max из ui для int/float (не только slider)."""
+    if spec.type not in ("int", "float"):
+        return None
+    ui = spec.ui or {}
+    min_v = ui.get("min")
+    max_v = ui.get("max")
+    if min_v is not None and coerced < min_v:
+        return f"Значение меньше минимума ({min_v})"
+    if max_v is not None and coerced > max_v:
+        return f"Значение больше максимума ({max_v})"
+    return None
+
+
 @admin_bp.route("/settings", methods=["POST"])
 def update_setting():
     """Обновить одну настройку через overrides JSON и применить в runtime."""
@@ -381,10 +412,32 @@ def update_setting():
     if not spec:
         return jsonify({"error": "Неизвестная настройка"}), 400
 
-    overrides = load_overrides()
-    if action == "clear":
+    with overrides_lock:
+        overrides = load_overrides()
+        if action == "clear":
+            updated_overrides = dict(overrides)
+            updated_overrides.pop(key, None)
+            try:
+                apply_overrides(settings, updated_overrides)
+            except ValueError as exc:
+                return jsonify({"error": f"Некорректное значение: {exc}"}), 400
+            save_overrides(updated_overrides)
+            _clear_overview_cache()
+            if key == "MAX_FILE_SIZE":
+                current_app.config["MAX_CONTENT_LENGTH"] = int(settings.MAX_FILE_SIZE)
+            return jsonify({"ok": True, "key": key, "action": "clear"})
+
+        try:
+            coerced = _coerce_value(spec.type, value)
+        except Exception as exc:
+            return jsonify({"error": f"Некорректное значение: {exc}"}), 400
+
+        bounds_error = _validate_numeric_bounds(spec, coerced)
+        if bounds_error:
+            return jsonify({"error": bounds_error}), 400
+
         updated_overrides = dict(overrides)
-        updated_overrides.pop(key, None)
+        updated_overrides[key] = coerced
         try:
             apply_overrides(settings, updated_overrides)
         except ValueError as exc:
@@ -392,33 +445,5 @@ def update_setting():
         save_overrides(updated_overrides)
         _clear_overview_cache()
         if key == "MAX_FILE_SIZE":
-            from flask import current_app
             current_app.config["MAX_CONTENT_LENGTH"] = int(settings.MAX_FILE_SIZE)
-        return jsonify({"ok": True, "key": key, "action": "clear"})
-
-    try:
-        coerced = _coerce_value(spec.type, value)
-    except Exception as exc:
-        return jsonify({"error": f"Некорректное значение: {exc}"}), 400
-
-    ui = spec.ui or {}
-    if spec.type in ("int", "float") and ui.get("kind") == "slider":
-        min_v = ui.get("min")
-        max_v = ui.get("max")
-        if min_v is not None and coerced < min_v:
-            return jsonify({"error": f"Значение меньше минимума ({min_v})"}), 400
-        if max_v is not None and coerced > max_v:
-            return jsonify({"error": f"Значение больше максимума ({max_v})"}), 400
-
-    updated_overrides = dict(overrides)
-    updated_overrides[key] = coerced
-    try:
-        apply_overrides(settings, updated_overrides)
-    except ValueError as exc:
-        return jsonify({"error": f"Некорректное значение: {exc}"}), 400
-    save_overrides(updated_overrides)
-    _clear_overview_cache()
-    if key == "MAX_FILE_SIZE":
-        from flask import current_app
-        current_app.config["MAX_CONTENT_LENGTH"] = int(settings.MAX_FILE_SIZE)
-    return jsonify({"ok": True, "key": key, "value": ("••••••••" if spec.secret else coerced), "overridden": True})
+        return jsonify({"ok": True, "key": key, "value": ("••••••••" if spec.secret else coerced), "overridden": True})

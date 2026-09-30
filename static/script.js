@@ -22,8 +22,11 @@ let activeStreamController = null;
 let activeStreamRequestId = 0;
 let reindexPollTimer = null;
 let _mermaidInitialized = false;
+let _mermaidTheme = null;
 let _mermaidLightbox = null;
 let _mermaidLightboxCurrentSvg = null;
+let _markedConfigured = false;
+let _chatListRequestSeq = 0;
 
 function recoverMermaidInAnswer(streamText, finalText) {
     const final = String(finalText || '');
@@ -164,10 +167,10 @@ function ensureMermaidInitialized() {
     if (typeof mermaid === 'undefined') {
         return false;
     }
-    if (_mermaidInitialized) {
+    const theme = document.documentElement?.getAttribute('data-theme') === 'dark' ? 'dark' : 'default';
+    if (_mermaidInitialized && _mermaidTheme === theme) {
         return true;
     }
-    const theme = document.documentElement?.getAttribute('data-theme') === 'dark' ? 'dark' : 'default';
     try {
         mermaid.initialize({
             startOnLoad: false,
@@ -177,6 +180,7 @@ function ensureMermaidInitialized() {
             theme,
         });
         _mermaidInitialized = true;
+        _mermaidTheme = theme;
         return true;
     } catch (_) {
         return false;
@@ -1054,15 +1058,25 @@ function switchPanel(panelId) {
 async function checkHealth() {
     try {
         const data = await apiJson('/api/health');
-        if (data.ollama && data.database) {
+        const status = String(data.status || '').toLowerCase();
+        const ragOk = data.rag !== false;
+        const servicesOk = Boolean(data.ollama && data.database && ragOk);
+
+        if (status === 'ok' || (!status && servicesOk)) {
             statusDot.className = 'status-dot online';
             statusText.textContent = 'Сервис доступен';
             if (serviceStatus) serviceStatus.setAttribute('data-state', 'ok');
-        } else {
-            statusDot.className = 'status-dot offline';
-            statusText.textContent = 'Ошибка подключения';
-            if (serviceStatus) serviceStatus.setAttribute('data-state', 'down');
+            return;
         }
+        if (status === 'degraded' || (!status && data.database)) {
+            statusDot.className = 'status-dot degraded';
+            statusText.textContent = 'Частично';
+            if (serviceStatus) serviceStatus.setAttribute('data-state', 'degraded');
+            return;
+        }
+        statusDot.className = 'status-dot offline';
+        statusText.textContent = 'Ошибка подключения';
+        if (serviceStatus) serviceStatus.setAttribute('data-state', 'down');
     } catch (error) {
         statusDot.className = 'status-dot offline';
         statusText.textContent = 'Ошибка подключения';
@@ -1174,13 +1188,21 @@ function isSourcesDrawerMode() {
 }
 
 async function loadChats(search = '') {
+    const seq = ++_chatListRequestSeq;
     try {
         _chatListSearch = search;
         const qs = search ? `?q=${encodeURIComponent(search)}` : '';
         const data = await apiJson(`/api/chats${qs}`);
+        // Игнорируем устаревший ответ, если уже ушёл более новый запрос поиска.
+        if (seq !== _chatListRequestSeq) {
+            return;
+        }
         _chatListCache = data.chats || [];
         renderChatList(_chatListCache);
     } catch (error) {
+        if (seq !== _chatListRequestSeq) {
+            return;
+        }
         chatList.innerHTML = `<div class="empty-state">${escapeHtml(error.message)}</div>`;
     }
 }
@@ -2000,6 +2022,7 @@ async function readStream(response, requestId) {
             return;
         }
         streamContent.innerHTML = formatMessage(accumulated);
+        highlightCodeBlocks(streamContent);
         replaceMermaidBlocksWithPlaceholder(streamContent);
         streamRenderMetrics.renderCount += 1;
         streamRenderMetrics.accumulatedChars = accumulated.length;
@@ -2065,6 +2088,7 @@ async function readStream(response, requestId) {
                 setCurrentChatId(payload.chat_id || currentChatId);
                 ensureStreamShell();
                 streamContent.innerHTML = formatMessage(textToRender);
+                highlightCodeBlocks(streamContent);
                 renderMermaidIn(streamContent);
                 streamContent.classList.remove('streaming-in-progress');
                 linkifySourceReferences(streamShell, payload.sources || [], payload.citations || []);
@@ -2161,6 +2185,7 @@ function addMessage(text, type, details = {}) {
     content.className = 'message-content';
     if (type === 'bot') {
         content.innerHTML = formatMessage(text);
+        highlightCodeBlocks(content);
         renderMermaidIn(content);
     } else {
         if (text) {
@@ -2182,44 +2207,47 @@ function addMessage(text, type, details = {}) {
     return messageDiv;
 }
 
+function ensureMarkedConfigured() {
+    if (_markedConfigured || typeof marked === 'undefined') {
+        return;
+    }
+    // highlight в setOptions не поддерживается marked v8+; подсветка — после рендера.
+    marked.setOptions({
+        breaks: true,
+        gfm: true,
+    });
+    _markedConfigured = true;
+}
+
+function highlightCodeBlocks(container) {
+    if (!container || typeof hljs === 'undefined') {
+        return;
+    }
+    container.querySelectorAll('pre code').forEach((block) => {
+        const language = String(block.className || '').toLowerCase();
+        if (language.includes('mermaid') || looksLikeMermaid(block.textContent)) {
+            return;
+        }
+        try {
+            hljs.highlightElement(block);
+        } catch (_) {
+            /* ignore */
+        }
+    });
+}
+
 function formatMessage(text) {
     if (typeof marked !== 'undefined') {
-        marked.setOptions({
-            breaks: true,
-            gfm: true,
-            highlight: (code, lang) => {
-                if (typeof hljs !== 'undefined' && lang && hljs.getLanguage(lang)) {
-                    try {
-                        return hljs.highlight(code, {language: lang}).value;
-                    } catch (_) {
-                        return escapeHtml(code);
-                    }
-                }
-                return escapeHtml(code);
-            },
-        });
+        ensureMarkedConfigured();
         const html = marked.parse(text || '');
         if (typeof DOMPurify !== 'undefined') {
             return `<div class="markdown-content">${DOMPurify.sanitize(html)}</div>`;
         }
-        return `<div class="markdown-content">${sanitizeHtml(html)}</div>`;
+        // Без DOMPurify HTML не вставляем — только экранированный текст.
+        return `<div class="markdown-content"><pre class="markdown-fallback">${escapeHtml(text || '')}</pre></div>`;
     }
     const paragraphs = escapeHtml(text || '').split('\n\n');
     return paragraphs.map((p) => `<p>${p.replace(/\n/g, '<br>')}</p>`).join('');
-}
-
-function sanitizeHtml(html) {
-    const template = document.createElement('template');
-    template.innerHTML = html;
-    template.content.querySelectorAll('script, iframe, object, embed').forEach((node) => node.remove());
-    template.content.querySelectorAll('*').forEach((node) => {
-        [...node.attributes].forEach((attr) => {
-            if (attr.name.startsWith('on') || attr.value.startsWith('javascript:')) {
-                node.removeAttribute(attr.name);
-            }
-        });
-    });
-    return template.innerHTML;
 }
 
 function normalizeSourceLabel(value) {

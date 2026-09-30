@@ -4,7 +4,7 @@
 
 from flask import Blueprint, jsonify, request, send_file
 
-from config import get_logger
+from config import get_logger, settings
 from core.chat_attachments import (
     ChatAttachmentError,
     attachments_enabled,
@@ -35,11 +35,20 @@ def upload_chat_attachments():
     if not files:
         return jsonify({"error": "Не выбраны файлы"}), 400
 
+    # Учитываем только файлы с именем; лимит — на число файлов в запросе.
+    valid_files = [f for f in files if f and f.filename]
+    if not valid_files:
+        return jsonify({"error": "Не выбраны файлы"}), 400
+
+    max_count = int(getattr(settings, "CHAT_ATTACHMENT_MAX_COUNT", 3))
+    if len(valid_files) > max_count:
+        return jsonify({
+            "error": f"Слишком много файлов. Максимум за один запрос: {max_count}",
+        }), 400
+
     saved = []
     try:
-        for file in files:
-            if not file or not file.filename:
-                continue
+        for file in valid_files:
             item = save_uploaded_file(file)
             saved.append(item.to_metadata_dict())
     except ChatAttachmentError as e:
@@ -55,13 +64,21 @@ def upload_chat_attachments():
 
 @chat_attachments_bp.route("/attachments/<attachment_id>", methods=["GET"])
 def get_chat_attachment(attachment_id: str):
-    """Отдать файл вложения (для превью в истории чата)."""
+    """Отдать файл вложения (для превью в истории чата).
+
+    MIME определяется только по расширению. Изображения — ``inline``,
+    остальные — ``attachment``. Всегда ``X-Content-Type-Options: nosniff``.
+    """
     item = load_attachment(attachment_id)
     if not item or not item.path.is_file():
         return jsonify({"error": "Вложение не найдено"}), 404
-    return send_file(
+
+    as_attachment = item.kind != "image"
+    response = send_file(
         item.path,
         mimetype=item.mime,
-        as_attachment=False,
+        as_attachment=as_attachment,
         download_name=item.filename,
     )
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    return response

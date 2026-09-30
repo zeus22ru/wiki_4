@@ -5,7 +5,9 @@
 Загружает настройки из переменных окружения и .env файла
 """
 
+import logging
 import os
+import secrets
 import threading
 import time
 from pathlib import Path
@@ -18,6 +20,28 @@ from .validation import validate_chunk_bounds
 
 # Загружаем переменные окружения из .env файла
 load_dotenv()
+
+_logger = logging.getLogger(__name__)
+
+_DEFAULT_SECRET_KEY = "your-secret-key-here-change-in-production"
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    """Единый парсер булевых переменных окружения."""
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
+def _env_optional_int(name: str) -> Optional[int]:
+    raw = (os.getenv(name) or "").strip()
+    if not raw:
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None
 
 
 def _resolve_inference_modes() -> tuple[str, str, str]:
@@ -55,7 +79,7 @@ def _resolve_inference_modes() -> tuple[str, str, str]:
 
 _INFERENCE_BACKEND, _EMBEDDING_API_MODE, _CHAT_API_MODE = _resolve_inference_modes()
 
-_FLASK_DEBUG_RAW = (os.getenv("FLASK_DEBUG") or os.getenv("DEBUG") or "false").strip().lower()
+_FLASK_DEBUG = _env_bool("FLASK_DEBUG", _env_bool("DEBUG", False))
 
 
 class Settings:
@@ -74,9 +98,9 @@ class Settings:
     # Лимит токенов ответа: OpenAI-совместимый max_tokens, Ollama /api/generate num_predict
     CHAT_MAX_TOKENS: int = int(os.getenv("CHAT_MAX_TOKENS", "2048"))
     # Отключить thinking/reasoning у чат-модели (Qwen 3 и аналоги): enable_thinking=false в API
-    CHAT_DISABLE_THINKING: bool = os.getenv("CHAT_DISABLE_THINKING", "true").lower() in (
-        "1", "true", "yes", "on",
-    )
+    CHAT_DISABLE_THINKING: bool = _env_bool("CHAT_DISABLE_THINKING", True)
+    # Размерность эмбеддингов для OpenAI-совместимого API; None — не отправлять поле dimensions
+    EMBEDDING_DIMENSIONS: Optional[int] = _env_optional_int("EMBEDDING_DIMENSIONS")
 
     # ChromaDB настройки
     CHROMA_PERSIST_DIR: str = os.getenv("CHROMA_PERSIST_DIR", "./chroma_db")
@@ -97,9 +121,15 @@ class Settings:
     # Лимит результатов для utils.embeddings.search_documents и прочих обходов коллекции без RAGSystem
     TOP_K_RESULTS: int = int(os.getenv("TOP_K_RESULTS", "3"))
     # Режим Flask (Werkzeug debug, подробные страницы ошибок). В продакшене держите false.
-    FLASK_DEBUG: bool = _FLASK_DEBUG_RAW in ("1", "true", "yes", "on")
-    # Разрешённые Origin для CORS. Значение "*" — разрешить любые (удобно для локальной разработки).
-    CORS_ORIGINS: str = os.getenv("CORS_ORIGINS", "*")
+    FLASK_DEBUG: bool = _FLASK_DEBUG
+    # Разрешённые Origin для CORS. Пусто — same-origin; "*" — любые (только явно).
+    CORS_ORIGINS: str = os.getenv("CORS_ORIGINS", "")
+    # Доверять X-Forwarded-* (ProxyFix) при работе за reverse proxy
+    TRUST_PROXY: bool = _env_bool("TRUST_PROXY", False)
+    # Заголовки безопасности в after_request
+    SECURITY_HEADERS_ENABLED: bool = _env_bool("SECURITY_HEADERS_ENABLED", True)
+    # Максимальная длина текста сообщения чата
+    CHAT_MESSAGE_MAX_CHARS: int = int(os.getenv("CHAT_MESSAGE_MAX_CHARS", "1000"))
 
     # RAG настройка
     # Число чанков, запрашиваемых из Chroma в RAGSystem.retrieve_documents / query
@@ -118,45 +148,33 @@ class Settings:
     RRF_K_CONSTANT: int = int(os.getenv("RRF_K_CONSTANT", "60"))
     # Делитель для отображения RRF-скора как «релевантности» до rerank
     RRF_SCORE_NORMALIZER: float = float(os.getenv("RRF_SCORE_NORMALIZER", "0.15"))
-    RERANK_ENABLED: bool = os.getenv("RERANK_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    RERANK_ENABLED: bool = _env_bool("RERANK_ENABLED", False)
     RERANK_MODEL: str = os.getenv("RERANK_MODEL", "cross-encoder/ms-marco-MiniLM-L-6-v2")
     RERANK_TOP_N: int = int(os.getenv("RERANK_TOP_N", "20"))
     RERANK_MAX_TEXT_CHARS: int = int(os.getenv("RERANK_MAX_TEXT_CHARS", "4000"))
     RERANK_TIMEOUT_SECONDS: float = float(os.getenv("RERANK_TIMEOUT_SECONDS", "15"))
 
     # Структурные чанки и Contextual Retrieval (при индексации)
-    STRUCTURAL_CHUNKING_ENABLED: bool = os.getenv("STRUCTURAL_CHUNKING_ENABLED", "true").lower() in (
-        "1", "true", "yes", "on",
-    )
+    STRUCTURAL_CHUNKING_ENABLED: bool = _env_bool("STRUCTURAL_CHUNKING_ENABLED", True)
     STRUCTURAL_CHUNK_MAX_CHARS: int = int(os.getenv("STRUCTURAL_CHUNK_MAX_CHARS", "1200"))
     STRUCTURAL_CHUNK_MIN_CHARS: int = int(os.getenv("STRUCTURAL_CHUNK_MIN_CHARS", "80"))
-    CONTEXTUAL_RETRIEVAL_ENABLED: bool = os.getenv("CONTEXTUAL_RETRIEVAL_ENABLED", "false").lower() in (
-        "1", "true", "yes", "on",
-    )
+    CONTEXTUAL_RETRIEVAL_ENABLED: bool = _env_bool("CONTEXTUAL_RETRIEVAL_ENABLED", False)
     CONTEXTUAL_RETRIEVAL_MAX_CHUNKS: int = int(os.getenv("CONTEXTUAL_RETRIEVAL_MAX_CHUNKS", "80"))
 
     # Зачёркнутый текст в HTML wiki: mark — [УСТАРЕЛО: …], exclude — не индексировать, keep — как раньше
     STRIKETHROUGH_INDEX_MODE: str = os.getenv("STRIKETHROUGH_INDEX_MODE", "mark").strip().lower()
 
     # Память диалога: переписывание запроса, HyDE, multi-query
-    CONVERSATIONAL_REWRITE_ENABLED: bool = os.getenv("CONVERSATIONAL_REWRITE_ENABLED", "true").lower() in (
-        "1", "true", "yes", "on",
-    )
-    RAG_MULTI_QUERY_ENABLED: bool = os.getenv("RAG_MULTI_QUERY_ENABLED", "false").lower() in (
-        "1", "true", "yes", "on",
-    )
-    RAG_HYDE_ENABLED: bool = os.getenv("RAG_HYDE_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    CONVERSATIONAL_REWRITE_ENABLED: bool = _env_bool("CONVERSATIONAL_REWRITE_ENABLED", True)
+    RAG_MULTI_QUERY_ENABLED: bool = _env_bool("RAG_MULTI_QUERY_ENABLED", False)
+    RAG_HYDE_ENABLED: bool = _env_bool("RAG_HYDE_ENABLED", False)
     RAG_QUERY_EXPANSION_MAX_MESSAGES: int = int(os.getenv("RAG_QUERY_EXPANSION_MAX_MESSAGES", "6"))
     # Короткие приветствия / small talk — ответ без поиска по Chroma
-    RAG_CHITCHAT_SKIP_RETRIEVAL: bool = os.getenv("RAG_CHITCHAT_SKIP_RETRIEVAL", "true").lower() in (
-        "1", "true", "yes", "on",
-    )
+    RAG_CHITCHAT_SKIP_RETRIEVAL: bool = _env_bool("RAG_CHITCHAT_SKIP_RETRIEVAL", True)
 
     # Deep retrieval (DeepResearch-подобный многошаговый поиск)
     # Если включено, retrieval может делать несколько итераций поиска с дозапросами.
-    DEEP_RETRIEVAL_ENABLED: bool = os.getenv("DEEP_RETRIEVAL_ENABLED", "false").lower() in (
-        "1", "true", "yes", "on",
-    )
+    DEEP_RETRIEVAL_ENABLED: bool = _env_bool("DEEP_RETRIEVAL_ENABLED", False)
     # Максимум итераций поиска (включая первичную).
     DEEP_RETRIEVAL_MAX_ITERS: int = int(os.getenv("DEEP_RETRIEVAL_MAX_ITERS", "3"))
     # Сколько новых запросов добавлять на каждой итерации (кроме первой).
@@ -168,42 +186,36 @@ class Settings:
 
     # Mermaid автофикс (после генерации ответа)
     # Включает дополнительный LLM-вызов для попытки исправить Mermaid в ```mermaid``` блоках
-    MERMAID_AUTOFIX_ENABLED: bool = os.getenv("MERMAID_AUTOFIX_ENABLED", "true").lower() in (
-        "1", "true", "yes", "on",
-    )
+    MERMAID_AUTOFIX_ENABLED: bool = _env_bool("MERMAID_AUTOFIX_ENABLED", True)
     # Подробный лог Mermaid-автофикса (включайте временно для отладки)
-    MERMAID_AUTOFIX_LOG_ENABLED: bool = os.getenv("MERMAID_AUTOFIX_LOG_ENABLED", "false").lower() in (
-        "1", "true", "yes", "on",
-    )
+    MERMAID_AUTOFIX_LOG_ENABLED: bool = _env_bool("MERMAID_AUTOFIX_LOG_ENABLED", False)
 
     # Logging настройки
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
     LOG_DIR: str = os.getenv("LOG_DIR", "./logs")
     # Отдельный лог обмена с LLM (вопрос/контекст/ответ/метрики) для калибровки
-    LLM_EXCHANGE_LOG_ENABLED: bool = os.getenv("LLM_EXCHANGE_LOG_ENABLED", "true").lower() in (
-        "1", "true", "yes", "on",
-    )
+    LLM_EXCHANGE_LOG_ENABLED: bool = _env_bool("LLM_EXCHANGE_LOG_ENABLED", True)
+    # Полный промпт в логе обмена (по умолчанию — только превью)
+    LLM_EXCHANGE_LOG_FULL: bool = _env_bool("LLM_EXCHANGE_LOG_FULL", False)
     # Обрезка крупных полей в логе (промпт/ответ/контекст)
     LLM_EXCHANGE_LOG_MAX_CHARS: int = int(os.getenv("LLM_EXCHANGE_LOG_MAX_CHARS", "20000"))
 
     # Security настройки
-    SECRET_KEY: str = os.getenv("SECRET_KEY", "your-secret-key-here-change-in-production")
-    JWT_SECRET_KEY: str = os.getenv("JWT_SECRET_KEY", "your-jwt-secret-key-change-in-production")
-    JWT_EXPIRATION_HOURS: int = int(os.getenv("JWT_EXPIRATION_HOURS", "24"))
+    SECRET_KEY: str = os.getenv("SECRET_KEY", _DEFAULT_SECRET_KEY)
+    # Падать при дефолтном SECRET_KEY в non-debug, вместо генерации на процесс
+    REQUIRE_SECRETS: bool = _env_bool("REQUIRE_SECRETS", False)
     API_KEY: str = os.getenv("API_KEY", "")
     ADMIN_API_KEY: str = os.getenv("ADMIN_API_KEY", "")
 
     # GitHub Issues (user-reports из интерфейса; без токена — заглушка)
-    GITHUB_ISSUES_ENABLED: bool = os.getenv("GITHUB_ISSUES_ENABLED", "true").lower() in (
-        "1", "true", "yes", "on",
-    )
+    GITHUB_ISSUES_ENABLED: bool = _env_bool("GITHUB_ISSUES_ENABLED", True)
     GITHUB_TOKEN: str = os.getenv("GITHUB_TOKEN", "")
     GITHUB_REPO: str = os.getenv("GITHUB_REPO", "")
     GITHUB_ISSUE_LABELS: str = os.getenv("GITHUB_ISSUE_LABELS", "user-report")
     GITHUB_ISSUES_RATE_LIMIT_PER_HOUR: int = int(os.getenv("GITHUB_ISSUES_RATE_LIMIT_PER_HOUR", "3"))
 
     # Bitrix24 chatbot integration
-    BITRIX24_ENABLED: bool = os.getenv("BITRIX24_ENABLED", "false").lower() == "true"
+    BITRIX24_ENABLED: bool = _env_bool("BITRIX24_ENABLED", False)
     BITRIX24_WEBHOOK_URL: str = os.getenv("BITRIX24_WEBHOOK_URL", "")
     BITRIX24_BOT_ID: Optional[int] = (
         int(os.getenv("BITRIX24_BOT_ID"))
@@ -217,25 +229,26 @@ class Settings:
     BITRIX24_INTERNAL_API_KEY: str = os.getenv("BITRIX24_INTERNAL_API_KEY", os.getenv("API_KEY", ""))
 
     # Telegram bot integration
-    TELEGRAM_ENABLED: bool = os.getenv("TELEGRAM_ENABLED", "false").lower() == "true"
+    TELEGRAM_ENABLED: bool = _env_bool("TELEGRAM_ENABLED", False)
     TELEGRAM_BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
     TELEGRAM_BOT_USERNAME: str = os.getenv("TELEGRAM_BOT_USERNAME", "").lstrip("@")
-    TELEGRAM_WEBAPP_ENABLED: bool = os.getenv(
-        "TELEGRAM_WEBAPP_ENABLED", os.getenv("TELEGRAM_ENABLED", "false")
-    ).lower() == "true"
+    TELEGRAM_WEBAPP_ENABLED: bool = _env_bool(
+        "TELEGRAM_WEBAPP_ENABLED",
+        _env_bool("TELEGRAM_ENABLED", False),
+    )
     TELEGRAM_WEBAPP_MAX_AGE_SECONDS: int = int(os.getenv("TELEGRAM_WEBAPP_MAX_AGE_SECONDS", "3600"))
     TELEGRAM_WEBAPP_URL: str = os.getenv("TELEGRAM_WEBAPP_URL", "")
     TELEGRAM_POLL_INTERVAL_SECONDS: int = int(os.getenv("TELEGRAM_POLL_INTERVAL_SECONDS", "2"))
     TELEGRAM_OFFSET_PATH: str = os.getenv("TELEGRAM_OFFSET_PATH", "./data/telegram_update_offset.json")
     TELEGRAM_INTERNAL_API_URL: str = os.getenv("TELEGRAM_INTERNAL_API_URL", f"http://127.0.0.1:{API_PORT}")
-    TELEGRAM_INTERNAL_API_KEY: str = os.getenv("TELEGRAM_INTERNAL_API_KEY", os.getenv("API_KEY", "API_KEY"))
+    TELEGRAM_INTERNAL_API_KEY: str = os.getenv("TELEGRAM_INTERNAL_API_KEY", os.getenv("API_KEY", ""))
     TELEGRAM_LINK_CODE_TTL_SECONDS: int = int(os.getenv("TELEGRAM_LINK_CODE_TTL_SECONDS", "86400"))
     TELEGRAM_STREAM_EDIT_INTERVAL_MS: int = int(os.getenv("TELEGRAM_STREAM_EDIT_INTERVAL_MS", "800"))
     TELEGRAM_MAX_MESSAGE_LENGTH: int = int(os.getenv("TELEGRAM_MAX_MESSAGE_LENGTH", "4096"))
-    TELEGRAM_SHOW_SOURCES: bool = os.getenv("TELEGRAM_SHOW_SOURCES", "false").lower() == "true"
-    TELEGRAM_RICH_MESSAGES: bool = os.getenv("TELEGRAM_RICH_MESSAGES", "true").lower() == "true"
+    TELEGRAM_SHOW_SOURCES: bool = _env_bool("TELEGRAM_SHOW_SOURCES", False)
+    TELEGRAM_RICH_MESSAGES: bool = _env_bool("TELEGRAM_RICH_MESSAGES", True)
     TELEGRAM_RICH_MAX_CHARS: int = int(os.getenv("TELEGRAM_RICH_MAX_CHARS", "32000"))
-    TELEGRAM_MERMAID_IMAGES: bool = os.getenv("TELEGRAM_MERMAID_IMAGES", "true").lower() == "true"
+    TELEGRAM_MERMAID_IMAGES: bool = _env_bool("TELEGRAM_MERMAID_IMAGES", True)
     TELEGRAM_MMDC_CMD: str = os.getenv("TELEGRAM_MMDC_CMD", "mmdc")
     TELEGRAM_MMDC_TIMEOUT_SECONDS: int = int(os.getenv("TELEGRAM_MMDC_TIMEOUT_SECONDS", "30"))
     TELEGRAM_MERMAID_MAX_DIAGRAMS: int = int(os.getenv("TELEGRAM_MERMAID_MAX_DIAGRAMS", "5"))
@@ -247,7 +260,7 @@ class Settings:
     DATABASE_PATH: str = os.getenv("DATABASE_PATH", "./data/wiki_qa.db")
 
     # Cache настройки
-    CACHE_ENABLED: bool = os.getenv("CACHE_ENABLED", "true").lower() == "true"
+    CACHE_ENABLED: bool = _env_bool("CACHE_ENABLED", True)
     CACHE_TTL: int = int(os.getenv("CACHE_TTL", "3600"))  # 1 час по умолчанию
     CACHE_DIR: str = os.getenv("CACHE_DIR", "./cache")
 
@@ -259,25 +272,26 @@ class Settings:
     ).split(",")
 
     # Вложения к вопросу в чате (скриншоты, текстовые файлы)
-    CHAT_ATTACHMENTS_ENABLED: bool = os.getenv("CHAT_ATTACHMENTS_ENABLED", "true").lower() in (
-        "1", "true", "yes", "on",
-    )
+    CHAT_ATTACHMENTS_ENABLED: bool = _env_bool("CHAT_ATTACHMENTS_ENABLED", True)
     CHAT_ATTACHMENTS_DIR: str = os.getenv("CHAT_ATTACHMENTS_DIR", "./data/chat_attachments")
     CHAT_ATTACHMENT_MAX_COUNT: int = int(os.getenv("CHAT_ATTACHMENT_MAX_COUNT", "3"))
     CHAT_ATTACHMENT_MAX_BYTES: int = int(os.getenv("CHAT_ATTACHMENT_MAX_BYTES", "5242880"))
     CHAT_ATTACHMENT_TEXT_MAX_CHARS: int = int(os.getenv("CHAT_ATTACHMENT_TEXT_MAX_CHARS", "32000"))
+    CHAT_ATTACHMENT_TTL_HOURS: int = int(os.getenv("CHAT_ATTACHMENT_TTL_HOURS", "72"))
     CHAT_ATTACHMENT_ALLOWED_EXTENSIONS: list = os.getenv(
         "CHAT_ATTACHMENT_ALLOWED_EXTENSIONS",
         "png,jpg,jpeg,webp,gif,txt,log,md,json,xml,csv,yaml,yml,ini,env",
     ).split(",")
 
     def __init__(self):
-        """Инициализация настроек и создание необходимых директорий"""
+        """Инициализация настроек (каталоги создаются через ensure_directories)."""
         validate_chunk_bounds(self.CHUNK_SIZE, self.CHUNK_OVERLAP)
-        self._create_directories()
+        self._directories_ready = False
 
-    def _create_directories(self):
-        """Создание необходимых директорий"""
+    def ensure_directories(self) -> None:
+        """Ленивое создание рабочих каталогов (идемпотентно)."""
+        if getattr(self, "_directories_ready", False):
+            return
         directories = [
             self.CHROMA_PERSIST_DIR,
             self.DATA_DIR,
@@ -286,27 +300,36 @@ class Settings:
             self.CACHE_DIR,
             self.CHAT_ATTACHMENTS_DIR,
         ]
-
         for directory in directories:
             Path(directory).mkdir(parents=True, exist_ok=True)
         Path(self.BITRIX24_EVENT_OFFSET_PATH).parent.mkdir(parents=True, exist_ok=True)
         Path(self.TELEGRAM_OFFSET_PATH).parent.mkdir(parents=True, exist_ok=True)
-        Path(self.TELEGRAM_OFFSET_PATH).parent.mkdir(parents=True, exist_ok=True)
+        self._directories_ready = True
 
     def validate(self) -> bool:
-        """Валидация настроек"""
-        errors = []
+        """Валидация секретов для non-debug режима."""
+        if self.FLASK_DEBUG:
+            return True
 
-        if not self.SECRET_KEY or self.SECRET_KEY == "your-secret-key-here-change-in-production":
-            errors.append("SECRET_KEY должен быть установлен в production")
+        secret_missing = (
+            not self.SECRET_KEY
+            or self.SECRET_KEY == _DEFAULT_SECRET_KEY
+        )
+        if not secret_missing:
+            return True
 
-        if not self.JWT_SECRET_KEY or self.JWT_SECRET_KEY == "your-jwt-secret-key-change-in-production":
-            errors.append("JWT_SECRET_KEY должен быть установлен в production")
+        if self.REQUIRE_SECRETS:
+            raise ValueError(
+                "SECRET_KEY должен быть задан явно при REQUIRE_SECRETS=true "
+                "(не используйте значение из .env.example)."
+            )
 
-        if errors:
-            for error in errors:
-                print(f"WARNING: {error}")
-            return False
+        self.SECRET_KEY = secrets.token_hex(32)
+        _logger.warning(
+            "SECRET_KEY не задан или использует значение по умолчанию — "
+            "сгенерирован случайный ключ на процесс. Задайте SECRET_KEY в .env "
+            "для стабильных сессий между перезапусками."
+        )
         return True
 
     def get_ollama_api_url(self) -> str:

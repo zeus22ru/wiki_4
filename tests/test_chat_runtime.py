@@ -1,6 +1,10 @@
 from unittest.mock import patch
 
-from config.chat_runtime import resolve_chat_rag_options, rag_chat_defaults
+from config.chat_runtime import (
+    normalize_answer_mode,
+    resolve_chat_rag_options,
+    rag_chat_defaults,
+)
 
 
 @patch("config.chat_runtime.settings")
@@ -90,3 +94,28 @@ def test_resolve_chat_rag_options_defaults_unknown_answer_mode(mock_settings):
     options = resolve_chat_rag_options({"answer_mode": "surprise"})
 
     assert options["answer_mode"] == "default"
+
+
+def test_normalize_answer_mode_aliases():
+    assert normalize_answer_mode("кратко") == "brief"
+    assert normalize_answer_mode("инструкция") == "employee_instruction"
+    assert normalize_answer_mode("подробно") == "default"
+    assert normalize_answer_mode("по_источникам") == "default"
+    assert normalize_answer_mode("по_шагам") == "default"
+    assert normalize_answer_mode("неизвестно") == "default"
+    assert normalize_answer_mode(None) == "default"
+
+
+@patch("config.chat_runtime.settings")
+def test_resolve_chat_rag_options_normalizes_russian_modes(mock_settings):
+    mock_settings.RAG_TOP_K = 10
+    mock_settings.RAG_MIN_SCORE = 0.38
+    mock_settings.RAG_MAX_CITATIONS = 7
+    mock_settings.RAG_MAX_CONTEXT_LENGTH = 90000
+    mock_settings.RAG_QUERY_EXPANSION_MAX_MESSAGES = 8
+    mock_settings.DEEP_RETRIEVAL_ENABLED = False
+    mock_settings.RETRIEVAL_MODE = "hybrid"
+    mock_settings.RERANK_ENABLED = False
+
+    assert resolve_chat_rag_options({"answer_mode": "кратко"})["answer_mode"] == "brief"
+    assert resolve_chat_rag_options({"answer_mode": "инструкция"})["answer_mode"] == "employee_instruction"

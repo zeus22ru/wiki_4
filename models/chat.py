@@ -37,17 +37,6 @@ class ChatSession:
         }
     
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'ChatSession':
-        """Создать из словаря"""
-        return cls(
-            id=data.get('id'),
-            user_id=data.get('user_id'),
-            title=data.get('title', 'Новый чат'),
-            created_at=datetime.fromisoformat(data['created_at']) if data.get('created_at') else None,
-            updated_at=datetime.fromisoformat(data['updated_at']) if data.get('updated_at') else None
-        )
-    
-    @classmethod
     def from_row(cls, row: tuple) -> 'ChatSession':
         """Создать из строки базы данных"""
         return cls(
@@ -152,21 +141,6 @@ class Message:
         if self.retrieval_query_text:
             d['retrieval_query_text'] = self.retrieval_query_text
         return d
-    
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'Message':
-        """Создать из словаря"""
-        return cls(
-            id=data.get('id'),
-            session_id=data.get('session_id'),
-            role=data.get('role', 'user'),
-            content=data.get('content', ''),
-            sources=data.get('sources', []),
-            citations=data.get('citations', []),
-            metadata=data.get('metadata', {}),
-            created_at=datetime.fromisoformat(data['created_at']) if data.get('created_at') else None,
-            retrieval_query_text=data.get('retrieval_query_text'),
-        )
     
     @classmethod
     def from_row(cls, row: tuple) -> 'Message':

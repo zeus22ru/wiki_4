@@ -131,7 +131,7 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
         logger.info(f"Загружена векторная база данных: {count} документов")
     except Exception as e:
         logger.error(f"Ошибка при загрузке векторной базы данных: {e}")
-        logger.error(f"Запустите сначала create_vector_db.py для создания базы")
+        logger.error("Запустите сначала create_vector_db.py для создания базы")
         return
     
     # Определяем режим работы

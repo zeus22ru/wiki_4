@@ -70,7 +70,6 @@ def test_hybrid_retrieve_one_embed_resolve(mock_resolve, mock_parallel):
             collection,
             ["q1", "q2"],
             ["q1"],
-            lambda _q: None,
             top_k=2,
             min_score=0.0,
             reload_collection=lambda: collection,
@@ -109,7 +108,6 @@ def test_hybrid_retrieve_reports_stage_timings(mock_resolve, mock_parallel):
             collection,
             ["q1"],
             ["q1"],
-            lambda _q: None,
             top_k=1,
             min_score=0.0,
             reload_collection=lambda: collection,
@@ -149,7 +147,6 @@ def test_hybrid_retrieve_uses_sparse_fallback_when_dense_fails(mock_resolve):
             collection,
             ["q1"],
             ["q1"],
-            lambda _q: None,
             top_k=1,
             min_score=0.0,
             reload_collection=lambda: collection,
@@ -278,3 +275,151 @@ def test_rerank_cross_encoder_timeout_falls_back(monkeypatch):
     docs = [{"text": "doc", "score": 0.1, "metadata": {}, "chunk_id": "a"}]
 
     assert retrieval.rerank_cross_encoder("query", docs) == docs
+
+
+def test_rrf_score_normalized_to_one_when_first_everywhere(monkeypatch):
+    """Документ №1 во всех ранжированиях имеет score 1.0; min_score=0.5 не отсекает."""
+    import core.retrieval as retrieval
+
+    collection = MagicMock()
+    collection.get.return_value = {
+        "ids": ["a"],
+        "documents": ["doc a"],
+        "metadatas": [{}],
+    }
+
+    monkeypatch.setattr(retrieval.settings, "RETRIEVAL_MODE", "hybrid")
+    monkeypatch.setattr(retrieval.settings, "RAG_FUSION_CANDIDATES", 10)
+    monkeypatch.setattr(retrieval.settings, "RERANK_TOP_N", 10)
+    monkeypatch.setattr(retrieval.settings, "RERANK_ENABLED", False)
+    monkeypatch.setattr(retrieval.settings, "RRF_K_CONSTANT", 60)
+    monkeypatch.setattr(retrieval.settings, "RRF_SCORE_NORMALIZER", 0.15)
+
+    with patch("core.retrieval.resolve_dense_embeddings") as mock_resolve, \
+         patch("core.retrieval._dense_rankings_parallel") as mock_parallel:
+        mock_resolve.return_value = ({"q1": _fake_vector(1.0)}, True)
+        mock_parallel.return_value = [["a"]]
+        bm25 = MagicMock()
+        bm25.get_scores.return_value = [10.0]
+
+        docs, err, diag = retrieval.hybrid_retrieve(
+            collection,
+            ["q1"],
+            ["q1"],
+            top_k=1,
+            min_score=0.5,
+            reload_collection=lambda: collection,
+            bm25_bundle=(bm25, ["a"]),
+            embedding_cache={},
+        )
+
+    assert err is None
+    assert len(docs) == 1
+    assert docs[0]["score"] == 1.0
+    assert diag["rrf_num_rankings"] == 2
+
+
+def test_rerank_sorts_full_list_by_score(monkeypatch):
+    """После rerank хвост не должен иметь score выше переранжированных."""
+    import core.retrieval as retrieval
+
+    class FakeModel:
+        def predict(self, pairs, show_progress_bar=False):
+            # низкий logit для первого документа
+            return [-5.0]
+
+    monkeypatch.setattr(retrieval.settings, "RERANK_ENABLED", True)
+    monkeypatch.setattr(retrieval.settings, "RERANK_MODEL", "fake")
+    monkeypatch.setattr(retrieval.settings, "RERANK_MAX_TEXT_CHARS", 4000)
+    monkeypatch.setattr(retrieval.settings, "RERANK_TIMEOUT_SECONDS", 0)
+    monkeypatch.setattr(retrieval, "_cross_encoder_model", FakeModel())
+    monkeypatch.setattr(retrieval, "_cross_encoder_name", "fake")
+
+    docs = [
+        {"text": "low after rerank", "score": 0.99, "metadata": {}, "chunk_id": "a"},
+        {"text": "tail high rrf", "score": 0.9, "metadata": {}, "chunk_id": "b"},
+    ]
+    out = retrieval.rerank_cross_encoder("q", docs, top_n=1)
+    assert out[0]["chunk_id"] == "b"
+    assert out[0]["score"] >= out[1]["score"]
+
+
+def test_sparse_without_bm25_returns_search_error(monkeypatch):
+    import core.retrieval as retrieval
+
+    monkeypatch.setattr(retrieval.settings, "RETRIEVAL_MODE", "sparse")
+    monkeypatch.setattr(retrieval.settings, "RAG_FUSION_CANDIDATES", 10)
+    monkeypatch.setattr(retrieval.settings, "RERANK_TOP_N", 10)
+    monkeypatch.setattr(retrieval.settings, "RERANK_ENABLED", False)
+    monkeypatch.setattr(retrieval, "_BM25_AVAILABLE", True)
+
+    with patch("core.retrieval.load_bm25_okapi", return_value=None):
+        docs, err, diag = retrieval.hybrid_retrieve(
+            MagicMock(),
+            ["q"],
+            ["q"],
+            top_k=1,
+            min_score=0.0,
+            reload_collection=lambda: MagicMock(),
+            bm25_bundle=None,
+        )
+
+    assert docs == []
+    assert err == "search_error"
+    assert diag.get("bm25_unavailable") is True
+
+
+def test_unknown_retrieval_mode_falls_back_to_hybrid(monkeypatch):
+    import core.retrieval as retrieval
+
+    collection = MagicMock()
+    collection.get.return_value = {
+        "ids": ["a"],
+        "documents": ["doc a"],
+        "metadatas": [{}],
+    }
+    monkeypatch.setattr(retrieval.settings, "RETRIEVAL_MODE", "weird_mode")
+    monkeypatch.setattr(retrieval.settings, "RAG_FUSION_CANDIDATES", 10)
+    monkeypatch.setattr(retrieval.settings, "RERANK_TOP_N", 10)
+    monkeypatch.setattr(retrieval.settings, "RERANK_ENABLED", False)
+    monkeypatch.setattr(retrieval.settings, "RRF_K_CONSTANT", 60)
+    monkeypatch.setattr(retrieval.settings, "RRF_SCORE_NORMALIZER", 0.15)
+
+    with patch("core.retrieval.resolve_dense_embeddings") as mock_resolve, \
+         patch("core.retrieval._dense_rankings_parallel") as mock_parallel:
+        mock_resolve.return_value = ({"q1": _fake_vector(1.0)}, True)
+        mock_parallel.return_value = [["a"]]
+        docs, err, diag = retrieval.hybrid_retrieve(
+            collection,
+            ["q1"],
+            ["q1"],
+            top_k=1,
+            min_score=0.0,
+            reload_collection=lambda: collection,
+            bm25_bundle=None,
+        )
+
+    assert err is None
+    assert diag["retrieval_mode"] == "hybrid"
+    assert docs[0]["chunk_id"] == "a"
+
+
+def test_save_bm25_index_atomic_json_gzip(monkeypatch, tmp_path):
+    import gzip
+    import json
+    import core.retrieval as retrieval
+
+    monkeypatch.setattr(retrieval.settings, "CHROMA_PERSIST_DIR", str(tmp_path))
+    monkeypatch.setattr(retrieval.settings, "BM25_INDEX_FILENAME", "bm25.json.gz")
+    monkeypatch.setattr(retrieval.settings, "CHROMA_COLLECTION_NAME", "wiki_test")
+    monkeypatch.setattr(retrieval, "_BM25_AVAILABLE", True)
+    retrieval.invalidate_bm25_cache()
+
+    retrieval.save_bm25_index(["x"], ["текст"])
+    path = tmp_path / "bm25.json.gz"
+    assert path.is_file()
+    with gzip.open(path, "rt", encoding="utf-8") as f:
+        payload = json.load(f)
+    assert payload["ids"] == ["x"]
+    assert payload["texts"] == ["текст"]
+    assert payload.get("format") == "json_gzip"

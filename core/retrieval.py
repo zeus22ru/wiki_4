@@ -2,17 +2,29 @@
 # -*- coding: utf-8 -*-
 """
 Гибридный поиск: плотный (Chroma) + BM25, слияние RRF, опциональный cross-encoder rerank.
+
+Шкала score (контракт K5):
+- dense: ``1 - distance``, clamp в [0, 1];
+- hybrid/sparse без rerank: ``rrf_score / max_possible_rrf``, где
+  ``max_possible_rrf = число_ранжирований / (RRF_K + 1)``, clamp в [0, 1].
+  Порог ``min_score`` в hybrid относится к этой нормализованной шкале.
+  Если ``RRF_SCORE_NORMALIZER`` задан явно (не дефолт 0.15), используется как
+  делитель-фолбэк вместо ``max_possible_rrf``.
 """
 
 from __future__ import annotations
 
+import gzip
+import heapq
+import json
 import math
+import os
 import pickle
-import queue
 import re
 import threading
 import time
 from collections import defaultdict
+from concurrent.futures import Future, ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from pathlib import Path
 from typing import Any, Callable, DefaultDict, Dict, List, MutableMapping, Optional, Sequence, Tuple
 
@@ -23,6 +35,8 @@ from chromadb.errors import NotFoundError
 from config import settings, get_logger
 
 logger = get_logger(__name__)
+
+_DEFAULT_RRF_SCORE_NORMALIZER = 0.15
 
 # BM25 (лёгкая зависимость)
 try:
@@ -42,6 +56,11 @@ _cross_encoder_model = None
 _cross_encoder_name: Optional[str] = None
 _BM25_CACHE_LOCK = threading.Lock()
 _BM25_CACHE: Optional[Dict[str, Any]] = None
+
+# Один общий executor для rerank: не плодить потоки при повторных таймаутах
+_RERANK_EXECUTOR = ThreadPoolExecutor(max_workers=1)
+_RERANK_INFLIGHT: Optional[Future] = None
+_RERANK_LOCK = threading.Lock()
 
 
 def _tokenize_bm25(text: str) -> List[str]:
@@ -76,7 +95,11 @@ def _bm25_file_signature(path: Path) -> Optional[Tuple[str, str, int, int]]:
 
 
 def save_bm25_index(ids: List[str], texts: List[str]) -> None:
-    """Сохранить корпус для BM25 (тот же порядок id, что в Chroma)."""
+    """
+    Сохранить корпус для BM25 (тот же порядок id, что в Chroma).
+
+    Запись атомарна: временный файл + ``os.replace``. Формат — JSON в gzip.
+    """
     if not _BM25_AVAILABLE:
         logger.warning(
             "Индекс BM25 не сохранён: установите пакет rank-bm25 "
@@ -88,15 +111,49 @@ def save_bm25_index(ids: List[str], texts: List[str]) -> None:
     path = bm25_index_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
-        "version": 1,
+        "version": 2,
+        "format": "json_gzip",
         "collection": settings.CHROMA_COLLECTION_NAME,
         "ids": ids,
         "texts": texts,
     }
-    with open(path, "wb") as f:
-        pickle.dump(payload, f, protocol=pickle.HIGHEST_PROTOCOL)
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    try:
+        with gzip.open(tmp_path, "wt", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False)
+        os.replace(tmp_path, path)
+    except Exception:
+        try:
+            if tmp_path.exists():
+                tmp_path.unlink()
+        except OSError:
+            pass
+        raise
     invalidate_bm25_cache()
     logger.info("Сохранён BM25-индекс: %s (%s документов)", path, len(ids))
+
+
+def _load_bm25_payload(path: Path) -> Optional[Dict[str, Any]]:
+    """Прочитать BM25: сначала gzip+JSON, затем pickle (миграция)."""
+    try:
+        with gzip.open(path, "rt", encoding="utf-8") as f:
+            payload = json.load(f)
+        if isinstance(payload, dict) and "ids" in payload:
+            return payload
+    except Exception:
+        pass
+    try:
+        with open(path, "rb") as f:
+            payload = pickle.load(f)
+        if isinstance(payload, dict) and "ids" in payload:
+            logger.warning(
+                "BM25-индекс %s в устаревшем формате pickle — будет перезаписан при следующей индексации",
+                path,
+            )
+            return payload
+    except Exception as e:
+        logger.warning("Не удалось прочитать BM25-индекс: %s", e)
+    return None
 
 
 def load_bm25_corpus() -> Optional[Tuple[List[str], List[str]]]:
@@ -104,11 +161,8 @@ def load_bm25_corpus() -> Optional[Tuple[List[str], List[str]]]:
     path = bm25_index_path()
     if not path.is_file():
         return None
-    try:
-        with open(path, "rb") as f:
-            payload = pickle.load(f)
-    except Exception as e:
-        logger.warning("Не удалось прочитать BM25-индекс: %s", e)
+    payload = _load_bm25_payload(path)
+    if not payload:
         return None
     ids = payload.get("ids") or []
     texts = payload.get("texts") or []
@@ -165,30 +219,51 @@ def reciprocal_rank_fusion(
     return ordered
 
 
+def _normalize_rrf_score(rrf_score: float, num_rankings: int, rrf_k: int) -> float:
+    """
+    Нормализовать сырой RRF в [0, 1].
+
+    ``max_possible_rrf = num_rankings / (RRF_K + 1)`` — оценка, если документ
+    занимает 1-е место во всех ранжированиях.
+    Если ``RRF_SCORE_NORMALIZER`` задан явно (≠ дефолт 0.15), используем его
+    как делитель-фолбэк.
+    """
+    explicit = float(getattr(settings, "RRF_SCORE_NORMALIZER", _DEFAULT_RRF_SCORE_NORMALIZER))
+    if abs(explicit - _DEFAULT_RRF_SCORE_NORMALIZER) > 1e-12:
+        denom = explicit
+    else:
+        denom = float(num_rankings) / float(max(1, rrf_k) + 1) if num_rankings > 0 else 1.0
+    if denom <= 0:
+        denom = 1.0
+    return max(0.0, min(1.0, float(rrf_score) / denom))
+
+
 def _get_cross_encoder():
+    """Ленивая загрузка cross-encoder; кэш проверяется ДО import sentence_transformers."""
     global _cross_encoder_model, _cross_encoder_name
     if not settings.RERANK_ENABLED:
         return None
     name = (settings.RERANK_MODEL or "").strip()
     if not name:
         return None
+    if _cross_encoder_model is not None and _cross_encoder_name == name:
+        return _cross_encoder_model
     try:
         from sentence_transformers import CrossEncoder
     except ImportError:
         logger.warning("sentence-transformers не установлен — rerank отключён")
         return None
-    if _cross_encoder_model is None or _cross_encoder_name != name:
-        logger.info("Загрузка cross-encoder: %s", name)
-        try:
-            _cross_encoder_model = CrossEncoder(name)
-            _cross_encoder_name = name
-        except Exception as e:
-            logger.warning(
-                "Не удалось загрузить cross-encoder %s — rerank пропущен, поиск продолжается без него: %s",
-                name,
-                e,
-            )
-            return None
+    logger.info("Загрузка cross-encoder: %s", name)
+    try:
+        _cross_encoder_model = CrossEncoder(name)
+        _cross_encoder_name = name
+    except Exception as e:
+        logger.warning(
+            "Не удалось загрузить cross-encoder %s — rerank пропущен, поиск продолжается без него: %s",
+            name,
+            e,
+        )
+        return None
     return _cross_encoder_model
 
 
@@ -204,7 +279,12 @@ def rerank_cross_encoder(
     documents: List[Dict[str, Any]],
     top_n: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
-    """Переранжировать документы cross-encoder; score заменяется на sigmoid(logit)."""
+    """
+    Переранжировать документы cross-encoder; score заменяется на sigmoid(logit).
+
+    Документы за пределами ``top_n`` сохраняются, но весь список затем
+    сортируется по score (чтобы хвост не оказывался выше переранжированных).
+    """
     model = _get_cross_encoder()
     if model is None or not documents:
         return documents
@@ -233,34 +313,49 @@ def rerank_cross_encoder(
         d["score"] = _sigmoid(fv)
         d["rerank_score_raw"] = fv
         scored.append(d)
-    scored.sort(key=lambda x: x["score"], reverse=True)
-    return scored + documents[limit:]
+    rest = [dict(d) for d in documents[limit:]]
+    combined = scored + rest
+    combined.sort(key=lambda x: x.get("score", 0), reverse=True)
+    return combined
 
 
 def _predict_rerank_scores(model: Any, pairs: List[List[str]]) -> Optional[Any]:
-    """Выполнить rerank predict с опциональным timeout и fallback к исходному порядку."""
+    """
+    Выполнить rerank predict с опциональным timeout.
+
+    Один общий ``ThreadPoolExecutor(max_workers=1)``: если предыдущая задача
+    ещё выполняется, сразу пропускаем rerank (не плодим потоки).
+    """
+    global _RERANK_INFLIGHT
     timeout = float(getattr(settings, "RERANK_TIMEOUT_SECONDS", 15) or 0)
     if timeout <= 0:
         return model.predict(pairs, show_progress_bar=False)
 
-    result_queue: "queue.Queue[Tuple[str, Any]]" = queue.Queue(maxsize=1)
+    with _RERANK_LOCK:
+        if _RERANK_INFLIGHT is not None and not _RERANK_INFLIGHT.done():
+            logger.warning(
+                "Cross-encoder rerank пропущен: предыдущая задача ещё выполняется"
+            )
+            return None
+        future = _RERANK_EXECUTOR.submit(
+            model.predict, pairs, show_progress_bar=False
+        )
+        _RERANK_INFLIGHT = future
 
-    def _run() -> None:
-        try:
-            result_queue.put(("ok", model.predict(pairs, show_progress_bar=False)))
-        except Exception as exc:
-            result_queue.put(("error", exc))
-
-    worker = threading.Thread(target=_run, daemon=True)
-    worker.start()
-    worker.join(timeout)
-    if worker.is_alive():
-        logger.warning("Cross-encoder rerank timeout after %.2f seconds; fallback to original order", timeout)
+    try:
+        return future.result(timeout=timeout)
+    except FuturesTimeout:
+        logger.warning(
+            "Cross-encoder rerank timeout after %.2f seconds; fallback to original order",
+            timeout,
+        )
         return None
-    status, payload = result_queue.get()
-    if status == "error":
-        raise payload
-    return payload
+    except TimeoutError:
+        logger.warning(
+            "Cross-encoder rerank timeout after %.2f seconds; fallback to original order",
+            timeout,
+        )
+        return None
 
 
 def _chroma_query_dense(
@@ -346,12 +441,16 @@ def _documents_from_chroma_ids(
 
 
 def bm25_ranking(bm25: Any, id_list: List[str], query: str, top_n: int) -> List[str]:
+    """Топ-N id по BM25 без полной сортировки всего корпуса."""
     tokens = _tokenize_bm25(query)
     if not tokens:
         return []
     scores = bm25.get_scores(tokens)
-    ranked = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)
-    return [id_list[i] for i in ranked[:top_n]]
+    n = min(int(top_n), len(scores))
+    if n <= 0:
+        return []
+    top_idx = heapq.nlargest(n, range(len(scores)), key=lambda i: scores[i])
+    return [id_list[i] for i in top_idx]
 
 
 def _unique_nonempty_queries(queries: Sequence[str]) -> List[str]:
@@ -424,7 +523,6 @@ def hybrid_retrieve(
     collection,
     query_strings_for_dense: List[str],
     query_strings_for_sparse: List[str],
-    get_embedding_fn: Callable[[str], Optional[List[float]]],
     top_k: int,
     min_score: float,
     reload_collection: Callable[[], Any],
@@ -433,6 +531,9 @@ def hybrid_retrieve(
 ) -> Tuple[List[Dict[str, Any]], Optional[str], Dict[str, Any]]:
     """
     Гибридный поиск с RRF и опциональным rerank.
+
+    ``min_score`` в режимах hybrid/sparse сравнивается с нормализованным RRF
+    (см. модульный докстринг / K5), после rerank — с sigmoid(logit).
 
     Returns:
         (documents, error_code, diagnostics)
@@ -464,8 +565,18 @@ def hybrid_retrieve(
         )
         return documents, error_code, diagnostics
 
-    mode = (settings.RETRIEVAL_MODE or "hybrid").lower()
+    raw_mode = (settings.RETRIEVAL_MODE or "hybrid").lower().strip()
+    if raw_mode not in ("hybrid", "dense", "sparse"):
+        logger.warning(
+            "Неизвестный RETRIEVAL_MODE=%r — используем hybrid",
+            settings.RETRIEVAL_MODE,
+        )
+        mode = "hybrid"
+    else:
+        mode = raw_mode
+    diagnostics["retrieval_mode"] = mode
     pool = max(top_k, settings.RAG_FUSION_CANDIDATES, settings.RERANK_TOP_N)
+    rrf_k = int(getattr(settings, "RRF_K_CONSTANT", 60) or 60)
 
     # --- только dense ---
     if mode == "dense":
@@ -514,6 +625,11 @@ def hybrid_retrieve(
         timings["bm25_load_ms"] = elapsed_ms(stage_started)
         if loaded:
             bm25, bm25_ids = loaded
+
+    if mode == "sparse" and bm25 is None:
+        diagnostics["stage"] = "bm25_unavailable"
+        diagnostics["bm25_unavailable"] = True
+        return finish([], "search_error")
 
     sparse_rankings: List[List[str]] = []
     if bm25 is not None:
@@ -579,19 +695,22 @@ def hybrid_retrieve(
             diagnostics["stage"] = "sparse_empty"
             return finish([], None)
         stage_started = time.perf_counter()
-        fused = reciprocal_rank_fusion(sparse_rankings, k=settings.RRF_K_CONSTANT)
+        rankings_for_rrf = list(sparse_rankings)
+        fused = reciprocal_rank_fusion(rankings_for_rrf, k=rrf_k)
         timings["rrf_ms"] = elapsed_ms(stage_started)
     else:
-        rankings_for_rrf: List[List[str]] = []
+        rankings_for_rrf = []
         rankings_for_rrf.extend(dense_rankings)
         rankings_for_rrf.extend(sparse_rankings)
         if not rankings_for_rrf:
             return finish([], "search_error")
         stage_started = time.perf_counter()
-        fused = reciprocal_rank_fusion(rankings_for_rrf, k=settings.RRF_K_CONSTANT)
+        fused = reciprocal_rank_fusion(rankings_for_rrf, k=rrf_k)
         timings["rrf_ms"] = elapsed_ms(stage_started)
 
+    num_rankings = len(rankings_for_rrf)
     diagnostics["rrf_fused_count"] = len(fused)
+    diagnostics["rrf_num_rankings"] = num_rankings
     candidate_ids = [fid for fid, _ in fused[: max(pool, settings.RERANK_TOP_N)]]
     id_to_rrf = {fid: sc for fid, sc in fused}
 
@@ -604,12 +723,11 @@ def hybrid_retrieve(
             continue
         base = chroma_map[cid]
         rrf_score = id_to_rrf.get(cid, 0.0)
-        # нормируем RRF для отображения (до rerank)
         documents.append({
             "text": base["text"],
             "metadata": base["metadata"],
             "chunk_id": base["chunk_id"],
-            "score": min(1.0, rrf_score / settings.RRF_SCORE_NORMALIZER),
+            "score": _normalize_rrf_score(rrf_score, num_rankings, rrf_k),
             "rrf_score": rrf_score,
         })
 
@@ -629,6 +747,10 @@ def hybrid_retrieve(
 
     documents = [d for d in documents if d.get("score", 0) >= min_score]
     documents = documents[:top_k]
-    diagnostics["stage"] = "sparse_fallback" if diagnostics.get("used_sparse_fallback") else ("hybrid" if mode == "hybrid" else mode)
+    diagnostics["stage"] = (
+        "sparse_fallback"
+        if diagnostics.get("used_sparse_fallback")
+        else ("hybrid" if mode == "hybrid" else mode)
+    )
     diagnostics["final_count"] = len(documents)
     return finish(documents, None)

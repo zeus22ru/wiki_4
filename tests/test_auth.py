@@ -45,12 +45,54 @@ def test_register_rejects_duplicate_user(client):
     assert rv.status_code == 409
 
 
-def test_register_accepts_short_non_empty_password(client):
+def test_register_rejects_short_password(client):
     rv = client.post(
         "/api/auth/register",
         json={"username": "shortpass", "email": "short@example.com", "password": "1"},
     )
-    assert rv.status_code == 201
+    assert rv.status_code == 400
+    assert "парол" in rv.get_json()["error"].lower()
+
+
+def test_register_rejects_password_equal_username(client):
+    rv = client.post(
+        "/api/auth/register",
+        json={"username": "SameName1", "email": "same@example.com", "password": "samename1"},
+    )
+    assert rv.status_code == 400
+
+
+def test_register_rejects_invalid_email(client):
+    rv = client.post(
+        "/api/auth/register",
+        json={"username": "emailless", "email": "not-an-email", "password": "password123"},
+    )
+    assert rv.status_code == 400
+
+
+def test_login_rate_limit(client, monkeypatch):
+    import api.routes.auth as auth_route
+
+    auth_route._login_limiter.reset()
+    client.post(
+        "/api/auth/register",
+        json={"username": "ratelim", "email": "ratelim@example.com", "password": "password123"},
+    )
+    client.post("/api/auth/logout")
+
+    clock = {"now": 2_000_000.0}
+    monkeypatch.setattr(auth_route.time, "time", lambda: clock["now"])
+
+    for _ in range(10):
+        rv = client.post("/api/auth/login", json={"identifier": "ratelim", "password": "wrong"})
+        assert rv.status_code == 401
+
+    rv = client.post("/api/auth/login", json={"identifier": "ratelim", "password": "wrong"})
+    assert rv.status_code == 429
+
+    clock["now"] += 901
+    rv = client.post("/api/auth/login", json={"identifier": "ratelim", "password": "password123"})
+    assert rv.status_code == 200
 
 
 def test_login_rejects_bad_password(client):

@@ -142,3 +142,140 @@ def test_api_chat_with_text_attachment(mock_reachable, mock_init, client, tmp_pa
     assert rv.status_code == 200
     rag.query.assert_called_once()
     assert rag.query.call_args.kwargs.get("attachments") is not None
+
+
+def test_save_ignores_client_mime_uses_extension(tmp_path, monkeypatch):
+    """A3: клиентский text/html для .txt не влияет на сохранённый MIME."""
+    monkeypatch.setattr("core.chat_attachments.settings.CHAT_ATTACHMENTS_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        "core.chat_attachments.settings.CHAT_ATTACHMENT_ALLOWED_EXTENSIONS",
+        ["txt", "png"],
+    )
+    monkeypatch.setattr("core.chat_attachments.settings.CHAT_ATTACHMENT_MAX_BYTES", 1_000_000)
+    # Сброс таймера ленивой очистки.
+    import core.chat_attachments as ca
+
+    monkeypatch.setattr(ca, "_last_cleanup_monotonic", 0.0)
+
+    storage = io.BytesIO(b"<html>hi</html>")
+    file = FileStorage(stream=storage, filename="a.txt", content_type="text/html")
+    saved = save_uploaded_file(file)
+    assert saved.mime.startswith("text/plain")
+    assert "html" not in saved.mime
+
+
+def test_get_attachment_serves_text_plain_despite_html_upload(client, tmp_path, monkeypatch):
+    """A3/приёмка: a.txt с Content-Type text/html отдаётся как text/plain."""
+    monkeypatch.setattr("core.chat_attachments.settings.CHAT_ATTACHMENTS_DIR", str(tmp_path / "att"))
+    monkeypatch.setattr(
+        "core.chat_attachments.settings.CHAT_ATTACHMENT_ALLOWED_EXTENSIONS",
+        ["txt", "png", "log"],
+    )
+
+    upload = client.post(
+        "/api/chat/attachments",
+        data={"files": (io.BytesIO(b"<script>x</script>"), "a.txt")},
+        content_type="multipart/form-data",
+        headers={"Content-Type": "multipart/form-data"},
+    )
+    # werkzeug test client: передаём content_type файла через кортеж? File via multipart.
+    assert upload.status_code == 201
+    att_id = upload.get_json()["attachments"][0]["id"]
+    assert upload.get_json()["attachments"][0]["mime"].startswith("text/plain")
+
+    rv = client.get(f"/api/chat/attachments/{att_id}")
+    assert rv.status_code == 200
+    assert "text/plain" in (rv.mimetype or "")
+    assert rv.headers.get("X-Content-Type-Options") == "nosniff"
+    cd = rv.headers.get("Content-Disposition", "")
+    assert "attachment" in cd.lower()
+
+
+def test_get_image_attachment_inline_disposition(client, tmp_path, monkeypatch):
+    """A3: изображения отдаются inline."""
+    monkeypatch.setattr("core.chat_attachments.settings.CHAT_ATTACHMENTS_DIR", str(tmp_path / "att"))
+    monkeypatch.setattr(
+        "core.chat_attachments.settings.CHAT_ATTACHMENT_ALLOWED_EXTENSIONS",
+        ["png", "txt"],
+    )
+    upload = client.post(
+        "/api/chat/attachments",
+        data={"files": (io.BytesIO(b"\x89PNG\r\n\x1a\n"), "shot.png")},
+        content_type="multipart/form-data",
+    )
+    assert upload.status_code == 201
+    att_id = upload.get_json()["attachments"][0]["id"]
+    rv = client.get(f"/api/chat/attachments/{att_id}")
+    assert rv.status_code == 200
+    assert rv.mimetype == "image/png"
+    cd = rv.headers.get("Content-Disposition", "")
+    assert "inline" in cd.lower() or "attachment" not in cd.lower()
+
+
+def test_cleanup_old_attachments_removes_stale(tmp_path, monkeypatch):
+    """A5: cleanup_old_attachments удаляет файл и .meta.json."""
+    import os
+    import time
+
+    from core.chat_attachments import cleanup_old_attachments
+
+    monkeypatch.setattr("core.chat_attachments.settings.CHAT_ATTACHMENTS_DIR", str(tmp_path))
+    aid = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    data = tmp_path / f"{aid}.txt"
+    meta = tmp_path / f"{aid}.meta.json"
+    data.write_text("old", encoding="utf-8")
+    meta.write_text('{"filename": "old.txt"}', encoding="utf-8")
+    old_mtime = time.time() - (80 * 3600)
+    os.utime(data, (old_mtime, old_mtime))
+
+    fresh = tmp_path / "cccccccc-cccc-cccc-cccc-cccccccccccc.txt"
+    fresh.write_text("new", encoding="utf-8")
+
+    removed = cleanup_old_attachments(72)
+    assert removed == 1
+    assert not data.exists()
+    assert not meta.exists()
+    assert fresh.exists()
+
+
+def test_upload_rejects_too_many_files(client, tmp_path, monkeypatch):
+    """A8: число файлов в одном запросе ограничено CHAT_ATTACHMENT_MAX_COUNT."""
+    from werkzeug.datastructures import MultiDict
+
+    monkeypatch.setattr("core.chat_attachments.settings.CHAT_ATTACHMENTS_DIR", str(tmp_path / "att"))
+    monkeypatch.setattr(
+        "core.chat_attachments.settings.CHAT_ATTACHMENT_ALLOWED_EXTENSIONS",
+        ["txt"],
+    )
+    monkeypatch.setattr("core.chat_attachments.settings.CHAT_ATTACHMENT_MAX_COUNT", 2)
+    monkeypatch.setattr("api.routes.chat_attachments.settings.CHAT_ATTACHMENT_MAX_COUNT", 2)
+
+    data = MultiDict([
+        ("files", (io.BytesIO(b"1"), "a.txt")),
+        ("files", (io.BytesIO(b"2"), "b.txt")),
+        ("files", (io.BytesIO(b"3"), "c.txt")),
+    ])
+    upload = client.post(
+        "/api/chat/attachments",
+        data=data,
+        content_type="multipart/form-data",
+    )
+    assert upload.status_code == 400
+    assert "Максимум" in upload.get_json()["error"]
+
+
+def test_save_cyrillic_attachment_filename(tmp_path, monkeypatch):
+    """A1: кириллическое имя вложения сохраняется."""
+    monkeypatch.setattr("core.chat_attachments.settings.CHAT_ATTACHMENTS_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        "core.chat_attachments.settings.CHAT_ATTACHMENT_ALLOWED_EXTENSIONS",
+        ["png", "txt"],
+    )
+    file = FileStorage(
+        stream=io.BytesIO(b"\x89PNG\r\n\x1a\n"),
+        filename="Снимок экрана.png",
+        content_type="image/png",
+    )
+    saved = save_uploaded_file(file)
+    assert "Снимок" in saved.filename
+    assert saved.filename.lower().endswith(".png")

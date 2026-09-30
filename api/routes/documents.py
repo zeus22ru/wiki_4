@@ -5,17 +5,18 @@
 from datetime import datetime, timedelta
 from pathlib import Path
 import difflib
-import sys
 import tempfile
 import threading
+import time
 import traceback
+from typing import Callable
 from uuid import uuid4
 
 from flask import Blueprint, jsonify, request, send_file
-from werkzeug.utils import secure_filename
 
 from api.middleware.auth import require_admin_access
 from config import settings, get_logger
+from utils.filenames import file_extension, safe_filename
 
 logger = get_logger(__name__)
 documents_bp = Blueprint("documents", __name__, url_prefix="/api/documents")
@@ -34,12 +35,42 @@ _JOB_STATUSES_ACTIVE = {"pending", "running"}
 _JOBS_MAX_ITEMS = 50
 _JOBS_TTL = timedelta(hours=12)
 
+# Кэш списка документов для /related (и list): TTL 30 с, инвалидация после upload/reindex.
+_DOCS_CACHE_TTL_SEC = 30.0
+_docs_cache_lock = threading.Lock()
+_docs_cache: dict = {"at": 0.0, "docs": None}
+
+# Хук сброса RAG после успешной переиндексации (регистрирует web_app, контракт K2).
+_reindex_callback: Callable[[], None] | None = None
+
+
+def set_reindex_callback(callback: "Callable[[], None] | None") -> None:
+    """Зарегистрировать функцию, вызываемую после успешной переиндексации (сброс RAG в web_app)."""
+    global _reindex_callback
+    _reindex_callback = callback
+
+
+def _invoke_reindex_callback() -> None:
+    callback = _reindex_callback
+    if callback is None:
+        return
+    try:
+        callback()
+    except Exception:
+        logger.exception("Ошибка callback после переиндексации")
+
+
+def _invalidate_documents_cache() -> None:
+    with _docs_cache_lock:
+        _docs_cache["docs"] = None
+        _docs_cache["at"] = 0.0
+
 
 def _allowed_file(filename: str) -> bool:
-    if "." not in filename:
+    ext = file_extension(filename)
+    if not ext:
         return False
-    ext = filename.rsplit(".", 1)[-1].lower()
-    return ext in {x.strip().lower() for x in settings.ALLOWED_EXTENSIONS}
+    return ext in {x.strip().lower().lstrip(".") for x in settings.ALLOWED_EXTENSIONS}
 
 
 def _upload_size_error(file) -> tuple[str | None, int | None]:
@@ -74,22 +105,88 @@ def _file_record(path: Path) -> dict:
     }
 
 
+def _attachments_roots() -> list[Path]:
+    """Каталоги приватных вложений чата — не часть базы знаний."""
+    roots: list[Path] = []
+    raw = getattr(settings, "CHAT_ATTACHMENTS_DIR", None)
+    if raw:
+        try:
+            roots.append(Path(raw).resolve())
+        except OSError:
+            pass
+    try:
+        upload_parent = Path(settings.UPLOAD_DIR).resolve().parent
+        roots.append((upload_parent / "chat_attachments").resolve())
+    except OSError:
+        pass
+    # Уникальные пути
+    unique: list[Path] = []
+    seen: set[str] = set()
+    for root in roots:
+        key = str(root)
+        if key not in seen:
+            seen.add(key)
+            unique.append(root)
+    return unique
+
+
+def _is_under_attachments(path: Path) -> bool:
+    try:
+        resolved = path.resolve()
+    except OSError:
+        return False
+    for root in _attachments_roots():
+        try:
+            resolved.relative_to(root)
+            return True
+        except ValueError:
+            continue
+    return False
+
+
 def _scan_documents() -> list[dict]:
+    """Сканировать DATA_DIR, пропуская каталог вложений чата."""
     data_dir = Path(settings.DATA_DIR)
-    allowed = {f".{x.strip().lower()}" for x in settings.ALLOWED_EXTENSIONS}
+    allowed = {f".{x.strip().lower().lstrip('.')}" for x in settings.ALLOWED_EXTENSIONS}
     if not data_dir.exists():
         return []
     docs = []
     for path in data_dir.rglob("*"):
-        if path.is_file() and path.suffix.lower() in allowed:
-            docs.append(_file_record(path))
+        if not path.is_file():
+            continue
+        if path.suffix.lower() not in allowed:
+            continue
+        if _is_under_attachments(path):
+            continue
+        docs.append(_file_record(path))
     docs.sort(key=lambda item: item["modified_at"], reverse=True)
     return docs
 
 
+def _get_documents_cached() -> list[dict]:
+    """Список документов с кэшем на 30 секунд."""
+    now = time.monotonic()
+    # Ключ кэша: каталог данных и расширения, чтобы смена настроек не отдавала чужой список.
+    cache_key = (str(settings.DATA_DIR), tuple(settings.ALLOWED_EXTENSIONS))
+    with _docs_cache_lock:
+        cached = _docs_cache.get("docs")
+        if (
+            cached is not None
+            and _docs_cache.get("key") == cache_key
+            and (now - float(_docs_cache.get("at") or 0.0)) < _DOCS_CACHE_TTL_SEC
+        ):
+            return list(cached)
+    docs = _scan_documents()
+    with _docs_cache_lock:
+        _docs_cache["docs"] = docs
+        _docs_cache["at"] = now
+        _docs_cache["key"] = cache_key
+    return list(docs)
+
+
 def _find_existing_document(filename: str) -> Path | None:
     """Найти существующий документ с таким именем только внутри DATA_DIR."""
-    safe_name = secure_filename(filename)
+    safe_name = safe_filename(filename)
     if not safe_name:
         return None
     data_dir = Path(settings.DATA_DIR)
@@ -101,6 +198,8 @@ def _find_existing_document(filename: str) -> Path | None:
         try:
             resolved.relative_to(data_dir.resolve())
         except ValueError:
+            continue
+        if _is_under_attachments(resolved):
             continue
         if resolved.is_file() and _allowed_file(resolved.name):
             return resolved
@@ -160,7 +259,7 @@ def _related_score(doc: dict, source: dict) -> int:
 
 
 def _find_related_documents(sources: list[dict], limit: int = 5) -> list[dict]:
-    documents = _scan_documents()
+    documents = _get_documents_cached()
     scored: dict[str, dict] = {}
     for source in sources:
         for doc in documents:
@@ -188,6 +287,8 @@ def _resolve_document_path(raw_path: str | None) -> Path | None:
         try:
             resolved.relative_to(data_dir)
         except ValueError:
+            continue
+        if _is_under_attachments(resolved):
             continue
         if resolved.is_file() and _allowed_file(resolved.name):
             return resolved
@@ -267,23 +368,10 @@ def _set_job(job_id: str, **updates) -> None:
         _jobs.setdefault(job_id, {}).update(updates)
 
 
-def _reset_long_lived_rag_state() -> None:
-    """Сбросить кэшированные подключения web_app после успешной переиндексации."""
-    web_app_module = sys.modules.get("web_app")
-    if web_app_module is None:
-        return
-
-    lock = getattr(web_app_module, "init_lock", None)
-    if lock is None:
-        return
-
-    with lock:
-        rag = getattr(web_app_module, "rag_system", None)
-        if rag is not None and hasattr(rag, "_bm25_bundle"):
-            rag._bm25_bundle = None
-        setattr(web_app_module, "collection", None)
-        setattr(web_app_module, "rag_system", None)
-        setattr(web_app_module, "db_initialized", False)
+def _truthy_flag(value) -> bool:
+    if value is None:
+        return False
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _run_reindex(job_id: str) -> None:
@@ -292,7 +380,8 @@ def _run_reindex(job_id: str) -> None:
         from create_vector_db import reindex_vector_db
 
         diagnostics = reindex_vector_db(progress_callback=lambda updates: _set_job(job_id, **updates))
-        _reset_long_lived_rag_state()
+        _invoke_reindex_callback()
+        _invalidate_documents_cache()
         indexed_chunks = diagnostics.get("chunks_added") or diagnostics.get("chunks") or 0
         mode = diagnostics.get("index_mode") or "unknown"
         _set_job(
@@ -319,21 +408,46 @@ def _run_reindex(job_id: str) -> None:
 @documents_bp.route("", methods=["GET"])
 def list_documents():
     """Список документов из DATA_DIR/UPLOAD_DIR."""
-    return jsonify({"documents": _scan_documents()})
+    return jsonify({"documents": _get_documents_cached()})
 
 
 @documents_bp.route("/open", methods=["GET"])
 def open_document():
-    """Открыть исходный документ по относительному пути из базы знаний."""
+    """Открыть исходный документ по относительному пути из базы знаний.
+
+    Файлы `.html`/`.htm` отдаются как `text/plain` с `Content-Disposition: attachment`,
+    чтобы браузер не исполнял разметку. Остальные типы — inline с `nosniff`.
+    Файлы из каталога вложений чата не отдаются.
+    """
     document_path = _resolve_document_path(request.args.get("path"))
     if not document_path:
         return jsonify({"error": "Документ не найден"}), 404
-    return send_file(document_path, as_attachment=False, download_name=document_path.name)
+
+    ext = file_extension(document_path.name)
+    if ext in {"html", "htm"}:
+        response = send_file(
+            document_path,
+            mimetype="text/plain; charset=utf-8",
+            as_attachment=True,
+            download_name=document_path.name,
+        )
+    else:
+        response = send_file(
+            document_path,
+            as_attachment=False,
+            download_name=document_path.name,
+        )
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    return response
 
 
 @documents_bp.route("/upload", methods=["POST"])
 def upload_document():
-    """Загрузить документ в UPLOAD_DIR."""
+    """Загрузить документ в UPLOAD_DIR.
+
+    При конфликте имени отвечает 409 с полем ``existing``, если не передан
+    ``overwrite=true`` (query или form).
+    """
     if "file" not in request.files:
         return jsonify({"error": "Файл не передан"}), 400
 
@@ -348,9 +462,23 @@ def upload_document():
 
     upload_dir = Path(settings.UPLOAD_DIR)
     upload_dir.mkdir(parents=True, exist_ok=True)
-    filename = secure_filename(file.filename)
+    filename = safe_filename(file.filename)
+    if not _allowed_file(filename):
+        return jsonify({"error": "Формат файла не поддерживается"}), 400
     target = upload_dir / filename
+
+    overwrite = _truthy_flag(request.args.get("overwrite")) or _truthy_flag(
+        request.form.get("overwrite")
+    )
+    if target.exists() and not overwrite:
+        return jsonify({
+            "error": "exists",
+            "message": "Файл с таким именем уже есть",
+            "existing": _file_record(target),
+        }), 409
+
     file.save(target)
+    _invalidate_documents_cache()
     logger.info("Загружен документ: %s", target)
     return jsonify({"document": _file_record(target)}), 201
 
@@ -370,7 +498,7 @@ def preview_document_upload():
     if size_error:
         return jsonify({"error": size_error}), size_status
 
-    filename = secure_filename(file.filename)
+    filename = safe_filename(file.filename)
     existing_document = _find_existing_document(filename)
     duplicate_exists = existing_document is not None
     try:

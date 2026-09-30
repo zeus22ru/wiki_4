@@ -14,6 +14,26 @@ from config import settings, get_logger
 
 logger = get_logger(__name__)
 
+# Поля настроек, влияющие на содержимое индекса (чанки / эмбеддинги).
+_SETTINGS_FINGERPRINT_KEYS = (
+    "OLLAMA_EMBEDDING_MODEL",
+    "EMBEDDING_API_MODE",
+    "CHUNK_SIZE",
+    "CHUNK_OVERLAP",
+    "STRUCTURAL_CHUNKING_ENABLED",
+    "STRUCTURAL_CHUNK_MAX_CHARS",
+    "STRUCTURAL_CHUNK_MIN_CHARS",
+    "CONTEXTUAL_RETRIEVAL_ENABLED",
+    "STRIKETHROUGH_INDEX_MODE",
+)
+
+
+def settings_fingerprint() -> str:
+    """Хэш настроек, от которых зависит состав и смысл чанков индекса."""
+    payload = {key: getattr(settings, key, None) for key in _SETTINGS_FINGERPRINT_KEYS}
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
 
 def manifest_path() -> Path:
     filename = str(getattr(settings, "INDEX_MANIFEST_FILENAME", "index_manifest.json"))
@@ -92,6 +112,7 @@ def build_index_manifest(
     return {
         "version": 1,
         "collection": settings.CHROMA_COLLECTION_NAME,
+        "settings_fingerprint": settings_fingerprint(),
         "generated_at": generated_at or datetime.now(timezone.utc).isoformat(),
         "files": files,
     }
@@ -110,7 +131,12 @@ def save_index_manifest(documents: Iterable[Dict[str, Any]], path: Optional[Path
 def load_index_manifest(path: Optional[Path] = None) -> Dict[str, Any]:
     in_path = Path(path or manifest_path())
     if not in_path.is_file():
-        return {"version": 1, "collection": settings.CHROMA_COLLECTION_NAME, "files": {}}
+        return {
+            "version": 1,
+            "collection": settings.CHROMA_COLLECTION_NAME,
+            "settings_fingerprint": settings_fingerprint(),
+            "files": {},
+        }
     return json.loads(in_path.read_text(encoding="utf-8"))
 
 

@@ -43,9 +43,7 @@ from typing import Iterable
 try:
     from playwright.sync_api import (
         APIRequestContext,
-        BrowserContext,
         Page,
-        Playwright,
         TimeoutError as PlaywrightTimeoutError,
         sync_playwright,
     )

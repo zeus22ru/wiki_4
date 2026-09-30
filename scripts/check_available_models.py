@@ -45,12 +45,12 @@ def test_model_embeddings(model_name):
             result = response.json()
             if "embeddings" in result:
                 embeddings = result["embeddings"]
-                print(f"✓ Модель поддерживает эмбеддинги (API v2)")
+                print("✓ Модель поддерживает эмбеддинги (API v2)")
                 print(f"  Размер эмбеддинга: {len(embeddings[0]) if embeddings else 0}")
                 return True, len(embeddings[0]) if embeddings else 0
             elif "embedding" in result:
                 embedding = result["embedding"]
-                print(f"✓ Модель поддерживает эмбеддинги (API v2)")
+                print("✓ Модель поддерживает эмбеддинги (API v2)")
                 print(f"  Размер эмбеддинга: {len(embedding)}")
                 return True, len(embedding)
         else:

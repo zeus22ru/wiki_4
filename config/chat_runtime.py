@@ -21,6 +21,34 @@ CHAT_ANSWER_MODES = frozenset({
     "employee_instruction",
 })
 
+# Русские режимы Telegram-бота и синонимы -> серверные режимы.
+# Новые серверные режимы (detailed / by_sources / step_by_step) появятся вместе
+# с ветками в core/rag.py; пока маппим на существующие три.
+TELEGRAM_MODE_ALIASES: dict[str, str] = {
+    "обычный": CHAT_DEFAULT_ANSWER_MODE,
+    "кратко": "brief",
+    "подробно": CHAT_DEFAULT_ANSWER_MODE,
+    "по_источникам": CHAT_DEFAULT_ANSWER_MODE,
+    "по_шагам": CHAT_DEFAULT_ANSWER_MODE,
+    "инструкция": "employee_instruction",
+    CHAT_DEFAULT_ANSWER_MODE: CHAT_DEFAULT_ANSWER_MODE,
+    "brief": "brief",
+    "employee_instruction": "employee_instruction",
+}
+
+
+def normalize_answer_mode(value: Any) -> str:
+    """Нормализовать режим ответа к одному из CHAT_ANSWER_MODES."""
+    if not isinstance(value, str):
+        return CHAT_DEFAULT_ANSWER_MODE
+    key = value.strip().lower()
+    if not key:
+        return CHAT_DEFAULT_ANSWER_MODE
+    mapped = TELEGRAM_MODE_ALIASES.get(key, key)
+    if mapped in CHAT_ANSWER_MODES:
+        return mapped
+    return CHAT_DEFAULT_ANSWER_MODE
+
 
 def _clamp(value: int | float, minimum: int | float, maximum: int | float):
     return max(minimum, min(maximum, value))
@@ -56,9 +84,7 @@ def resolve_chat_rag_options(data: dict | None) -> dict[str, Any]:
     except (TypeError, ValueError):
         min_score = None
 
-    answer_mode = payload.get("answer_mode")
-    if answer_mode not in CHAT_ANSWER_MODES:
-        answer_mode = CHAT_DEFAULT_ANSWER_MODE
+    answer_mode = normalize_answer_mode(payload.get("answer_mode"))
 
     return {
         "top_k": int(_clamp(top_k, CHAT_TOP_K_MIN, CHAT_TOP_K_MAX)) if top_k is not None else defaults["top_k"],

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 from bs4 import BeautifulSoup, NavigableString, Tag
 
@@ -25,30 +25,46 @@ def chunk_text_fixed_size(text: str, chunk_size: int = None, overlap: int = None
         chunk_size = settings.CHUNK_SIZE
     if overlap is None:
         overlap = settings.CHUNK_OVERLAP
-    validate_chunk_bounds(int(chunk_size), int(overlap))
+    chunk_size = int(chunk_size)
+    overlap = int(overlap)
+    validate_chunk_bounds(chunk_size, overlap)
 
     chunks: List[str] = []
     start = 0
     text_len = len(text)
 
     while start < text_len:
-        end = start + chunk_size
+        end = min(start + chunk_size, text_len)
         chunk = text[start:end]
 
-        if end < text_len:
+        # Уточнение по границе предложения только при умеренном overlap,
+        # иначе шаг может стать меньше overlap и цикл зациклится.
+        if end < text_len and overlap < chunk_size // 2:
             last_period = chunk.rfind(".")
             last_question = chunk.rfind("?")
             last_exclamation = chunk.rfind("!")
             last_boundary = max(last_period, last_question, last_exclamation)
 
             if last_boundary > chunk_size // 2:
-                chunk = text[start : start + last_boundary + 1]
-                end = start + last_boundary + 1
+                candidate_end = start + last_boundary + 1
+                # Если граница даёт шаг меньше overlap — игнорируем её.
+                if (candidate_end - start) > overlap:
+                    chunk = text[start:candidate_end]
+                    end = candidate_end
 
         chunks.append(chunk.strip())
-        start = end - overlap
+        # Гарантия прогресса: start всегда растёт хотя бы на 1.
+        start = max(end - overlap, start + 1)
 
-    return [c for c in chunks if len(c) > 50]
+    # Убрать пустые и подряд идущие дубликаты (возникают при большом overlap).
+    result: List[str] = []
+    for c in chunks:
+        if len(c) <= 50:
+            continue
+        if result and result[-1] == c:
+            continue
+        result.append(c)
+    return result
 
 
 def _join_path(headings: List[str]) -> str:
@@ -339,7 +355,6 @@ def chunk_docx_structural(doc_path: Path, title: str, relative_path: str) -> Opt
 def build_chunks_for_file(
     file_path: Path,
     doc_data: Dict[str, str],
-    extract_func: Callable[[Path], Optional[Dict[str, str]]],
 ) -> List[Dict[str, Any]]:
     """
     Построить список чанков с полями text, section_path, chunk_kind, parent_headings (JSON-serializable).

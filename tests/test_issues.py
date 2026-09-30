@@ -131,3 +131,93 @@ def test_create_github_issue_stub_unit():
     assert second.stub is True
     assert second.number > result.number
     assert "org/wiki-feedback" in second.html_url
+
+
+def test_issue_status_caches_probe(client, monkeypatch):
+    calls = {"n": 0}
+
+    def fake_probe(token, repo):
+        calls["n"] += 1
+        return {"writable": False, "hint": "secret github detail XYZ"}
+
+    monkeypatch.setattr("api.routes.issues.github_issues_configured", lambda *a, **k: True)
+    monkeypatch.setattr("api.routes.issues.settings.GITHUB_ISSUES_ENABLED", True)
+    monkeypatch.setattr("api.routes.issues.settings.GITHUB_TOKEN", "token")
+    monkeypatch.setattr("api.routes.issues.settings.GITHUB_REPO", "org/repo")
+    monkeypatch.setattr("api.routes.issues.probe_github_issue_write_access", fake_probe)
+    issues_route._status_probe_cache["ts"] = 0.0
+    issues_route._status_probe_cache["data"] = None
+
+    rv1 = client.get("/api/issues/status")
+    rv2 = client.get("/api/issues/status")
+    assert rv1.status_code == 200
+    assert rv2.status_code == 200
+    assert calls["n"] == 1
+    assert "XYZ" not in (rv1.get_json().get("write_hint") or "")
+
+
+def test_issue_rate_limit_uses_ip_only(client, monkeypatch):
+    monkeypatch.setattr("api.routes.issues.settings.TRUST_PROXY", False)
+    payload = {
+        "type": "idea",
+        "title": "Предложение",
+        "description": "Добавить экспорт диалога в PDF для отчётности.",
+    }
+    for _ in range(3):
+        assert client.post("/api/issues", json=payload).status_code == 201
+
+    # Другой guest_id, тот же IP — всё равно 429
+    with client.session_transaction() as sess:
+        sess["guest_id"] = "another-guest"
+    assert client.post("/api/issues", json=payload).status_code == 429
+
+
+def test_issue_rate_limit_trusts_forwarded_for(client, monkeypatch):
+    monkeypatch.setattr("api.routes.issues.settings.TRUST_PROXY", True)
+    issues_route._rate_limiter.reset()
+    payload = {
+        "type": "idea",
+        "title": "Предложение",
+        "description": "Добавить экспорт диалога в PDF для отчётности.",
+    }
+    for _ in range(3):
+        rv = client.post(
+            "/api/issues",
+            json=payload,
+            headers={"X-Forwarded-For": "203.0.113.10"},
+        )
+        assert rv.status_code == 201
+    assert client.post(
+        "/api/issues",
+        json=payload,
+        headers={"X-Forwarded-For": "203.0.113.10"},
+    ).status_code == 429
+    # Другой forwarded IP проходит
+    assert client.post(
+        "/api/issues",
+        json=payload,
+        headers={"X-Forwarded-For": "203.0.113.11"},
+    ).status_code == 201
+
+
+def test_create_issue_hides_github_error(client, monkeypatch):
+    from integrations.github_issues import GitHubIssuesError
+
+    monkeypatch.setattr("api.routes.issues.github_issues_configured", lambda *a, **k: True)
+    monkeypatch.setattr("api.routes.issues.settings.GITHUB_TOKEN", "token")
+    monkeypatch.setattr("api.routes.issues.settings.GITHUB_REPO", "org/repo")
+
+    def boom(*a, **k):
+        raise GitHubIssuesError("token invalid detailed")
+
+    monkeypatch.setattr("api.routes.issues.create_github_issue", boom)
+    rv = client.post(
+        "/api/issues",
+        json={
+            "type": "bug",
+            "title": "Ошибка",
+            "description": "Подробное описание проблемы для теста.",
+        },
+    )
+    assert rv.status_code == 502
+    assert "token invalid" not in rv.get_json()["error"]

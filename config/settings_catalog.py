@@ -69,6 +69,14 @@ SPECS: list[SettingSpec] = [
         allowed='"ollama", "openai"',
     ),
     SettingSpec(
+        key="EMBEDDING_DIMENSIONS",
+        env="EMBEDDING_DIMENSIONS",
+        group=_GROUP_LLM,
+        type="int",
+        description="Размерность эмбеддингов для OpenAI-совместимого API (пусто — не передавать dimensions).",
+        allowed="целое число ≥ 1 или пусто",
+    ),
+    SettingSpec(
         key="CHAT_API_MODE",
         env="CHAT_API_MODE",
         group=_GROUP_LLM,
@@ -476,8 +484,11 @@ SPECS: list[SettingSpec] = [
         env="CORS_ORIGINS",
         group=_GROUP_API,
         type="str",
-        description='Разрешённые Origin для CORS. "*" — разрешить любые (удобно для разработки).',
-        allowed='"*", либо список через запятую, например "http://localhost:3000,https://example.com"',
+        description=(
+            'Разрешённые Origin для CORS. Пусто — только same-origin; '
+            '"*" — любые origin (только явно); иначе список через запятую.'
+        ),
+        allowed='пусто, "*", либо "http://localhost:3000,https://example.com"',
         restart_required=True,
         restart_hint="CORS конфигурируется при старте приложения и требует перезапуска.",
     ),
@@ -488,6 +499,33 @@ SPECS: list[SettingSpec] = [
         type="int",
         description="Лимит результатов для вспомогательных поисков (вне RAGSystem).",
         allowed="целое число ≥ 1",
+    ),
+    SettingSpec(
+        key="CHAT_MESSAGE_MAX_CHARS",
+        env="CHAT_MESSAGE_MAX_CHARS",
+        group=_GROUP_API,
+        type="int",
+        description="Максимальная длина текста сообщения в /api/chat.",
+        allowed="целое число ≥ 3",
+        ui={"kind": "number", "min": 3, "max": 20000},
+    ),
+    SettingSpec(
+        key="TRUST_PROXY",
+        env="TRUST_PROXY",
+        group=_GROUP_API,
+        type="bool",
+        description="Доверять заголовкам X-Forwarded-* (ProxyFix) за reverse proxy.",
+        allowed="true/false",
+        restart_required=True,
+        restart_hint="ProxyFix применяется при старте приложения.",
+    ),
+    SettingSpec(
+        key="SECURITY_HEADERS_ENABLED",
+        env="SECURITY_HEADERS_ENABLED",
+        group=_GROUP_SECURITY,
+        type="bool",
+        description="Добавлять заголовки безопасности (CSP, X-Frame-Options и др.).",
+        allowed="true/false",
     ),
     # Security
     SettingSpec(
@@ -500,23 +538,6 @@ SPECS: list[SettingSpec] = [
         secret=True,
         restart_required=True,
         restart_hint="Смена SECRET_KEY инвалидирует существующие сессии и обычно требует перезапуска.",
-    ),
-    SettingSpec(
-        key="JWT_SECRET_KEY",
-        env="JWT_SECRET_KEY",
-        group=_GROUP_SECURITY,
-        type="str",
-        description="Секрет для подписи JWT (авторизация). Должен быть уникальным в production.",
-        allowed="строка (секрет)",
-        secret=True,
-    ),
-    SettingSpec(
-        key="JWT_EXPIRATION_HOURS",
-        env="JWT_EXPIRATION_HOURS",
-        group=_GROUP_SECURITY,
-        type="int",
-        description="Время жизни JWT в часах.",
-        allowed="целое число ≥ 1",
     ),
     SettingSpec(
         key="API_KEY",
@@ -536,6 +557,15 @@ SPECS: list[SettingSpec] = [
         allowed="строка (секрет)",
         secret=True,
     ),
+    SettingSpec(
+        key="TELEGRAM_INTERNAL_API_KEY",
+        env="TELEGRAM_INTERNAL_API_KEY",
+        group=_GROUP_SECURITY,
+        type="str",
+        description="Внутренний ключ для Telegram-воркера (заголовок X-API-Key). По умолчанию = API_KEY.",
+        allowed="строка (секрет)",
+        secret=True,
+    ),
     # Logs
     SettingSpec(
         key="LOG_LEVEL",
@@ -552,6 +582,22 @@ SPECS: list[SettingSpec] = [
         type="str",
         description="Папка, куда пишутся лог-файлы.",
         allowed="путь к директории",
+    ),
+    SettingSpec(
+        key="LLM_EXCHANGE_LOG_ENABLED",
+        env="LLM_EXCHANGE_LOG_ENABLED",
+        group=_GROUP_LOGS,
+        type="bool",
+        description="Писать отдельный лог обмена с LLM (вопрос/ответ/метрики).",
+        allowed="true/false",
+    ),
+    SettingSpec(
+        key="LLM_EXCHANGE_LOG_FULL",
+        env="LLM_EXCHANGE_LOG_FULL",
+        group=_GROUP_LOGS,
+        type="bool",
+        description="Писать полный промпт в лог обмена (по умолчанию — только превью).",
+        allowed="true/false",
     ),
     # Cache
     SettingSpec(
@@ -636,6 +682,15 @@ SPECS: list[SettingSpec] = [
         type="int",
         description="Максимум символов текста из одного текстового вложения в промпт.",
         allowed="целое число ≥ 1000",
+    ),
+    SettingSpec(
+        key="CHAT_ATTACHMENT_TTL_HOURS",
+        env="CHAT_ATTACHMENT_TTL_HOURS",
+        group=_GROUP_API,
+        type="int",
+        description="Срок хранения вложений чата в часах.",
+        allowed="целое число ≥ 1",
+        ui={"kind": "number", "min": 1, "max": 8760},
     ),
     SettingSpec(
         key="CHAT_ATTACHMENT_ALLOWED_EXTENSIONS",

@@ -32,7 +32,7 @@ def test_ollama_connection():
         response.raise_for_status()
         result = response.json()
         print("✓ Ollama доступен")
-        print(f"Доступные модели:")
+        print("Доступные модели:")
         for model in result.get('models', []):
             print(f"  - {model.get('name')}")
         return True
@@ -62,7 +62,7 @@ def test_embeddings_api_v1():
             print(f"✓ Эмбеддинг получен, размер: {len(embedding)}")
             return True
         else:
-            print(f"✗ Ошибка API v1")
+            print("✗ Ошибка API v1")
             return False
     except Exception as e:
         print(f"✗ Ошибка: {e}")
@@ -95,7 +95,7 @@ def test_embeddings_api_v2():
                 print(f"✓ Эмбеддинг получен, размер: {len(embedding)}")
                 return True
         else:
-            print(f"✗ Ошибка API v2")
+            print("✗ Ошибка API v2")
             return False
     except Exception as e:
         print(f"✗ Ошибка: {e}")
@@ -171,7 +171,7 @@ def main():
     print("=" * 60)
     print(f"API v1 (/api/embeddings): {'✓ Работает' if api_v1_works else '✗ Не работает'}")
     print(f"API v2 (/api/embed): {'✓ Работает' if api_v2_works else '✗ Не работает'}")
-    print(f"\nМодели, поддерживающие эмбеддинги:")
+    print("\nМодели, поддерживающие эмбеддинги:")
     if working_models:
         for model in working_models:
             print(f"  ✓ {model}")

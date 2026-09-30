@@ -40,6 +40,18 @@ def test_index_manifest_tracks_file_signature_and_chunk_ids(monkeypatch, tmp_pat
     assert entry["size_bytes"] == 5
     assert entry["sha256"]
     assert entry["exists"] is True
+    assert manifest["settings_fingerprint"] == index_manifest.settings_fingerprint()
+    assert len(manifest["settings_fingerprint"]) == 64
+
+
+def test_settings_fingerprint_changes_when_chunk_size_changes(monkeypatch):
+    import core.index_manifest as index_manifest
+
+    monkeypatch.setattr(index_manifest.settings, "CHUNK_SIZE", 500)
+    fp_a = index_manifest.settings_fingerprint()
+    monkeypatch.setattr(index_manifest.settings, "CHUNK_SIZE", 501)
+    fp_b = index_manifest.settings_fingerprint()
+    assert fp_a != fp_b
 
 
 def test_index_manifest_diff_reports_changed_and_deleted(tmp_path):

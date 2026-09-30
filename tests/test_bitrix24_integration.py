@@ -50,8 +50,10 @@ def test_offset_roundtrip(tmp_path):
     assert load_offset(offset_path) == 12345
 
 
-def test_process_event_sends_answer(monkeypatch):
+def test_process_event_sends_answer(monkeypatch, tmp_path):
     sent_messages = []
+    offset_path = tmp_path / "bitrix_offset.json"
+    dialog_chats: dict[str, int] = {}
 
     class FakeBitrixClient:
         def send_message(self, *, bot_id, bot_token, dialog_id, text):
@@ -63,11 +65,12 @@ def test_process_event_sends_answer(monkeypatch):
             })
             return {"messageId": 100}
 
-    def fake_ask(message, *, api_url, api_key="", timeout=120.0):
+    def fake_ask(message, *, api_url, api_key="", chat_id=None, timeout=120.0):
         assert message == "Где инструкция?"
         assert api_url == "http://127.0.0.1:5000"
         assert api_key == "secret"
-        return "Инструкция находится в базе знаний."
+        assert chat_id is None
+        return "Инструкция находится в базе знаний.", 77
 
     monkeypatch.setattr("scripts.bitrix24_bot_worker.ask_internal_chat_api", fake_ask)
 
@@ -85,12 +88,23 @@ def test_process_event_sends_answer(monkeypatch):
         bot_token="bot-token",
         api_url="http://127.0.0.1:5000",
         api_key="secret",
+        dialog_chats=dialog_chats,
+        offset_path=offset_path,
     )
 
     assert processed is True
+    assert dialog_chats["7"] == 77
     assert sent_messages == [{
         "bot_id": 456,
         "bot_token": "bot-token",
         "dialog_id": "7",
         "text": "Инструкция находится в базе знаний.",
     }]
+
+
+def test_dialog_chat_map_roundtrip(tmp_path):
+    from scripts.bitrix24_bot_worker import load_dialog_chats, save_dialog_chats
+
+    offset_path = tmp_path / "bitrix_offset.json"
+    save_dialog_chats(offset_path, {"chat5": 12, "7": 99})
+    assert load_dialog_chats(offset_path) == {"chat5": 12, "7": 99}

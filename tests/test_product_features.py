@@ -63,16 +63,14 @@ def test_documents_upload_and_list(client, tmp_path, monkeypatch):
     assert rv.get_json()["documents"][0]["filename"] == "note.txt"
 
 
+@patch("api.routes.admin._chroma_status")
 @patch("api.routes.admin.fetch_remote_model_ids")
 @patch("api.routes.admin.inference_server_reachable")
-@patch("api.routes.admin.chromadb.PersistentClient")
-def test_admin_overview(mock_client, mock_reachable, mock_models, client):
+def test_admin_overview(mock_reachable, mock_models, mock_chroma, client):
     login_admin(client)
     mock_reachable.return_value = True
     mock_models.return_value = ["bge-m3", "qwen2.5:7b"]
-    collection = MagicMock()
-    collection.count.return_value = 7
-    mock_client.return_value.get_collection.return_value = collection
+    mock_chroma.return_value = {"ok": True, "collection": "wiki", "count": 7}
 
     rv = client.get("/api/admin/overview")
     assert rv.status_code == 200

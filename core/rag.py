@@ -5,7 +5,6 @@ RAG (Retrieval-Augmented Generation) с поддержкой цитирован�
 """
 
 import chromadb
-from chromadb.config import Settings
 from typing import List, Dict, Optional, Tuple, Any, Iterator
 import re
 import json
@@ -14,17 +13,14 @@ import time
 from pathlib import Path
 import logging
 import logging.handlers
-import requests
 import uuid
 
 from config import settings, get_logger
 from utils.embeddings import (
-    get_embedding,
     chat_completion,
     chat_completion_stream,
     chat_completion_messages,
     chat_completion_messages_stream,
-    chat_completion_messages_stream_filtered,
     build_multimodal_user_content,
     strip_model_reasoning,
     _filter_reasoning_stream,
@@ -39,76 +35,81 @@ from core.retrieval import hybrid_retrieve, load_bm25_okapi
 
 logger = get_logger(__name__)
 
-# Настройка отдельного файлового логгера для RAG модуля
-rag_log_dir = Path(settings.LOG_DIR) / "rag"
-rag_log_dir.mkdir(parents=True, exist_ok=True)
-rag_log_file = rag_log_dir / "rag_detailed.log"
-deep_retrieval_log_file = rag_log_dir / "deep_retrieval.log"
-
-rag_file_handler = logging.handlers.RotatingFileHandler(
-    rag_log_file,
-    maxBytes=10 * 1024 * 1024,  # 10 MB
-    backupCount=5,
-    encoding='utf-8'
-)
-rag_file_handler.setLevel(logging.DEBUG)
-rag_file_formatter = logging.Formatter(
-    '%(asctime)s | %(levelname)-8s | %(name)s | %(funcName)s:%(lineno)d | %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
-)
-rag_file_handler.setFormatter(rag_file_formatter)
-
-# Добавляем файловый обработчик к RAG логгеру
-rag_logger = logging.getLogger('rag')
-rag_logger.setLevel(logging.DEBUG)
-if not any(
-    isinstance(h, logging.handlers.RotatingFileHandler)
-    and getattr(h, "baseFilename", None) == str(rag_log_file)
-    for h in rag_logger.handlers
-):
-    rag_logger.addHandler(rag_file_handler)
-
-# Отдельный логгер для deep retrieval (в отдельный файл)
-deep_retrieval_file_handler = logging.handlers.RotatingFileHandler(
-    deep_retrieval_log_file,
-    maxBytes=10 * 1024 * 1024,  # 10 MB
-    backupCount=5,
-    encoding='utf-8',
-)
-deep_retrieval_file_handler.setLevel(logging.DEBUG)
-deep_retrieval_file_handler.setFormatter(rag_file_formatter)
-
+# Логгеры RAG создаются лениво при первом RAGSystem (не при импорте модуля)
+rag_logger = logging.getLogger("rag")
 deep_retrieval_logger = logging.getLogger("deep_retrieval")
-deep_retrieval_logger.setLevel(logging.DEBUG)
-if not any(
-    isinstance(h, logging.handlers.RotatingFileHandler)
-    and getattr(h, "baseFilename", None) == str(deep_retrieval_log_file)
-    for h in deep_retrieval_logger.handlers
-):
-    deep_retrieval_logger.addHandler(deep_retrieval_file_handler)
-
-# Отдельный логгер: обмен "вопрос ↔ LLM" (JSONL) для анализа качества
-llm_log_dir = Path(settings.LOG_DIR) / "llm"
-llm_log_dir.mkdir(parents=True, exist_ok=True)
-llm_exchange_log_file = llm_log_dir / "llm_exchange.jsonl"
-
-llm_exchange_file_handler = logging.handlers.RotatingFileHandler(
-    llm_exchange_log_file,
-    maxBytes=20 * 1024 * 1024,  # 20 MB
-    backupCount=10,
-    encoding="utf-8",
-)
-llm_exchange_file_handler.setLevel(logging.INFO)
-llm_exchange_file_handler.setFormatter(logging.Formatter("%(message)s"))
-
 llm_exchange_logger = logging.getLogger("llm_exchange")
-llm_exchange_logger.setLevel(logging.INFO)
-if not any(
-    isinstance(h, logging.handlers.RotatingFileHandler)
-    and getattr(h, "baseFilename", None) == str(llm_exchange_log_file)
-    for h in llm_exchange_logger.handlers
-):
-    llm_exchange_logger.addHandler(llm_exchange_file_handler)
+_RAG_LOGGING_READY = False
+
+
+def _setup_rag_logging() -> None:
+    """Идемпотентная настройка каталогов и файловых хендлеров RAG/LLM."""
+    global _RAG_LOGGING_READY
+    if _RAG_LOGGING_READY:
+        return
+
+    rag_log_dir = Path(settings.LOG_DIR) / "rag"
+    rag_log_dir.mkdir(parents=True, exist_ok=True)
+    rag_log_file = rag_log_dir / "rag_detailed.log"
+    deep_retrieval_log_file = rag_log_dir / "deep_retrieval.log"
+
+    rag_file_formatter = logging.Formatter(
+        "%(asctime)s | %(levelname)-8s | %(name)s | %(funcName)s:%(lineno)d | %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+
+    rag_logger.setLevel(logging.DEBUG)
+    if not any(
+        isinstance(h, logging.handlers.RotatingFileHandler)
+        and getattr(h, "baseFilename", None) == str(rag_log_file)
+        for h in rag_logger.handlers
+    ):
+        rag_file_handler = logging.handlers.RotatingFileHandler(
+            rag_log_file,
+            maxBytes=10 * 1024 * 1024,
+            backupCount=5,
+            encoding="utf-8",
+        )
+        rag_file_handler.setLevel(logging.DEBUG)
+        rag_file_handler.setFormatter(rag_file_formatter)
+        rag_logger.addHandler(rag_file_handler)
+
+    deep_retrieval_logger.setLevel(logging.DEBUG)
+    if not any(
+        isinstance(h, logging.handlers.RotatingFileHandler)
+        and getattr(h, "baseFilename", None) == str(deep_retrieval_log_file)
+        for h in deep_retrieval_logger.handlers
+    ):
+        deep_retrieval_file_handler = logging.handlers.RotatingFileHandler(
+            deep_retrieval_log_file,
+            maxBytes=10 * 1024 * 1024,
+            backupCount=5,
+            encoding="utf-8",
+        )
+        deep_retrieval_file_handler.setLevel(logging.DEBUG)
+        deep_retrieval_file_handler.setFormatter(rag_file_formatter)
+        deep_retrieval_logger.addHandler(deep_retrieval_file_handler)
+
+    llm_log_dir = Path(settings.LOG_DIR) / "llm"
+    llm_log_dir.mkdir(parents=True, exist_ok=True)
+    llm_exchange_log_file = llm_log_dir / "llm_exchange.jsonl"
+    llm_exchange_logger.setLevel(logging.INFO)
+    if not any(
+        isinstance(h, logging.handlers.RotatingFileHandler)
+        and getattr(h, "baseFilename", None) == str(llm_exchange_log_file)
+        for h in llm_exchange_logger.handlers
+    ):
+        llm_exchange_file_handler = logging.handlers.RotatingFileHandler(
+            llm_exchange_log_file,
+            maxBytes=20 * 1024 * 1024,
+            backupCount=10,
+            encoding="utf-8",
+        )
+        llm_exchange_file_handler.setLevel(logging.INFO)
+        llm_exchange_file_handler.setFormatter(logging.Formatter("%(message)s"))
+        llm_exchange_logger.addHandler(llm_exchange_file_handler)
+
+    _RAG_LOGGING_READY = True
 
 
 def _clip_for_llm_log(value: str, limit: Optional[int] = None) -> str:
@@ -119,10 +120,28 @@ def _clip_for_llm_log(value: str, limit: Optional[int] = None) -> str:
     return text[: max(0, limit - 3)] + "..."
 
 
+def _prompt_for_llm_log(prompt: str) -> Dict[str, Any]:
+    """
+    Поля промпта для JSONL-лога обмена с LLM.
+
+    По умолчанию — длина и первые 500 символов; полный текст только при
+    ``LLM_EXCHANGE_LOG_FULL=true`` (поле добавляет поток C).
+    """
+    text = str(prompt or "")
+    out: Dict[str, Any] = {
+        "prompt_chars": len(text),
+        "prompt_preview": text[:500],
+    }
+    if bool(getattr(settings, "LLM_EXCHANGE_LOG_FULL", False)):
+        out["prompt"] = _clip_for_llm_log(text)
+    return out
+
+
 def _safe_json_log(payload: Dict[str, Any]) -> None:
     """Записать одну JSONL-строку в llm_exchange, без падений основного потока."""
     if not bool(getattr(settings, "LLM_EXCHANGE_LOG_ENABLED", True)):
         return
+    _setup_rag_logging()
     try:
         llm_exchange_logger.info(json.dumps(payload, ensure_ascii=False, default=str))
         for h in llm_exchange_logger.handlers:
@@ -133,6 +152,19 @@ def _safe_json_log(payload: Dict[str, Any]) -> None:
     except Exception:
         # Логирование не должно ломать ответы пользователю.
         pass
+
+
+def _dedupe_str_list(seq: List[str]) -> List[str]:
+    """Уникальные непустые строки с сохранением порядка."""
+    seen = set()
+    out: List[str] = []
+    for x in seq:
+        x = (x or "").strip()
+        if not x or x in seen:
+            continue
+        seen.add(x)
+        out.append(x)
+    return out
 
 
 @dataclass
@@ -185,7 +217,7 @@ _CHITCHAT_MAX_WORDS = 5
 _CHITCHAT_PHRASE_RE = re.compile(
     r"^(?:"
     r"привет(?:ствую)?|здравствуй(?:те)?|добрый\s+(?:день|утро|вечер)|"
-    r"как\s+дела|как\s+ты|как\s+сам|что\s+нового|как\s+жизнь|"
+    r"как\s+(?:тут\s+)?дела|как\s+ты|как\s+сам|что\s+нового|как\s+жизнь|"
     r"спасибо|благодарю|пожалуйста|"
     r"пока|до\s+свидания|увидимся|"
     r"ок(?:ей)?|ладно|ясно|понятно|хорошо|"
@@ -200,7 +232,7 @@ _CHITCHAT_GREETING_START = frozenset({
 })
 
 _KB_DOMAIN_HINT_RE = re.compile(
-    r"1\s*с|егаис|упп|ут\s|ка\s|склад|номенклат|документ|ошибк|настро|"
+    r"1\s*с|егаис|упп|\bут\b|\bка\b|склад|номенклат|документ|ошибк|настро|"
     r"остат|реализац|ттн|маркир|списани|пользовател|отчет|отчёт|баз[аы]|"
     r"диадок|тсд|отгруз|задан|статус|индикатор|выполнен",
     re.IGNORECASE | re.UNICODE,
@@ -844,7 +876,8 @@ class RAGSystem:
         Args:
             collection_name: Имя коллекции ChromaDB
         """
-        rag_logger.info(f"=== Инициализация RAG системы ===")
+        _setup_rag_logging()
+        rag_logger.info("=== Инициализация RAG системы ===")
         rag_logger.debug(f"Входные параметры: collection_name={collection_name}")
         
         start_time = time.time()
@@ -998,19 +1031,8 @@ class RAGSystem:
             if hyde:
                 meta["dense_queries"].append(hyde)
 
-        def _dedupe(seq: List[str]) -> List[str]:
-            seen = set()
-            out: List[str] = []
-            for x in seq:
-                x = (x or "").strip()
-                if not x or x in seen:
-                    continue
-                seen.add(x)
-                out.append(x)
-            return out
-
-        meta["dense_queries"] = _dedupe(meta["dense_queries"])
-        meta["sparse_queries"] = _dedupe(meta["sparse_queries"])
+        meta["dense_queries"] = _dedupe_str_list(meta["dense_queries"])
+        meta["sparse_queries"] = _dedupe_str_list(meta["sparse_queries"])
         if not meta["dense_queries"]:
             meta["dense_queries"] = [user_query.strip()]
         if not meta["sparse_queries"]:
@@ -1067,9 +1089,8 @@ class RAGSystem:
             "iters": [],
         }
 
-        # Пул кандидатов: chunk_id -> doc (+ происхождение)
+        # Пул кандидатов: chunk_id -> doc
         pool: Dict[str, Dict[str, Any]] = {}
-        origins: Dict[str, List[str]] = {}
 
         seen_queries: List[str] = []
         for q in (expansion.get("dense_queries") or []) + (expansion.get("sparse_queries") or []):
@@ -1109,12 +1130,6 @@ class RAGSystem:
                 prev = pool.get(cid)
                 if prev is None or float(doc.get("score") or 0.0) > float(prev.get("score") or 0.0):
                     pool[cid] = doc
-                if cid not in origins:
-                    origins[cid] = []
-                # origin: первый dense query (или rewritten)
-                origin_label = (expansion.get("rewritten") or user_query).strip()
-                if origin_label and origin_label not in origins[cid]:
-                    origins[cid].append(origin_label)
                 added += 1
 
             # Ограничиваем пул кандидатов по текущим score
@@ -1122,7 +1137,6 @@ class RAGSystem:
                 ordered_ids = sorted(pool.keys(), key=lambda x: float(pool[x].get("score") or 0.0), reverse=True)
                 for drop_id in ordered_ids[max_candidates:]:
                     pool.pop(drop_id, None)
-                    origins.pop(drop_id, None)
 
             iter_info: Dict[str, Any] = {
                 "iter": iter_idx + 1,
@@ -1207,19 +1221,8 @@ class RAGSystem:
         diagnostics["deep"] = deep_diag
 
         # В expansion_meta добавим накопленные запросы (dedupe)
-        def _dedupe(seq: List[str]) -> List[str]:
-            seen = set()
-            out: List[str] = []
-            for x in seq:
-                x = (x or "").strip()
-                if not x or x in seen:
-                    continue
-                seen.add(x)
-                out.append(x)
-            return out
-
-        expansion["dense_queries"] = _dedupe(expansion.get("dense_queries") or [])
-        expansion["sparse_queries"] = _dedupe(expansion.get("sparse_queries") or [])
+        expansion["dense_queries"] = _dedupe_str_list(expansion.get("dense_queries") or [])
+        expansion["sparse_queries"] = _dedupe_str_list(expansion.get("sparse_queries") or [])
         return final_docs, last_err, expansion, diagnostics
 
     def retrieve_documents_auto(
@@ -1256,7 +1259,6 @@ class RAGSystem:
                 self.collection,
                 expansion.get("dense_queries") or [expansion.get("rewritten", "")],
                 expansion.get("sparse_queries") or [expansion.get("rewritten", "")],
-                get_embedding,
                 top_k,
                 min_score,
                 self._reload_collection,
@@ -1333,7 +1335,7 @@ class RAGSystem:
         Returns:
             Список цитат
         """
-        rag_logger.info(f"--- Извлечение цитат ---")
+        rag_logger.info("--- Извлечение цитат ---")
         rag_logger.debug(f"Длина ответа: {len(answer)} символов")
         rag_logger.debug(f"Количество документов для анализа: {len(documents)}")
         
@@ -1367,7 +1369,7 @@ class RAGSystem:
                 )
                 citations.append(citation)
             else:
-                rag_logger.debug(f"Цитата не найдена в ответе")
+                rag_logger.debug("Цитата не найдена в ответе")
         
         elapsed = time.time() - start_time
         rag_logger.info(f"Извлечение цитат завершено за {elapsed:.3f} сек. Найдено цитат: {len(citations)}")
@@ -1428,7 +1430,7 @@ class RAGSystem:
         Returns:
             Отформатированный ответ с цитатами
         """
-        rag_logger.info(f"--- Форматирование ответа с цитатами ---")
+        rag_logger.info("--- Форматирование ответа с цитатами ---")
         rag_logger.debug(f"Исходный ответ: {answer[:100]}...")
         rag_logger.debug(f"Найдено цитат: {len(citations)}, max для отображения: {max_citations}")
         
@@ -1576,7 +1578,7 @@ class RAGSystem:
         Returns:
             Сформированный промпт
         """
-        rag_logger.info(f"--- Генерация промпта ---")
+        rag_logger.info("--- Генерация промпта ---")
         rag_logger.debug(f"Запрос: '{query}'")
         rag_logger.debug(f"Документов: {len(documents)}, max_context_length: {max_context_length}")
         
@@ -1588,13 +1590,11 @@ class RAGSystem:
         # Формируем контекст из документов
         context_parts = []
         current_length = 0
-        total_text_length = 0
         
         for i, doc in enumerate(documents):
             text = doc['text']
             source = _source_from_metadata(doc.get('metadata'))
             text_length = len(text)
-            total_text_length += text_length
             
             rag_logger.debug(f"Документ {i+1}: source={source}, length={text_length}")
             
@@ -1749,6 +1749,66 @@ class RAGSystem:
             answer = chat_completion(prompt, timeout=120)
         rag_logger.debug(f"Ответ сгенерирован, длина: {len(answer)} символов")
         return answer
+
+    def _postprocess_generated_answer(
+        self,
+        answer: str,
+        *,
+        raw_answer: Optional[str] = None,
+        strip_reasoning: bool = False,
+    ) -> str:
+        """Общая пост-обработка ответа: strip reasoning, merge mermaid, автофикс."""
+        text = answer or ""
+        if strip_reasoning and getattr(settings, "CHAT_DISABLE_THINKING", True):
+            text = strip_model_reasoning(text)
+        if raw_answer is not None:
+            text = _merge_mermaid_from_raw(raw_answer, text)
+        return self._autofix_mermaid_blocks(text)
+
+    def _build_ok_diagnostics(
+        self,
+        *,
+        documents: List[Dict],
+        answer_mode: str,
+        conversation_history: Optional[List[Dict[str, str]]],
+        top_k: Optional[int],
+        min_score: Optional[float],
+        latency_ms: int,
+        timings_ms: Dict[str, int],
+        retrieve_diag: Optional[Dict[str, Any]] = None,
+        expansion: Optional[Dict[str, Any]] = None,
+        attachment_enrichment: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Собрать diagnostics для успешного ответа (query и stream)."""
+        diag: Dict[str, Any] = {
+            "retrieval_status": "ok",
+            "document_count": len(documents or []),
+            "score_distribution": [
+                round(float(d.get("score", 0)), 4) for d in (documents or [])
+            ],
+            "top_k": top_k,
+            "min_score": min_score,
+            "answer_mode": answer_mode,
+            "conversation_messages": len(conversation_history or []),
+            "latency_ms": latency_ms,
+            "timings_ms": timings_ms,
+        }
+        if retrieve_diag is not None:
+            diag["retrieval"] = retrieve_diag
+        if expansion is not None:
+            diag["expansion"] = {
+                "rewritten": expansion.get("rewritten"),
+                "dense_queries": expansion.get("dense_queries"),
+                "hyde_used": bool(expansion.get("hyde_snippet")),
+                "multi_variants": expansion.get("multi_variants"),
+            }
+        if attachment_enrichment is not None:
+            diag["attachments"] = {
+                "count": attachment_enrichment.get("attachment_count", 0),
+                "kinds": attachment_enrichment.get("kinds", []),
+                "enrichment_ms": attachment_enrichment.get("enrichment_ms", 0),
+            }
+        return diag
 
     def _autofix_mermaid_blocks(self, answer: str) -> str:
         """
@@ -1979,7 +2039,7 @@ class RAGSystem:
         Returns:
             Результат RAG с ответом и цитатами
         """
-        rag_logger.info(f"=== Выполнение RAG запроса ===")
+        rag_logger.info("=== Выполнение RAG запроса ===")
         rag_logger.debug(f"Запрос: '{query}'")
 
         exchange_id = uuid.uuid4().hex
@@ -2137,8 +2197,7 @@ class RAGSystem:
                 "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
                 "exchange_id": exchange_id,
                 "stage": "prompt",
-                "prompt_chars": len(prompt or ""),
-                "prompt": _clip_for_llm_log(prompt),
+                **_prompt_for_llm_log(prompt),
             }
         )
         
@@ -2148,7 +2207,7 @@ class RAGSystem:
         answer = self._generate_answer(prompt, attachments=attachments)
         gen_ms = int((time.time() - gen_started) * 1000)
         query_timings_ms["llm_generation_ms"] = gen_ms
-        answer = self._autofix_mermaid_blocks(answer)
+        answer = self._postprocess_generated_answer(answer)
 
         _safe_json_log(
             {
@@ -2183,29 +2242,18 @@ class RAGSystem:
                 "timings_ms": query_timings_ms,
             }
         )
-        rag_result.diagnostics = {
-            "retrieval_status": "ok",
-            "document_count": len(documents),
-            "score_distribution": [round(float(d.get("score", 0)), 4) for d in documents],
-            "top_k": top_k,
-            "min_score": min_score,
-            "answer_mode": answer_mode,
-            "conversation_messages": len(conversation_history or []),
-            "latency_ms": int(elapsed * 1000),
-            "timings_ms": query_timings_ms,
-            "retrieval": retrieve_diag,
-            "expansion": {
-                "rewritten": expansion.get("rewritten"),
-                "dense_queries": expansion.get("dense_queries"),
-                "hyde_used": bool(expansion.get("hyde_snippet")),
-                "multi_variants": expansion.get("multi_variants"),
-            },
-            "attachments": {
-                "count": attachment_enrichment.get("attachment_count", 0),
-                "kinds": attachment_enrichment.get("kinds", []),
-                "enrichment_ms": attachment_enrichment.get("enrichment_ms", 0),
-            },
-        }
+        rag_result.diagnostics = self._build_ok_diagnostics(
+            documents=documents,
+            answer_mode=answer_mode,
+            conversation_history=conversation_history,
+            top_k=top_k,
+            min_score=min_score,
+            latency_ms=int(elapsed * 1000),
+            timings_ms=query_timings_ms,
+            retrieve_diag=retrieve_diag,
+            expansion=expansion,
+            attachment_enrichment=attachment_enrichment,
+        )
         rag_logger.info("RAG запрос завершен за %.3f сек, timings_ms=%s", elapsed, query_timings_ms)
         rag_logger.debug(f"Результат: {len(documents)} документов, {len(rag_result.citations)} цитат")
         
@@ -2280,8 +2328,7 @@ class RAGSystem:
                 "exchange_id": exchange_id,
                 "stage": "prompt",
                 "stream": True,
-                "prompt_chars": len(prompt or ""),
-                "prompt": _clip_for_llm_log(prompt),
+                **_prompt_for_llm_log(prompt),
             }
         )
 
@@ -2323,10 +2370,11 @@ class RAGSystem:
         gen_ms = int((time.time() - gen_started) * 1000)
         stream_timings_ms["llm_generation_ms"] = gen_ms
         disable_thinking = bool(getattr(settings, "CHAT_DISABLE_THINKING", True))
-        if disable_thinking:
-            answer = strip_model_reasoning(answer)
-        answer = _merge_mermaid_from_raw(raw_answer, answer)
-        answer = self._autofix_mermaid_blocks(answer)
+        answer = self._postprocess_generated_answer(
+            answer,
+            raw_answer=raw_answer,
+            strip_reasoning=disable_thinking,
+        )
 
         _safe_json_log(
             {
@@ -2339,7 +2387,6 @@ class RAGSystem:
                 "chat_disable_thinking": disable_thinking,
                 "latency_llm_ms": gen_ms,
                 "answer_raw_chars": len(raw_answer or ""),
-                "cot_in_raw": "The user is asking" in (raw_answer or ""),
                 "answer_chars": len(answer or ""),
                 "answer": _clip_for_llm_log(answer),
             }
@@ -2350,15 +2397,16 @@ class RAGSystem:
         rag_result.answer = self._autofix_mermaid_blocks(rag_result.answer or "")
         stream_timings_ms["citation_enrich_ms"] = _stream_elapsed_ms(enrich_started)
         stream_timings_ms["total_ms"] = _stream_elapsed_ms(stream_perf_started)
-        rag_result.diagnostics = {
-            "retrieval_status": "ok",
-            "document_count": len(documents),
-            "score_distribution": [round(float(d.get("score", 0)), 4) for d in documents],
-            "answer_mode": answer_mode,
-            "conversation_messages": len(conversation_history or []),
-            "latency_ms": stream_timings_ms["total_ms"],
-            "timings_ms": stream_timings_ms,
-        }
+        rag_result.diagnostics = self._build_ok_diagnostics(
+            documents=documents,
+            answer_mode=answer_mode,
+            conversation_history=conversation_history,
+            top_k=getattr(settings, "RAG_TOP_K", None),
+            min_score=getattr(settings, "RAG_MIN_SCORE", None),
+            latency_ms=stream_timings_ms["total_ms"],
+            timings_ms=stream_timings_ms,
+            attachment_enrichment=attachment_enrichment,
+        )
 
         _safe_json_log(
             {
@@ -2392,7 +2440,7 @@ class RAGSystem:
         Returns:
             RAG результат с цитатами
         """
-        rag_logger.info(f"--- Обогащение ответа цитатами ---")
+        rag_logger.info("--- Обогащение ответа цитатами ---")
         rag_logger.debug(f"Длина ответа: {len(answer)} символов")
         rag_logger.debug(f"Документов: {len(documents)}, max_citations: {max_citations}")
         

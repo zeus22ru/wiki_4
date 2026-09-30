@@ -4,15 +4,12 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>БочкарИИ</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='vendor/fonts/inter.css') }}?v=1">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/theme.css') }}?v=15">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/markdown.css') }}?v=3">
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=23">
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/components.css') }}?v=23">
-    <!-- Highlight.js для подсветки кода -->
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=24">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/components.css') }}?v=24">
+    <link rel="stylesheet" href="{{ url_for('static', filename='vendor/highlight.js/11.9.0/github-dark.min.css') }}">
 </head>
 <body>
     <div class="app-container">
@@ -432,17 +429,12 @@
         </div>
     </div>
 
-    <!-- Marked.js для Markdown рендеринга -->
-    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.4/dist/purify.min.js"></script>
-    <!-- Highlight.js для подсветки кода -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
-    <!-- Mermaid для графов/диаграмм в Markdown -->
-    <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
-    <!-- Theme Manager -->
-    <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
-    <!-- Clipboard -->
+    <script src="{{ url_for('static', filename='vendor/marked/12.0.2/marked.min.js') }}"></script>
+    <script src="{{ url_for('static', filename='vendor/dompurify/3.2.4/purify.min.js') }}"></script>
+    <script src="{{ url_for('static', filename='vendor/highlight.js/11.9.0/highlight.min.js') }}"></script>
+    <script src="{{ url_for('static', filename='vendor/mermaid/10.9.1/mermaid.min.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/theme.js') }}?v=2"></script>
     <script src="{{ url_for('static', filename='js/clipboard.js') }}"></script>
-    <script src="{{ url_for('static', filename='script.js') }}?v=23"></script>
+    <script src="{{ url_for('static', filename='script.js') }}?v=24"></script>
 </body>
 </html>
