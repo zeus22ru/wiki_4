@@ -16,7 +16,7 @@ import requests
 
 from config import settings
 
-OLLAMA_URL = settings.OLLAMA_URL.rstrip("/")
+OLLAMA_URL = settings.get_embedding_base_url()
 EMBEDDING_MODEL = settings.OLLAMA_EMBEDDING_MODEL
 
 

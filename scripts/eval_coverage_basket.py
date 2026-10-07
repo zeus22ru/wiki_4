@@ -104,9 +104,9 @@ def _best_score(documents: List[Dict[str, Any]]) -> float:
 def run_basket(in_path: Path, out_path: Path, deep: bool, top_k: Optional[int], min_score: Optional[float]) -> None:
     if not inference_server_reachable():
         logger.warning(
-            "Сервер инференса недоступен по OLLAMA_URL (%s). "
+            "Сервер инференса недоступен (чат: %s). "
             "Deep retrieval и query expansion могут требовать LLM.",
-            settings.OLLAMA_URL,
+            settings.get_chat_base_url(),
         )
 
     basket = _read_jsonl(in_path)

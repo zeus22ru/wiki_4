@@ -15,6 +15,7 @@ from config import (
     settings,
     get_logger,
     inference_server_reachable,
+    inference_servers_are_split,
     fetch_remote_model_ids,
 )
 from core.chat_history import get_chat_history
@@ -40,6 +41,9 @@ def _public_settings() -> dict:
         "embedding_api_mode": settings.EMBEDDING_API_MODE,
         "chat_api_mode": settings.CHAT_API_MODE,
         "ollama_url": settings.OLLAMA_URL,
+        "embedding_url": settings.get_embedding_base_url(),
+        "chat_url": settings.get_chat_base_url(),
+        "servers_split": inference_servers_are_split(),
         "embedding_model": settings.OLLAMA_EMBEDDING_MODEL,
         "chat_model": settings.OLLAMA_CHAT_MODEL,
         "chroma_persist_dir": settings.CHROMA_PERSIST_DIR,
@@ -249,11 +253,20 @@ def overview():
         ):
             return jsonify(cached["payload"])
 
+    chat_models: list = []
+    embedding_models: list = []
     models = []
     models_error = None
     stage_started = time.perf_counter()
     try:
-        models = fetch_remote_model_ids()
+        if inference_servers_are_split():
+            chat_models = fetch_remote_model_ids(role="chat")
+            embedding_models = fetch_remote_model_ids(role="embedding")
+            models = list(dict.fromkeys(chat_models + embedding_models))
+        else:
+            models = fetch_remote_model_ids()
+            chat_models = models
+            embedding_models = models
     except Exception as exc:
         models_error = str(exc)
         logger.warning("Не удалось получить модели: %s", exc)
@@ -293,9 +306,11 @@ def overview():
         "settings": _public_settings(),
         "models": {
             "available": models,
+            "chat_available": chat_models,
+            "embedding_available": embedding_models,
             "error": models_error,
-            "current_embedding_model_present": settings.OLLAMA_EMBEDDING_MODEL in models,
-            "current_chat_model_present": settings.OLLAMA_CHAT_MODEL in models,
+            "current_embedding_model_present": settings.OLLAMA_EMBEDDING_MODEL in embedding_models,
+            "current_chat_model_present": settings.OLLAMA_CHAT_MODEL in chat_models,
         },
         "usage": {
             "chat_count": history.get_session_count(),
@@ -344,10 +359,34 @@ def settings_schema():
 
 @admin_bp.route("/models", methods=["GET"])
 def list_models():
-    """Список моделей с сервера инференса (Ollama / LM Studio) для админ-селектов."""
+    """
+    Список моделей с сервера инференса (Ollama / LM Studio) для админ-селектов.
+
+    ``?role=chat|embedding`` — только модели соответствующего сервера.
+    Без параметра: при раздельных провайдерах возвращается объединение, а также
+    списки ``chat_models`` и ``embedding_models``.
+    """
+    role = (request.args.get("role") or "").strip().lower()
     try:
+        if role == "embedding":
+            return jsonify({"models": fetch_remote_model_ids(role="embedding")})
+        if role == "chat":
+            return jsonify({"models": fetch_remote_model_ids(role="chat")})
+        if inference_servers_are_split():
+            chat_models = fetch_remote_model_ids(role="chat")
+            embedding_models = fetch_remote_model_ids(role="embedding")
+            merged = list(dict.fromkeys(chat_models + embedding_models))
+            return jsonify({
+                "models": merged,
+                "chat_models": chat_models,
+                "embedding_models": embedding_models,
+            })
         models = fetch_remote_model_ids()
-        return jsonify({"models": models})
+        return jsonify({
+            "models": models,
+            "chat_models": models,
+            "embedding_models": models,
+        })
     except Exception as exc:
         logger.warning("Не удалось получить список моделей: %s", exc)
         return jsonify({"error": "Не удалось получить список моделей."}), 500

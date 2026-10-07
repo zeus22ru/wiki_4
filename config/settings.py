@@ -95,9 +95,18 @@ class Settings:
     EMBEDDING_API_MODE: str = _EMBEDDING_API_MODE
     CHAT_API_MODE: str = _CHAT_API_MODE
     OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
+    # Раздельные серверы для эмбеддингов и чата: пусто = использовать OLLAMA_URL.
+    # Нужны, когда эмбеддинги и ответы обслуживают разные провайдеры.
+    EMBEDDING_BASE_URL: str = os.getenv("EMBEDDING_BASE_URL", "")
+    CHAT_BASE_URL: str = os.getenv("CHAT_BASE_URL", "")
+    # Раздельные ключи: пусто = использовать OPENAI_API_KEY.
+    EMBEDDING_API_KEY: str = os.getenv("EMBEDDING_API_KEY", "")
+    CHAT_API_KEY: str = os.getenv("CHAT_API_KEY", "")
     # Лимит токенов ответа: OpenAI-совместимый max_tokens, Ollama /api/generate num_predict
     CHAT_MAX_TOKENS: int = int(os.getenv("CHAT_MAX_TOKENS", "2048"))
-    # Отключить thinking/reasoning у чат-модели (Qwen 3 и аналоги): enable_thinking=false в API
+    # Отключить thinking/reasoning у чат-модели.
+    # Qwen/LM Studio: enable_thinking=false + /no_think + prefill.
+    # DeepSeek (api.deepseek.com): thinking={"type":"disabled"}.
     CHAT_DISABLE_THINKING: bool = _env_bool("CHAT_DISABLE_THINKING", True)
     # Размерность эмбеддингов для OpenAI-совместимого API; None — не отправлять поле dimensions
     EMBEDDING_DIMENSIONS: Optional[int] = _env_optional_int("EMBEDDING_DIMENSIONS")
@@ -336,6 +345,22 @@ class Settings:
         """Получить полный URL для Ollama API"""
         return f"{self.OLLAMA_URL}/api"
 
+    def get_embedding_base_url(self) -> str:
+        """Базовый URL сервера эмбеддингов: EMBEDDING_BASE_URL или OLLAMA_URL."""
+        return (self.EMBEDDING_BASE_URL or self.OLLAMA_URL).rstrip("/")
+
+    def get_chat_base_url(self) -> str:
+        """Базовый URL сервера чата: CHAT_BASE_URL или OLLAMA_URL."""
+        return (self.CHAT_BASE_URL or self.OLLAMA_URL).rstrip("/")
+
+    def get_embedding_api_key(self) -> str:
+        """Ключ сервера эмбеддингов: EMBEDDING_API_KEY или OPENAI_API_KEY."""
+        return self.EMBEDDING_API_KEY or self.OPENAI_API_KEY
+
+    def get_chat_api_key(self) -> str:
+        """Ключ сервера чата: CHAT_API_KEY или OPENAI_API_KEY."""
+        return self.CHAT_API_KEY or self.OPENAI_API_KEY
+
     def get_database_url(self) -> str:
         """Получить URL для подключения к базе данных"""
         return f"sqlite:///{self.DATABASE_PATH}"
@@ -362,19 +387,30 @@ def uses_openai_compatible_api() -> bool:
     )
 
 
-_INFERENCE_REACHABLE_CACHE: Optional[Tuple[bool, float]] = None
-_INFERENCE_REACHABLE_LOCK = threading.Lock()
-INFERENCE_REACHABLE_CACHE_TTL: float = float(
-    os.getenv("INFERENCE_REACHABLE_CACHE_TTL", "45")
-)
+def inference_servers_are_split() -> bool:
+    """Разнесены ли серверы эмбеддингов и чата (по URL или режиму API)."""
+    return (
+        settings.get_embedding_base_url() != settings.get_chat_base_url()
+        or settings.EMBEDDING_API_MODE != settings.CHAT_API_MODE
+    )
 
 
-def _inference_server_reachable_uncached(timeout: float = 5.0) -> bool:
-    """Проверка доступности сервера инференса без кэша."""
-    base = settings.OLLAMA_URL.rstrip("/")
-    if uses_openai_compatible_api():
+def _auth_headers(api_mode: str, api_key: str) -> dict:
+    """Заголовок авторизации для OpenAI-совместимого сервера (при наличии ключа)."""
+    if api_mode == "openai" and api_key:
+        return {"Authorization": f"Bearer {api_key}"}
+    return {}
+
+
+def _endpoint_reachable(base: str, api_mode: str, timeout: float, api_key: str = "") -> bool:
+    """Доступен ли конкретный сервер инференса в указанном режиме API."""
+    base = (base or "").rstrip("/")
+    if not base:
+        return False
+    headers = _auth_headers(api_mode, api_key)
+    if api_mode == "openai":
         try:
-            r = requests.get(f"{base}/v1/models", timeout=timeout)
+            r = requests.get(f"{base}/v1/models", timeout=timeout, headers=headers)
             if r.status_code != 200:
                 return False
             payload = r.json()
@@ -385,10 +421,36 @@ def _inference_server_reachable_uncached(timeout: float = 5.0) -> bool:
         except Exception:
             return False
     try:
-        r = requests.get(f"{base}/api/tags", timeout=timeout)
+        r = requests.get(f"{base}/api/tags", timeout=timeout, headers=headers)
         return r.status_code == 200
     except Exception:
         return False
+
+
+_INFERENCE_REACHABLE_CACHE: Optional[Tuple[bool, float]] = None
+_INFERENCE_REACHABLE_LOCK = threading.Lock()
+INFERENCE_REACHABLE_CACHE_TTL: float = float(
+    os.getenv("INFERENCE_REACHABLE_CACHE_TTL", "45")
+)
+
+
+def _inference_server_reachable_uncached(timeout: float = 5.0) -> bool:
+    """
+    Проверка доступности серверов инференса без кэша.
+
+    При раздельных провайдерах проверяются оба сервера (эмбеддинги и чат);
+    одинаковые пары (URL, режим) опрашиваются один раз.
+    """
+    checks = [
+        (settings.get_embedding_base_url(), settings.EMBEDDING_API_MODE, settings.get_embedding_api_key()),
+        (settings.get_chat_base_url(), settings.CHAT_API_MODE, settings.get_chat_api_key()),
+    ]
+    seen: dict[Tuple[str, str, str], bool] = {}
+    for base, api_mode, api_key in checks:
+        key = (base, api_mode, api_key)
+        if key not in seen:
+            seen[key] = _endpoint_reachable(base, api_mode, timeout, api_key)
+    return bool(seen) and all(seen.values())
 
 
 def inference_server_reachable(timeout: float = 5.0, *, use_cache: bool = True) -> bool:
@@ -414,16 +476,36 @@ def inference_server_reachable(timeout: float = 5.0, *, use_cache: bool = True) 
     return ok
 
 
-def fetch_remote_model_ids(timeout: float = 5.0) -> List[str]:
-    """
-    Список имён моделей на сервере: у Ollama поле name, у LM Studio — id.
-    """
-    base = settings.OLLAMA_URL.rstrip("/")
-    if uses_openai_compatible_api():
-        r = requests.get(f"{base}/v1/models", timeout=timeout)
+def _fetch_model_ids(base: str, api_mode: str, timeout: float, api_key: str = "") -> List[str]:
+    """Список id/имён моделей с одного сервера в заданном режиме API."""
+    base = (base or "").rstrip("/")
+    headers = _auth_headers(api_mode, api_key)
+    if api_mode == "openai":
+        r = requests.get(f"{base}/v1/models", timeout=timeout, headers=headers)
         r.raise_for_status()
         data = r.json().get("data") or []
         return [str(m.get("id", "")) for m in data if m.get("id")]
-    r = requests.get(f"{base}/api/tags", timeout=timeout)
+    r = requests.get(f"{base}/api/tags", timeout=timeout, headers=headers)
     r.raise_for_status()
     return [str(m.get("name", "")) for m in r.json().get("models", []) if m.get("name")]
+
+
+def fetch_remote_model_ids(timeout: float = 5.0, *, role: str = "chat") -> List[str]:
+    """
+    Список имён моделей на сервере: у Ollama поле name, у LM Studio — id.
+
+    role="chat" (по умолчанию) — сервер чата, role="embedding" — сервер эмбеддингов.
+    """
+    if role == "embedding":
+        return _fetch_model_ids(
+            settings.get_embedding_base_url(),
+            settings.EMBEDDING_API_MODE,
+            timeout,
+            settings.get_embedding_api_key(),
+        )
+    return _fetch_model_ids(
+        settings.get_chat_base_url(),
+        settings.CHAT_API_MODE,
+        timeout,
+        settings.get_chat_api_key(),
+    )

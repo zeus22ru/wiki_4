@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>05 · Три колонки + FAB — Graphite Gold</title>
+    <link rel="stylesheet" href="tokens.css">
+    <link rel="stylesheet" href="admin-shared.css">
+    <style>
+        .shell {
+            display: grid;
+            grid-template-columns: 268px minmax(0, 1fr) 300px;
+            gap: 16px;
+            min-height: 100vh;
+            padding: 16px;
+        }
+
+        .sidebar {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            padding: 18px;
+            position: relative;
+        }
+
+        .sidebar .history {
+            display: grid;
+            gap: 8px;
+            flex: 1;
+            overflow: auto;
+        }
+
+        .sidebar .history-item {
+            padding: 10px 12px;
+            border: 1px solid var(--line);
+            border-radius: var(--radius-sm);
+            background: var(--panel);
+            font-size: 13px;
+        }
+
+        .sidebar .history-item.active {
+            background: var(--primary-soft);
+            border-color: color-mix(in srgb, var(--primary) 32%, var(--line));
+        }
+
+        .bottom-nav {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 6px;
+            padding-top: 12px;
+            border-top: 1px solid var(--line);
+        }
+
+        .bottom-nav button {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 4px;
+            padding: 10px 6px;
+            border: 1px solid var(--line);
+            border-radius: var(--radius-sm);
+            background: var(--panel-soft);
+            color: var(--muted);
+            font: inherit;
+            font-size: 10px;
+            font-weight: 700;
+            cursor: pointer;
+        }
+
+        .bottom-nav button.active {
+            color: var(--primary-dark);
+            background: var(--primary-soft);
+            border-color: color-mix(in srgb, var(--primary) 35%, var(--line));
+        }
+
+        .fab-new {
+            position: absolute;
+            right: 18px;
+            bottom: 88px;
+            width: 52px;
+            height: 52px;
+            border: 0;
+            border-radius: 999px;
+            color: #fff;
+            background: linear-gradient(135deg, var(--primary), var(--accent));
+            font-size: 26px;
+            line-height: 1;
+            cursor: pointer;
+            box-shadow: 0 12px 28px rgba(124, 90, 34, 0.35);
+        }
+
+        .center {
+            display: grid;
+            grid-template-rows: auto minmax(0, 1fr) auto;
+            overflow: hidden;
+        }
+
+        .center.workspace-admin {
+            grid-template-rows: auto minmax(0, 1fr);
+        }
+
+        .center-top {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 14px 18px;
+            border-bottom: 1px solid var(--line);
+        }
+
+        .center-top .chips {
+            display: flex;
+            gap: 6px;
+        }
+
+        .messages {
+            display: grid;
+            align-content: start;
+            gap: 14px;
+            padding: 18px;
+            overflow: auto;
+        }
+
+        .composer-bar {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            gap: 10px;
+            padding: 14px 18px;
+            border-top: 1px solid var(--line);
+        }
+
+        .composer-bar input {
+            border: 1px solid var(--line);
+            border-radius: var(--radius-sm);
+            padding: 14px 16px;
+            font: inherit;
+            background: var(--panel);
+        }
+
+        .composer-bar .send-wide {
+            min-width: 120px;
+            border: 0;
+            border-radius: var(--radius-sm);
+            color: #fff;
+            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+            font: inherit;
+            font-weight: 800;
+            cursor: pointer;
+        }
+
+        .inspector {
+            display: flex;
+            flex-direction: column;
+            gap: 14px;
+            padding: 18px;
+            overflow: auto;
+        }
+
+        .inspector h2 {
+            margin: 0;
+            font-size: 16px;
+        }
+
+        .source-block {
+            padding: 12px;
+            border: 1px solid var(--line);
+            border-radius: var(--radius-sm);
+            background: var(--panel-soft);
+            font-size: 13px;
+        }
+
+        .source-block .score {
+            display: inline-block;
+            margin-top: 6px;
+            padding: 2px 8px;
+            border-radius: 999px;
+            background: var(--primary-soft);
+            color: var(--primary-dark);
+            font-size: 11px;
+            font-weight: 800;
+        }
+
+        .metric-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+        }
+
+        .metric {
+            padding: 12px;
+            border: 1px solid var(--line);
+            border-radius: var(--radius-sm);
+            background: var(--panel);
+            text-align: center;
+        }
+
+        .metric strong {
+            display: block;
+            font-size: 22px;
+            color: var(--primary-dark);
+        }
+
+        .inspector-actions {
+            display: grid;
+            gap: 8px;
+            margin-top: auto;
+        }
+
+        @media (max-width: 1100px) {
+            .shell {
+                grid-template-columns: 240px minmax(0, 1fr);
+            }
+
+            .inspector {
+                grid-column: 1 / -1;
+            }
+        }
+
+        @media (max-width: 720px) {
+            .shell {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body data-screen="chat">
+    <div class="proto-switch" role="tablist" aria-label="Экран прототипа">
+        <button class="active" type="button" data-screen="chat">Чат</button>
+        <button type="button" data-screen="admin">Админка</button>
+    </div>
+    <div class="shell shell-chat">
+        <aside class="panel sidebar">
+            <div class="brand">
+                <div class="logo">БИ</div>
+                <div>
+                    <p class="eyebrow">Executive</p>
+                    <h2 style="margin:0;font-size:17px">Диалоги</h2>
+                </div>
+            </div>
+            <input class="search" type="search" placeholder="Поиск…">
+            <div class="history">
+                <div class="history-item active"><strong>Доступ новому сотруднику</strong><p class="meta" style="margin:4px 0 0">активный</p></div>
+                <div class="history-item"><strong>Регламент отпусков</strong><p class="meta" style="margin:4px 0 0">вчера</p></div>
+            </div>
+            <button class="fab-new" type="button" title="Новый диалог" aria-label="Новый диалог">+</button>
+            <nav class="bottom-nav" aria-label="Разделы приложения">
+                <button class="active" type="button"><span>💬</span>Чат</button>
+                <button type="button"><span>📁</span>База</button>
+                <button type="button"><span>🛡</span>Админ</button>
+            </nav>
+        </aside>
+
+        <section class="panel center">
+            <div class="center-top">
+                <div>
+                    <p class="eyebrow">Рабочая область</p>
+                    <h2 style="margin:0;font-size:18px">AI-ассистент</h2>
+                </div>
+                <div class="chips">
+                    <span class="chip active">Кратко</span>
+                    <span class="status-pill"><span class="dot"></span> OK</span>
+                    <button class="btn-icon" type="button">☀</button>
+                    <button class="btn-secondary" type="button">Войти</button>
+                </div>
+            </div>
+            <div class="messages">
+                <div class="message">
+                    <div class="avatar">AI</div>
+                    <div class="bubble">Три колонки: история | чат | источники. «Новый чат» — плавающая кнопка (FAB) в сайдбаре. Разделы — внизу сайдбара, не в шапке.</div>
+                </div>
+                <div class="message user">
+                    <div class="bubble">Покажи источники по access_policy</div>
+                    <div class="avatar">Вы</div>
+                </div>
+                <div class="message">
+                    <div class="avatar">AI</div>
+                    <div class="bubble">См. правую колонку — документы уже отображаются постоянно, без выезжающей панели.</div>
+                </div>
+            </div>
+            <form class="composer-bar">
+                <input type="text" placeholder="Ваш вопрос…">
+                <button class="send-wide" type="submit">Отправить ↵</button>
+            </form>
+        </section>
+
+        <aside class="panel inspector">
+            <h2>Источники</h2>
+            <p class="meta">Всегда видны · обновляются с ответом</p>
+            <div class="source-block">
+                <strong>access_policy.docx</strong>
+                <p class="meta" style="margin:6px 0 0">§ 3.2 Назначение роли, согласование руководителя</p>
+                <span class="score">92%</span>
+            </div>
+            <div class="source-block">
+                <strong>onboarding.html</strong>
+                <p class="meta" style="margin:6px 0 0">Проверка доступа тестовым запросом</p>
+                <span class="score">81%</span>
+            </div>
+            <div class="metric-grid">
+                <div class="metric"><strong>42</strong><span class="meta">документа</span></div>
+                <div class="metric"><strong>1.4s</strong><span class="meta">LLM avg</span></div>
+            </div>
+            <div class="inspector-actions">
+                <button class="btn-secondary" type="button">Открыть в базе</button>
+                <button class="btn-ghost" type="button">Скрыть панель</button>
+            </div>
+        </aside>
+    </div>
+    <div class="shell shell-admin">
+        <aside class="panel sidebar">
+            <div class="brand">
+                <div class="logo">БИ</div>
+                <div><p class="eyebrow">Executive</p><h2 style="margin:0;font-size:17px">Навигация</h2></div>
+            </div>
+            <p class="meta" style="font-size:13px">В админке правая колонка показывает метрики вместо источников чата.</p>
+            <button class="fab-new" type="button" title="Новый диалог">+</button>
+            <nav class="bottom-nav" aria-label="Разделы">
+                <button type="button"><span>💬</span>Чат</button>
+                <button type="button"><span>📁</span>База</button>
+                <button class="active" type="button"><span>🛡</span>Админ</button>
+            </nav>
+        </aside>
+        <section class="panel center workspace-admin">
+            <div class="center-top">
+                <div>
+                    <p class="eyebrow">Админ-консоль</p>
+                    <h2 style="margin:0;font-size:18px">Диагностика</h2>
+                </div>
+                <button class="btn-secondary" type="button">Проверить</button>
+            </div>
+            <div class="admin-workspace" style="flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden">
+                <div class="admin-body" style="flex:1;overflow:auto;padding-top:0">
+                    <div class="admin-subtabs" role="tablist">
+                        <button class="active" type="button" data-admin-tab="overview">Обзор</button>
+                        <button type="button" data-admin-tab="settings">Настройки</button>
+                    </div>
+                    <div class="admin-subpanel active" data-admin-panel="overview">
+                        <div class="admin-grid">
+                            <div class="admin-card"><strong>LLM</strong><span class="ok">доступен</span></div>
+                            <div class="admin-card"><strong>Chroma</strong><span>18 240 чанков</span></div>
+                            <div class="admin-card"><strong>История</strong><span>47 чатов</span></div>
+                            <div class="admin-card"><strong>Оценки</strong><span>89 / 7</span></div>
+                            <div class="admin-card wide"><strong>RAG</strong><span>top_k=5, min_score=0</span></div>
+                            <div class="admin-card wide"><strong>Риски качества</strong><ul class="admin-list"><li>3 устаревших документа</li></ul></div>
+                        </div>
+                    </div>
+                    <div class="admin-subpanel" data-admin-panel="settings">
+                        <div class="admin-settings-toolbar">
+                            <input class="search" type="search" placeholder="Поиск настроек">
+                            <button class="btn-secondary" type="button">Обновить</button>
+                        </div>
+                        <div class="admin-settings-group">
+                            <div class="admin-settings-group__head">Инференс</div>
+                            <div class="admin-settings-row"><div><code>chat_model</code></div><input value="qwen2.5:7b"><button class="btn-ghost" type="button">↺</button></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+        <aside class="panel inspector">
+            <h2>Сводка</h2>
+            <p class="meta">Быстрые метрики (как мини-дашборд)</p>
+            <div class="metric-grid">
+                <div class="metric"><strong>200</strong><span class="meta">Flask</span></div>
+                <div class="metric"><strong>OK</strong><span class="meta">LLM</span></div>
+                <div class="metric"><strong>18k</strong><span class="meta">Chroma</span></div>
+                <div class="metric"><strong>1.4s</strong><span class="meta">latency</span></div>
+            </div>
+            <div class="source-block">
+                <strong>Последняя проверка</strong>
+                <p class="meta" style="margin:6px 0 0">01.06.2026 14:32</p>
+            </div>
+            <div class="inspector-actions">
+                <button class="btn-primary" type="button">Проверить сейчас</button>
+                <button class="btn-secondary" type="button">Экспорт отчёта</button>
+            </div>
+        </aside>
+    </div>
+    <a class="prototype-badge" href="index.html">← Все компоновки</a>
+    <script src="proto-switch.js"></script>
+</body>
+</html>

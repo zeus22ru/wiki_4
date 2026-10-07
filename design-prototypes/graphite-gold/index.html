@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Graphite Gold — 5 компоновок интерфейса</title>
+    <link rel="stylesheet" href="tokens.css">
+    <style>
+        .hub {
+            max-width: 1100px;
+            margin: 0 auto;
+            padding: 32px 24px 48px;
+        }
+
+        .hub h1 {
+            margin-bottom: 10px;
+            font-size: clamp(28px, 4vw, 42px);
+            letter-spacing: -0.03em;
+        }
+
+        .hub .lead {
+            max-width: 720px;
+            margin-bottom: 28px;
+            color: var(--muted);
+            font-size: 17px;
+            line-height: 1.55;
+        }
+
+        .swatches {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 28px;
+        }
+
+        .swatch {
+            width: 36px;
+            height: 36px;
+            border: 2px solid #fff;
+            border-radius: 999px;
+            box-shadow: var(--shadow-sm);
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 18px;
+        }
+
+        .card {
+            display: grid;
+            gap: 12px;
+            padding: 20px;
+            text-decoration: none;
+            color: inherit;
+            transition: transform 0.15s ease, box-shadow 0.15s ease;
+        }
+
+        .card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 24px 60px rgba(72, 55, 35, 0.2);
+        }
+
+        .card h2 {
+            margin-bottom: 6px;
+            font-size: 20px;
+        }
+
+        .card .tag {
+            display: inline-block;
+            padding: 4px 10px;
+            border-radius: 999px;
+            background: var(--primary-soft);
+            color: var(--primary-dark);
+            font-size: 11px;
+            font-weight: 800;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+        }
+
+        .layout-sketch {
+            height: 120px;
+            border: 1px dashed var(--line-strong);
+            border-radius: var(--radius-sm);
+            background: var(--panel-soft);
+        }
+    </style>
+</head>
+<body>
+    <main class="hub">
+        <p class="eyebrow">03 · Graphite Gold</p>
+        <h1>5 компоновок интерфейса БочкарИИ</h1>
+        <p class="lead">Одна цветовая гамма — тёплый премиальный нейтрал. Пять разных концепций расположения кнопок и зон. В каждом макете переключатель <strong>Чат / Админка</strong> сверху: админ-консоль с вкладками «Обзор» и «Настройки», как в продакшене.</p>
+        <div class="swatches" aria-label="Палитра">
+            <span class="swatch" style="background:#7c5a22" title="primary"></span>
+            <span class="swatch" style="background:#c4933a" title="accent"></span>
+            <span class="swatch" style="background:#f5ead7" title="primary-soft"></span>
+            <span class="swatch" style="background:#f4f1eb" title="bg"></span>
+            <span class="swatch" style="background:#fffdf8" title="panel"></span>
+        </div>
+        <div class="grid">
+            <a class="panel card" href="layout-01-classic-sidebar.html">
+                <span class="tag">Компоновка 01</span>
+                <h2>Классический сайдбар</h2>
+                <p class="meta">Как в текущем продукте: история слева, вкладки в шапке, RAG-панель под ней, отправка справа внизу.</p>
+                <div class="layout-sketch" style="background:linear-gradient(90deg,#f5ead7 28%,#fffdf8 28% 72%,#faf7ef 72%)"></div>
+            </a>
+            <a class="panel card" href="layout-02-top-command-bar.html">
+                <span class="tag">Компоновка 02</span>
+                <h2>Верхняя командная панель</h2>
+                <p class="meta">Все главные действия в одной строке сверху: новый чат, вкладки, вход, статус. Слева только история.</p>
+                <div class="layout-sketch" style="background:linear-gradient(180deg,#7c5a22 0 22%,#fffdf8 22%)"></div>
+            </a>
+            <a class="panel card" href="layout-03-icon-rail-floating.html">
+                <span class="tag">Компоновка 03</span>
+                <h2>Icon rail + плавающий ввод</h2>
+                <p class="meta">Узкая колонка иконок, RAG — чипы над чатом, composer — карточка по центру с кнопкой внутри поля.</p>
+                <div class="layout-sketch" style="background:linear-gradient(90deg,#5d4218 6%,#fffdf8 6% 100%)"></div>
+            </a>
+            <a class="panel card" href="layout-04-split-actions-stacked.html">
+                <span class="tag">Компоновка 04</span>
+                <h2>Разнесённые действия</h2>
+                <p class="meta">Навигация слева в шапке, учёт и «Новый чат» справа; RAG и экспорт — столбиком над полем ввода.</p>
+                <div class="layout-sketch" style="background:linear-gradient(180deg,#fffdf8 0 55%,#f5ead7 55% 70%,#fffdf8 70%)"></div>
+            </a>
+            <a class="panel card" href="layout-05-triple-column.html">
+                <span class="tag">Компоновка 05</span>
+                <h2>Три колонки + FAB</h2>
+                <p class="meta">История | чат | источники всегда видны. «Новый чат» — FAB в сайдбаре, вкладки — внизу сайдбара.</p>
+                <div class="layout-sketch" style="background:linear-gradient(90deg,#f5ead7 22%,#fffdf8 22% 58%,#faf7ef 58%)"></div>
+            </a>
+        </div>
+    </main>
+</body>
+</html>

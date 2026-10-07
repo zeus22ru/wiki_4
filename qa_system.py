@@ -119,10 +119,20 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
     logger.info("=" * 60)
     
     if not inference_server_reachable():
-        logger.error(f"Сервер инференса недоступен: {settings.OLLAMA_URL}")
-        logger.error("Проверьте INFERENCE_BACKEND (ollama | lmstudio) и запуск Ollama или LM Studio.")
+        logger.error(
+            "Серверы инференса недоступны (эмбеддинги: %s, чат: %s).",
+            settings.get_embedding_base_url(),
+            settings.get_chat_base_url(),
+        )
+        logger.error(
+            "Проверьте EMBEDDING_BASE_URL/CHAT_BASE_URL, EMBEDDING_API_MODE/CHAT_API_MODE и запуск серверов."
+        )
         return
-    logger.info(f"Сервер инференса отвечает: {settings.OLLAMA_URL}")
+    logger.info(
+        "Серверы инференса отвечают (эмбеддинги: %s, чат: %s).",
+        settings.get_embedding_base_url(),
+        settings.get_chat_base_url(),
+    )
     
     # Подключаемся к текущему RAG, чтобы CLI совпадал с web/API retrieval.
     try:

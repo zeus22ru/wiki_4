@@ -118,6 +118,40 @@ SPECS: list[SettingSpec] = [
         secret=True,
     ),
     SettingSpec(
+        key="EMBEDDING_BASE_URL",
+        env="EMBEDDING_BASE_URL",
+        group=_GROUP_LLM,
+        type="str",
+        description="Базовый URL сервера эмбеддингов. Пусто — использовать OLLAMA_URL.",
+        allowed='URL без /v1, например "https://api.embed-provider.com"',
+    ),
+    SettingSpec(
+        key="CHAT_BASE_URL",
+        env="CHAT_BASE_URL",
+        group=_GROUP_LLM,
+        type="str",
+        description="Базовый URL сервера ответов (чата). Пусто — использовать OLLAMA_URL.",
+        allowed='URL без /v1, например "https://api.chat-provider.com"',
+    ),
+    SettingSpec(
+        key="EMBEDDING_API_KEY",
+        env="EMBEDDING_API_KEY",
+        group=_GROUP_LLM,
+        type="str",
+        description="Ключ сервера эмбеддингов. Пусто — использовать OPENAI_API_KEY.",
+        allowed="строка (секрет)",
+        secret=True,
+    ),
+    SettingSpec(
+        key="CHAT_API_KEY",
+        env="CHAT_API_KEY",
+        group=_GROUP_LLM,
+        type="str",
+        description="Ключ сервера ответов (чата). Пусто — использовать OPENAI_API_KEY.",
+        allowed="строка (секрет)",
+        secret=True,
+    ),
+    SettingSpec(
         key="CHAT_MAX_TOKENS",
         env="CHAT_MAX_TOKENS",
         group=_GROUP_LLM,
@@ -131,8 +165,8 @@ SPECS: list[SettingSpec] = [
         group=_GROUP_LLM,
         type="bool",
         description=(
-            "Отключить внутренние рассуждения модели (режим thinking у Qwen 3/3.5 и аналогов). "
-            "В запрос чата передаётся enable_thinking=false; при утечке CoT в ответ — постобработка."
+            "Отключить внутренние рассуждения модели (thinking). Qwen/LM Studio: enable_thinking=false "
+            "и постобработка CoT; DeepSeek: thinking={\"type\":\"disabled\"}."
         ),
         allowed="true/false",
     ),

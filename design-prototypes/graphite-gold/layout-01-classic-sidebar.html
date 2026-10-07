@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>01 · Классический сайдбар — Graphite Gold</title>
+    <link rel="stylesheet" href="tokens.css">
+    <link rel="stylesheet" href="admin-shared.css">
+    <style>
+        .shell {
+            display: grid;
+            grid-template-columns: 292px minmax(0, 1fr);
+            gap: 18px;
+            min-height: 100vh;
+            padding: 18px;
+        }
+
+        .sidebar {
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+            padding: 20px;
+        }
+
+        .sidebar .btn-primary {
+            width: 100%;
+        }
+
+        .nav-card {
+            display: flex;
+            gap: 10px;
+            padding: 12px;
+            border: 1px solid transparent;
+            border-radius: var(--radius-sm);
+            cursor: pointer;
+        }
+
+        .nav-card.active {
+            border-color: var(--line);
+            background: var(--primary-soft);
+        }
+
+        .nav-icon {
+            display: grid;
+            place-items: center;
+            width: 32px;
+            height: 32px;
+            border-radius: 8px;
+            color: var(--primary);
+            background: var(--panel);
+            font-size: 12px;
+            font-weight: 900;
+        }
+
+        .history {
+            display: grid;
+            gap: 8px;
+            margin-top: auto;
+        }
+
+        .history-item {
+            padding: 11px 12px;
+            border: 1px solid var(--line);
+            border-radius: var(--radius-sm);
+            background: var(--panel);
+            font-size: 13px;
+        }
+
+        .history-item strong {
+            display: block;
+            margin-bottom: 4px;
+        }
+
+        .main {
+            display: grid;
+            grid-template-rows: auto auto auto minmax(0, 1fr) auto;
+            overflow: hidden;
+        }
+
+        .topbar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 16px 20px;
+            border-bottom: 1px solid var(--line);
+        }
+
+        .tabs {
+            display: flex;
+            gap: 6px;
+            padding: 4px;
+            border: 1px solid var(--line);
+            border-radius: var(--radius-sm);
+            background: var(--panel-soft);
+        }
+
+        .tabs button {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 8px 12px;
+            border: 0;
+            border-radius: 6px;
+            color: var(--muted);
+            background: transparent;
+            font: inherit;
+            font-size: 13px;
+            font-weight: 700;
+            cursor: pointer;
+        }
+
+        .tabs button.active {
+            color: var(--primary-dark);
+            background: var(--panel);
+            box-shadow: var(--shadow-sm);
+        }
+
+        .header-actions {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .rag-bar {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 10px;
+            padding: 12px 20px;
+            border-bottom: 1px solid var(--line);
+            background: var(--panel-soft);
+            font-size: 13px;
+        }
+
+        .rag-bar label {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            color: var(--muted);
+        }
+
+        .rag-bar select {
+            border: 1px solid var(--line);
+            border-radius: 6px;
+            padding: 6px 10px;
+            background: var(--panel);
+            font: inherit;
+        }
+
+        .rag-bar .spacer {
+            flex: 1;
+        }
+
+        .messages {
+            display: grid;
+            align-content: start;
+            gap: 16px;
+            padding: 22px;
+            overflow: auto;
+            background:
+                linear-gradient(color-mix(in srgb, var(--panel-soft) 80%, transparent), color-mix(in srgb, var(--panel-soft) 80%, transparent)),
+                repeating-linear-gradient(90deg, transparent, transparent 31px, color-mix(in srgb, var(--line) 40%, transparent) 32px);
+        }
+
+        .composer {
+            display: flex;
+            gap: 10px;
+            padding: 16px 20px;
+            border-top: 1px solid var(--line);
+        }
+
+        .composer input {
+            flex: 1;
+            border: 1px solid var(--line);
+            border-radius: var(--radius-sm);
+            padding: 14px 16px;
+            font: inherit;
+            background: var(--panel);
+        }
+
+        @media (max-width: 900px) {
+            .shell {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body data-screen="chat">
+    <div class="proto-switch" role="tablist" aria-label="Экран прототипа">
+        <button class="active" type="button" data-screen="chat">Чат</button>
+        <button type="button" data-screen="admin">Админка</button>
+    </div>
+    <div class="shell shell-chat">
+        <aside class="panel sidebar">
+            <div class="brand">
+                <div class="logo">БИ</div>
+                <div>
+                    <p class="eyebrow">БочкарИИ</p>
+                    <h2 style="margin:0;font-size:18px">Диалоги</h2>
+                </div>
+            </div>
+            <button class="btn-primary" type="button">+ Новый диалог</button>
+            <input class="search" type="search" placeholder="Поиск по истории">
+            <div class="history">
+                <p class="eyebrow">Недавние</p>
+                <div class="history-item"><strong>Регламент отпусков</strong><span class="meta">Сегодня</span></div>
+                <div class="history-item"><strong>Склад: выдача ТМЦ</strong><span class="meta">Вчера</span></div>
+                <button class="btn-ghost" type="button" style="justify-self:start">Очистить все чаты</button>
+            </div>
+        </aside>
+
+        <main class="panel main">
+            <header class="topbar">
+                <nav class="tabs" aria-label="Разделы">
+                    <button class="active" type="button">💬 Чат</button>
+                    <button type="button">📁 База знаний</button>
+                    <button type="button">🛡 Админка</button>
+                </nav>
+                <div class="header-actions">
+                    <span class="status-pill"><span class="dot"></span> Ollama онлайн</span>
+                    <span class="meta">Гость</span>
+                    <button class="btn-secondary" type="button">Войти</button>
+                    <button class="btn-icon" type="button" title="Тема">☀</button>
+                </div>
+            </header>
+            <div class="rag-bar">
+                <label>Стиль ответа
+                    <select><option>Обычный</option><option>Кратко</option><option>По шагам</option></select>
+                </label>
+                <span class="chip">Top K: 5</span>
+                <span class="chip">Score ≥ 0</span>
+                <span class="spacer"></span>
+                <button class="btn-secondary" type="button">Скачать диалог</button>
+                <button class="btn-ghost" type="button">Дополнительно ▾</button>
+            </div>
+            <div class="messages">
+                <div class="message">
+                    <div class="avatar">AI</div>
+                    <div class="bubble">Привет! Задайте вопрос по базе знаний — отвечу с указанием источников.</div>
+                </div>
+                <div class="message user">
+                    <div class="bubble">Как оформить доступ новому сотруднику?</div>
+                    <div class="avatar">Вы</div>
+                </div>
+                <div class="message">
+                    <div class="avatar">AI</div>
+                    <div class="bubble"><strong>Кратко:</strong> заявка → согласование → роль → тестовый поиск. Источники: <em>access_policy.docx</em> (92%).</div>
+                </div>
+            </div>
+            <form class="composer">
+                <input type="text" placeholder="Введите ваш вопрос…" aria-label="Сообщение">
+                <button class="btn-primary" type="submit">Отправить</button>
+            </form>
+        </main>
+    </div>
+    <div class="shell shell-admin">
+        <aside class="panel sidebar">
+            <div class="brand">
+                <div class="logo">БИ</div>
+                <div>
+                    <p class="eyebrow">БочкарИИ</p>
+                    <h2 style="margin:0;font-size:18px">Диалоги</h2>
+                </div>
+            </div>
+            <button class="btn-primary" type="button">+ Новый диалог</button>
+            <input class="search" type="search" placeholder="Поиск по истории">
+            <div class="nav-card"><span class="nav-icon">01</span><div><strong>Чат</strong><p class="meta">RAG-ответы</p></div></div>
+            <div class="nav-card"><span class="nav-icon">02</span><div><strong>База знаний</strong><p class="meta">42 документа</p></div></div>
+            <div class="nav-card active"><span class="nav-icon">03</span><div><strong>Админка</strong><p class="meta">Диагностика</p></div></div>
+        </aside>
+        <main class="panel main main-admin">
+            <header class="topbar">
+                <nav class="tabs" aria-label="Разделы">
+                    <button type="button">💬 Чат</button>
+                    <button type="button">📁 База знаний</button>
+                    <button class="active" type="button">🛡 Админка</button>
+                </nav>
+                <div class="header-actions">
+                    <span class="status-pill"><span class="dot"></span> Ollama онлайн</span>
+                    <span class="meta">admin@corp</span>
+                    <button class="btn-secondary" type="button">Выйти</button>
+                    <button class="btn-icon" type="button" title="Тема">☀</button>
+                </div>
+            </header>
+            <div class="admin-workspace">
+                <div class="admin-header">
+                    <div>
+                        <p class="eyebrow">Админ-консоль</p>
+                        <h2>Диагностика и настройки</h2>
+                        <p>Просмотр runtime-настроек, здоровья сервисов и качества RAG.</p>
+                    </div>
+                    <button class="btn-secondary" type="button">Проверить</button>
+                </div>
+                <div class="admin-body">
+                    <div class="admin-subtabs" role="tablist">
+                        <button class="active" type="button" data-admin-tab="overview">Обзор</button>
+                        <button type="button" data-admin-tab="settings">Настройки</button>
+                    </div>
+                    <div class="admin-subpanel active" data-admin-panel="overview">
+                        <div class="admin-grid">
+                            <div class="admin-card"><strong>LLM</strong><span class="ok">доступен · Ollama</span></div>
+                            <div class="admin-card"><strong>Chroma</strong><span>18 240 чанков</span></div>
+                            <div class="admin-card"><strong>Модели</strong><span>chat: qwen2.5:7b<br>embed: nomic-embed-text</span></div>
+                            <div class="admin-card"><strong>История</strong><span>47 чатов<br>312 сообщений</span></div>
+                            <div class="admin-card"><strong>Оценки</strong><span>Полезно: 89<br>Не полезно: 7</span></div>
+                            <div class="admin-card"><strong>Документы</strong><span>42 файла<br><span class="warn">Устаревших: 3</span> · Дублей: 1</span></div>
+                            <div class="admin-card wide"><strong>Риски качества</strong><ul class="admin-list"><li>3 документа не обновлялись &gt; 90 дней</li><li>2 слабых ответа за неделю</li></ul></div>
+                            <div class="admin-card wide"><strong>RAG</strong><span>top_k=5, min_score=0, citations=5</span></div>
+                            <div class="admin-card wide"><strong>Топ источников</strong><ul class="admin-list"><li>24 × access_policy.docx</li><li>18 × onboarding.html</li></ul></div>
+                            <div class="admin-card wide"><strong>Последние дизлайки</strong><ul class="admin-list"><li>Регламент отпусков: «ответ не по теме»</li></ul></div>
+                        </div>
+                    </div>
+                    <div class="admin-subpanel" data-admin-panel="settings">
+                        <div class="admin-settings-toolbar">
+                            <input class="search" type="search" placeholder="Поиск по настройкам (ключ, env, описание)">
+                            <button class="btn-secondary" type="button">Обновить</button>
+                            <button class="btn-ghost" type="button" disabled>Сбросить</button>
+                            <button class="btn-primary" type="button" disabled>Сохранить всё</button>
+                            <span class="draft">Черновик: 0 изменений</span>
+                        </div>
+                        <div class="admin-settings-group">
+                            <div class="admin-settings-group__head">RAG <span class="meta">4 параметра</span></div>
+                            <div class="admin-settings-row"><div><code>rag_top_k</code><div class="env">RAG_TOP_K</div></div><input type="text" value="5"><button class="btn-ghost" type="button">↺</button></div>
+                            <div class="admin-settings-row"><div><code>rag_min_score</code><div class="env">RAG_MIN_SCORE</div></div><input type="text" value="0"><button class="btn-ghost" type="button">↺</button></div>
+                        </div>
+                        <div class="admin-settings-group">
+                            <div class="admin-settings-group__head">Инференс <span class="meta">3 параметра</span></div>
+                            <div class="admin-settings-row"><div><code>inference_backend</code><div class="env">INFERENCE_BACKEND</div></div><input type="text" value="ollama"><button class="btn-ghost" type="button">↺</button></div>
+                            <div class="admin-settings-row"><div><code>chat_model</code><div class="env">CHAT_MODEL</div></div><input type="text" value="qwen2.5:7b"><button class="btn-ghost" type="button">↺</button></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+    <a class="prototype-badge" href="index.html">← Все компоновки</a>
+    <script src="proto-switch.js"></script>
+</body>
+</html>

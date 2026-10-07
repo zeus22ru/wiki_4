@@ -177,6 +177,22 @@ python scripts/create_admin.py --username admin --email admin@example.com
 
 Явные **`EMBEDDING_API_MODE`** и **`CHAT_API_MODE`** в `.env` **перекрывают** пресет (для нестандартных схем).
 
+**Раздельные провайдеры (эмбеддинги и чат на разных серверах).** По умолчанию оба типа запросов идут на `OLLAMA_URL` с ключом `OPENAI_API_KEY`. Чтобы направить их на разные серверы, задайте:
+
+```env
+# Базовый адрес без /v1; пусто — использовать OLLAMA_URL
+EMBEDDING_BASE_URL=https://api.embed-provider.com
+CHAT_BASE_URL=http://127.0.0.1:1234
+# Ключ; пусто — использовать OPENAI_API_KEY
+EMBEDDING_API_KEY=sk-embed-...
+CHAT_API_KEY=
+# Режим API можно задать раздельно (иначе берётся из INFERENCE_BACKEND)
+EMBEDDING_API_MODE=openai
+CHAT_API_MODE=openai
+```
+
+Обратите внимание: `OLLAMA_EMBEDDING_MODEL` должна совпадать с моделью, которой создавалась векторная база (смена модели или `EMBEDDING_BASE_URL` требует переиндексации); `OLLAMA_CHAT_MODEL` от размерности векторов не зависит.
+
 **LM Studio:** укажите `OLLAMA_URL` на локальный API (часто порт `1234`), в моделях — точные `id` из списка сервера, например `text-embedding-bge-m3` и `qwen/qwen3.5-9b`. Перед запросами загрузите модели в LM Studio. Сырой `GET /api/tags` у LM Studio не является признаком работоспособности; приложение для режима `lmstudio` опирается на `/v1/models`.
 
 **Важно:** векторы в Chroma уже привязаны к модели и размерности, использованным при `create_vector_db.py`. Для каждого **нового** вопроса всё равно нужен **рабочий** сервис эмбеддингов той же размерности.

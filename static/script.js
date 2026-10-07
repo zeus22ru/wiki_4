@@ -3193,6 +3193,10 @@ function renderAdminSettings(payload, query) {
 }
 
 const ADMIN_MODEL_SETTING_KEYS = ['OLLAMA_EMBEDDING_MODEL', 'OLLAMA_CHAT_MODEL'];
+const ADMIN_MODEL_ROLE_BY_KEY = {
+    OLLAMA_EMBEDDING_MODEL: 'embedding',
+    OLLAMA_CHAT_MODEL: 'chat',
+};
 let _adminModelsCache = null;
 let _adminModelsFetchPromise = null;
 
@@ -3253,13 +3257,29 @@ function renderAdminModelPickerHtml(key, models, options = {}) {
     `;
 }
 
-function applyAdminModelPickers(models, options = {}) {
+function normalizeAdminModelsPayload(data) {
+    const all = Array.isArray(data?.models) ? data.models : [];
+    const chat = Array.isArray(data?.chat_models) ? data.chat_models : all;
+    const embedding = Array.isArray(data?.embedding_models) ? data.embedding_models : all;
+    return { all, chat, embedding };
+}
+
+function adminModelsForRole(modelsByRole, key) {
+    if (!modelsByRole) return [];
+    const role = ADMIN_MODEL_ROLE_BY_KEY[key];
+    if (role && Array.isArray(modelsByRole[role])) {
+        return modelsByRole[role];
+    }
+    return Array.isArray(modelsByRole.all) ? modelsByRole.all : [];
+}
+
+function applyAdminModelPickers(modelsByRole, options = {}) {
     if (!adminSettings) return;
     for (const key of ADMIN_MODEL_SETTING_KEYS) {
         const control = adminSettings.querySelector(`[data-setting-row="${CSS.escape(key)}"] .setting-item__control`);
         if (!control) continue;
         const current = getAdminSettingControlValue(key);
-        control.innerHTML = renderAdminModelPickerHtml(key, models, {
+        control.innerHTML = renderAdminModelPickerHtml(key, adminModelsForRole(modelsByRole, key), {
             current,
             loading: !!options.loading,
             error: options.error || '',
@@ -3279,17 +3299,17 @@ async function enhanceAdminModelSelects(options = {}) {
         return;
     }
 
-    if (!force && Array.isArray(_adminModelsCache)) {
+    if (!force && _adminModelsCache) {
         applyAdminModelPickers(_adminModelsCache);
         return;
     }
 
-    applyAdminModelPickers(_adminModelsCache || [], { loading: true });
+    applyAdminModelPickers(_adminModelsCache || { all: [], chat: [], embedding: [] }, { loading: true });
 
     if (!force && _adminModelsFetchPromise) {
         try {
             await _adminModelsFetchPromise;
-            if (Array.isArray(_adminModelsCache)) {
+            if (_adminModelsCache) {
                 applyAdminModelPickers(_adminModelsCache);
             }
         } catch (_) {
@@ -3300,7 +3320,7 @@ async function enhanceAdminModelSelects(options = {}) {
 
     _adminModelsFetchPromise = (async () => {
         const data = await apiJson('/api/admin/models');
-        _adminModelsCache = Array.isArray(data.models) ? data.models : [];
+        _adminModelsCache = normalizeAdminModelsPayload(data);
         return _adminModelsCache;
     })();
 
@@ -3309,7 +3329,7 @@ async function enhanceAdminModelSelects(options = {}) {
         applyAdminModelPickers(models);
     } catch (error) {
         _adminModelsCache = null;
-        applyAdminModelPickers([], {
+        applyAdminModelPickers(null, {
             error: error?.message || 'Не удалось получить список моделей',
         });
     } finally {

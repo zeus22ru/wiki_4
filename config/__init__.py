@@ -2,6 +2,7 @@
 from .settings import (
     settings,
     inference_server_reachable,
+    inference_servers_are_split,
     fetch_remote_model_ids,
     uses_openai_compatible_api,
 )
@@ -12,6 +13,7 @@ __all__ = [
     "setup_logging",
     "get_logger",
     "inference_server_reachable",
+    "inference_servers_are_split",
     "fetch_remote_model_ids",
     "uses_openai_compatible_api",
 ]

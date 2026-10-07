@@ -54,6 +54,27 @@ def _chat_disable_thinking() -> bool:
     return bool(getattr(settings, "CHAT_DISABLE_THINKING", True))
 
 
+def _chat_base_url() -> str:
+    """Базовый URL сервера чата (устойчиво к mock-объектам)."""
+    getter = getattr(settings, "get_chat_base_url", None)
+    if callable(getter):
+        try:
+            value = getter()
+        except Exception:
+            value = ""
+        return value if isinstance(value, str) else ""
+    value = getattr(settings, "CHAT_BASE_URL", "")
+    return value if isinstance(value, str) else ""
+
+
+def _uses_deepseek_chat() -> bool:
+    """DeepSeek управляет thinking параметром ``thinking``, а не Qwen-флагами."""
+    base = _chat_base_url().lower()
+    model = getattr(settings, "OLLAMA_CHAT_MODEL", "")
+    model = model.lower() if isinstance(model, str) else ""
+    return "deepseek" in base or model.startswith("deepseek")
+
+
 _FENCE_BLOCK_RE = re.compile(r"```[\s\S]*?```", re.MULTILINE)
 
 
@@ -130,7 +151,7 @@ def strip_model_reasoning(text: str) -> str:
 
 
 def _prepare_chat_user_content(prompt: str) -> str:
-    if not _chat_disable_thinking():
+    if not _chat_disable_thinking() or _uses_deepseek_chat():
         return prompt
     if "/no_think" in prompt:
         return prompt
@@ -152,7 +173,7 @@ def _append_no_think_to_text(text: str) -> str:
 
 
 def _prepare_multimodal_user_parts(parts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    if not _chat_disable_thinking():
+    if not _chat_disable_thinking() or _uses_deepseek_chat():
         return parts
     out = [dict(p) for p in parts]
     for i, part in enumerate(out):
@@ -176,7 +197,7 @@ def _finalize_openai_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, 
             msgs.append({"role": "user", "content": _append_no_think_to_text(content)})
         else:
             msgs.append(dict(item))
-    if _chat_disable_thinking():
+    if _chat_disable_thinking() and not _uses_deepseek_chat():
         if not msgs or msgs[-1].get("role") != "assistant":
             msgs.append({"role": "assistant", "content": _assistant_no_think_prefill()})
     return msgs
@@ -217,7 +238,9 @@ def _build_openai_chat_payload(
         "max_tokens": settings.CHAT_MAX_TOKENS,
         "stream": stream,
     }
-    if _chat_disable_thinking():
+    if _uses_deepseek_chat():
+        payload["thinking"] = {"type": "disabled" if _chat_disable_thinking() else "enabled"}
+    elif _chat_disable_thinking():
         kwargs = {"enable_thinking": False}
         payload["chat_template_kwargs"] = kwargs
         payload["extra_body"] = {"chat_template_kwargs": kwargs}
@@ -235,13 +258,13 @@ def _vision_error_message(http_body: str = "") -> str:
 
 
 def _openai_chat_stream_request(payload: dict, timeout: int) -> Iterator[str]:
-    base = settings.OLLAMA_URL.rstrip("/")
+    base = settings.get_chat_base_url()
     try:
         with requests.post(
             f"{base}/v1/chat/completions",
             json=payload,
             timeout=timeout,
-            headers=_embedding_headers(),
+            headers=_chat_headers(),
             stream=True,
         ) as response:
             response.raise_for_status()
@@ -384,8 +407,17 @@ def _iter_utf8_lines(response: requests.Response):
 
 def _embedding_headers() -> dict:
     h = {"Content-Type": "application/json"}
-    if getattr(settings, "OPENAI_API_KEY", ""):
-        h["Authorization"] = f"Bearer {settings.OPENAI_API_KEY}"
+    key = settings.get_embedding_api_key()
+    if key:
+        h["Authorization"] = f"Bearer {key}"
+    return h
+
+
+def _chat_headers() -> dict:
+    h = {"Content-Type": "application/json"}
+    key = settings.get_chat_api_key()
+    if key:
+        h["Authorization"] = f"Bearer {key}"
     return h
 
 
@@ -415,7 +447,7 @@ def _fetch_embeddings_from_api(texts: List[str]) -> List[List[float]]:
     if not texts:
         return []
 
-    base = settings.OLLAMA_URL.rstrip("/")
+    base = settings.get_embedding_base_url()
     mode = getattr(settings, "EMBEDDING_API_MODE", "ollama") or "ollama"
 
     if mode == "openai":
@@ -507,7 +539,7 @@ def chat_completion_stream(prompt: str, timeout: int = 120) -> Iterator[str]:
     - CHAT_API_MODE=ollama: POST /api/generate с stream=true (NDJSON)
     - CHAT_API_MODE=openai: POST /v1/chat/completions с stream=true (SSE)
     """
-    base = settings.OLLAMA_URL.rstrip("/")
+    base = settings.get_chat_base_url()
     mode = getattr(settings, "CHAT_API_MODE", "ollama") or "ollama"
 
     if mode == "openai":

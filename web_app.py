@@ -13,7 +13,13 @@ import json
 import traceback
 
 # Импорт конфигурации и логирования
-from config import settings, get_logger, inference_server_reachable, fetch_remote_model_ids
+from config import (
+    settings,
+    get_logger,
+    inference_server_reachable,
+    inference_servers_are_split,
+    fetch_remote_model_ids,
+)
 from config.chat_runtime import rag_chat_defaults, resolve_chat_rag_options
 
 # Каталоги нужны до инициализации БД / RAG
@@ -964,12 +970,28 @@ def suggest_chat_questions():
 
 @app.route('/api/models', methods=['GET'])
 def get_models():
-    """Список моделей с Ollama (/api/tags) или LM Studio (/v1/models) в зависимости от настроек."""
+    """
+    Список моделей с сервера инференса (/api/tags или /v1/models).
+
+    При раздельных провайдерах ``models`` — объединение, а ``chat_models`` и
+    ``embedding_models`` содержат списки соответствующих серверов.
+    """
     logger.info("Запрос списка моделей с сервера инференса")
     try:
-        models = fetch_remote_model_ids()
+        if inference_servers_are_split():
+            chat_models = fetch_remote_model_ids(role="chat")
+            embedding_models = fetch_remote_model_ids(role="embedding")
+            models = list(dict.fromkeys(chat_models + embedding_models))
+        else:
+            models = fetch_remote_model_ids()
+            chat_models = models
+            embedding_models = models
         logger.info(f"Найдено {len(models)} моделей")
-        return jsonify({"models": models})
+        return jsonify({
+            "models": models,
+            "chat_models": chat_models,
+            "embedding_models": embedding_models,
+        })
     except Exception:
         logger.error("Ошибка при получении списка моделей:\n%s", traceback.format_exc())
         return jsonify({"error": "Не удалось получить список моделей."}), 500

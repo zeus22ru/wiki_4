@@ -1,0 +1,80 @@
+<!-- Фрагмент: вставляется в .admin-workspace каждого макета -->
+<div class="admin-header">
+    <div>
+        <p class="eyebrow">Админ-консоль</p>
+        <h2>Диагностика и настройки</h2>
+        <p>Просмотр runtime-настроек, здоровья сервисов и качества RAG.</p>
+    </div>
+    <button class="btn-secondary" type="button">Проверить</button>
+</div>
+<div class="admin-body">
+    <div class="admin-subtabs" role="tablist">
+        <button class="active" type="button" data-admin-tab="overview">Обзор</button>
+        <button type="button" data-admin-tab="settings">Настройки</button>
+    </div>
+    <div class="admin-subpanel active" data-admin-panel="overview">
+        <div class="admin-grid">
+            <div class="admin-card"><strong>LLM</strong><span class="ok">доступен · Ollama</span></div>
+            <div class="admin-card"><strong>Chroma</strong><span>18 240 чанков</span></div>
+            <div class="admin-card"><strong>Модели</strong><span>chat: qwen2.5:7b<br>embed: nomic-embed-text</span></div>
+            <div class="admin-card"><strong>История</strong><span>47 чатов<br>312 сообщений</span></div>
+            <div class="admin-card"><strong>Оценки</strong><span>Полезно: 89<br>Не полезно: 7</span></div>
+            <div class="admin-card"><strong>Документы</strong><span>42 файла<br><span class="warn">Устаревших: 3</span> · Дублей: 1</span></div>
+            <div class="admin-card wide"><strong>Риски качества</strong>
+                <ul class="admin-list">
+                    <li>3 документа не обновлялись &gt; 90 дней</li>
+                    <li>2 слабых ответа за неделю (низкий score)</li>
+                </ul>
+            </div>
+            <div class="admin-card wide"><strong>RAG</strong><span>top_k=5, min_score=0, citations=5 · backend=ollama</span></div>
+            <div class="admin-card wide"><strong>Топ источников</strong>
+                <ul class="admin-list">
+                    <li>24 × access_policy.docx</li>
+                    <li>18 × onboarding.html</li>
+                    <li>11 × warehouse_rules.pdf</li>
+                </ul>
+            </div>
+            <div class="admin-card wide"><strong>Последние дизлайки</strong>
+                <ul class="admin-list">
+                    <li>Регламент отпусков: «ответ не по теме»</li>
+                    <li>Доступ к wiki: «нет ссылки на раздел HR»</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+    <div class="admin-subpanel" data-admin-panel="settings">
+        <div class="admin-settings-toolbar">
+            <input class="search" type="search" placeholder="Поиск по настройкам (ключ, env, описание)">
+            <button class="btn-secondary" type="button">Обновить</button>
+            <button class="btn-ghost" type="button" disabled>Сбросить</button>
+            <button class="btn-primary" type="button" disabled>Сохранить всё</button>
+            <span class="draft">Черновик: 0 изменений</span>
+        </div>
+        <div class="admin-settings-group">
+            <div class="admin-settings-group__head">RAG <span class="meta">4 параметра</span></div>
+            <div class="admin-settings-row">
+                <div><code>rag_top_k</code><div class="env">RAG_TOP_K</div></div>
+                <input type="text" value="5">
+                <button class="btn-ghost" type="button">↺</button>
+            </div>
+            <div class="admin-settings-row">
+                <div><code>rag_min_score</code><div class="env">RAG_MIN_SCORE</div></div>
+                <input type="text" value="0">
+                <button class="btn-ghost" type="button">↺</button>
+            </div>
+        </div>
+        <div class="admin-settings-group">
+            <div class="admin-settings-group__head">Инференс <span class="meta">3 параметра</span></div>
+            <div class="admin-settings-row">
+                <div><code>inference_backend</code><div class="env">INFERENCE_BACKEND</div></div>
+                <input type="text" value="ollama">
+                <button class="btn-ghost" type="button">↺</button>
+            </div>
+            <div class="admin-settings-row">
+                <div><code>chat_model</code><div class="env">CHAT_MODEL</div></div>
+                <input type="text" value="qwen2.5:7b">
+                <button class="btn-ghost" type="button">↺</button>
+            </div>
+        </div>
+    </div>
+</div>

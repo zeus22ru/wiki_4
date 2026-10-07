@@ -20,7 +20,7 @@ from typing import Any, List, Dict, Optional, Callable, Set, Tuple
 import hashlib
 
 # Импорт конфигурации и логирования
-from config import settings, get_logger, inference_server_reachable, fetch_remote_model_ids
+from config import settings, get_logger, fetch_remote_model_ids
 
 # Импорт общих функций для работы с эмбеддингами
 from utils.embeddings import get_embedding, get_embeddings_batch, invalidate_embedding_cache, chat_completion
@@ -1408,19 +1408,17 @@ def main():
     logger.info("Создание векторной базы знаний")
     logger.info("=" * 60)
     
-    if not inference_server_reachable():
-        logger.error(f"Сервер инференса недоступен: {settings.OLLAMA_URL}")
+    embedding_url = settings.get_embedding_base_url()
+    try:
+        model_names = fetch_remote_model_ids(role="embedding")
+    except Exception as e:
+        logger.error(f"Сервер эмбеддингов недоступен: {embedding_url}")
+        logger.error(f"Не удалось получить список моделей: {e}")
         logger.error(
-            "Проверьте INFERENCE_BACKEND (ollama | lmstudio), запуск Ollama или LM Studio и загрузку моделей."
+            "Проверьте EMBEDDING_BASE_URL/OLLAMA_URL, EMBEDDING_API_MODE и запуск сервера эмбеддингов."
         )
         return
-    logger.info(f"Сервер инференса отвечает: {settings.OLLAMA_URL}")
-
-    try:
-        model_names = fetch_remote_model_ids()
-    except Exception as e:
-        logger.error(f"Не удалось получить список моделей: {e}")
-        return
+    logger.info(f"Сервер эмбеддингов отвечает: {embedding_url}")
 
     model_found = False
     for name in model_names:

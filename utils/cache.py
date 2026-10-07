@@ -386,11 +386,12 @@ class EmbeddingCache:
         logger.info("Кэш эмбеддингов инициализирован")
 
     def _generate_key(self, text: str, model: str) -> str:
-        """Ключ включает модель, API-режим и размерность эмбеддинга."""
+        """Ключ включает сервер, модель, API-режим и размерность эмбеддинга."""
         mode = str(getattr(settings, "EMBEDDING_API_MODE", "ollama") or "ollama")
         dims = getattr(settings, "EMBEDDING_DIMENSIONS", None)
         dims_part = str(dims) if dims is not None else "auto"
-        content = f"{mode}:{dims_part}:{model}:{text}"
+        base = settings.get_embedding_base_url()
+        content = f"{base}:{mode}:{dims_part}:{model}:{text}"
         return hashlib.sha256(content.encode()).hexdigest()
 
     def get(self, text: str, model: str) -> Optional[List[float]]:

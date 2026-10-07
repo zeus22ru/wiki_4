@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>04 · Разнесённые действия — Graphite Gold</title>
+    <link rel="stylesheet" href="tokens.css">
+    <link rel="stylesheet" href="admin-shared.css">
+    <style>
+        .shell {
+            display: grid;
+            grid-template-columns: 280px minmax(0, 1fr);
+            gap: 16px;
+            min-height: 100vh;
+            padding: 16px;
+        }
+
+        .sidebar {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            padding: 18px;
+        }
+
+        .sidebar .search {
+            margin-top: 4px;
+        }
+
+        .history-list {
+            display: grid;
+            gap: 8px;
+            flex: 1;
+            overflow: auto;
+        }
+
+        .main {
+            display: grid;
+            grid-template-rows: auto minmax(0, 1fr);
+            overflow: hidden;
+        }
+
+        .header-split {
+            display: grid;
+            grid-template-columns: 1fr auto;
+            gap: 12px;
+            padding: 14px 18px;
+            border-bottom: 1px solid var(--line);
+        }
+
+        .header-left {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .header-left .tabs-inline button {
+            padding: 8px 12px;
+            border: 0;
+            border-radius: var(--radius-sm);
+            color: var(--muted);
+            background: transparent;
+            font: inherit;
+            font-weight: 700;
+            cursor: pointer;
+        }
+
+        .header-left .tabs-inline button.active {
+            color: var(--primary-dark);
+            background: var(--primary-soft);
+        }
+
+        .header-right {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            justify-content: flex-end;
+            gap: 8px;
+        }
+
+        .chat-zone {
+            display: grid;
+            grid-template-rows: minmax(0, 1fr) auto;
+            min-height: 0;
+        }
+
+        .messages {
+            display: grid;
+            align-content: start;
+            gap: 14px;
+            padding: 20px;
+            overflow: auto;
+        }
+
+        .input-stack {
+            padding: 16px 20px 20px;
+            border-top: 1px solid var(--line);
+            background: var(--panel-soft);
+        }
+
+        .input-toolbar {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-bottom: 12px;
+        }
+
+        .input-toolbar label {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            font-size: 11px;
+            font-weight: 700;
+            color: var(--muted);
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+        }
+
+        .input-toolbar select {
+            min-width: 160px;
+            padding: 8px 10px;
+            border: 1px solid var(--line);
+            border-radius: var(--radius-sm);
+            background: var(--panel);
+            font: inherit;
+        }
+
+        .input-row {
+            display: grid;
+            grid-template-columns: auto minmax(0, 1fr) auto auto;
+            gap: 8px;
+            align-items: end;
+        }
+
+        .input-row .tools {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .input-row textarea {
+            min-height: 52px;
+            max-height: 120px;
+            resize: vertical;
+            border: 1px solid var(--line);
+            border-radius: var(--radius-sm);
+            padding: 12px 14px;
+            font: inherit;
+            background: var(--panel);
+        }
+
+        .input-meta {
+            display: flex;
+            justify-content: space-between;
+            margin-top: 8px;
+            font-size: 12px;
+            color: var(--muted);
+        }
+
+        .main.workspace-admin {
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
+        }
+
+        @media (max-width: 900px) {
+            .shell {
+                grid-template-columns: 1fr;
+            }
+
+            .header-split {
+                grid-template-columns: 1fr;
+            }
+
+            .input-row {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body data-screen="chat">
+    <div class="proto-switch" role="tablist" aria-label="Экран прототипа">
+        <button class="active" type="button" data-screen="chat">Чат</button>
+        <button type="button" data-screen="admin">Админка</button>
+    </div>
+    <div class="shell shell-chat">
+        <aside class="panel sidebar">
+            <div class="brand">
+                <div class="logo">БИ</div>
+                <div><h2 style="margin:0;font-size:16px">История</h2></div>
+            </div>
+            <input class="search" type="search" placeholder="Поиск по диалогам">
+            <div class="history-list">
+                <div class="chip active" style="display:block;border-radius:var(--radius-sm);padding:12px">
+                    <strong style="display:block;margin-bottom:4px">Порядок доступа</strong>
+                    <span class="meta">3 сообщения · сегодня</span>
+                </div>
+                <div class="chip" style="display:block;border-radius:var(--radius-sm);padding:12px;background:var(--panel)">
+                    <strong style="display:block;margin-bottom:4px">Wiki: раздел HR</strong>
+                    <span class="meta">вчера</span>
+                </div>
+            </div>
+            <button class="btn-ghost" type="button">Очистить историю</button>
+        </aside>
+
+        <section class="panel main">
+            <header class="header-split">
+                <div class="header-left">
+                    <nav class="tabs-inline" aria-label="Разделы">
+                        <button class="active" type="button">Чат</button>
+                        <button type="button">База знаний</button>
+                        <button type="button">Админка</button>
+                    </nav>
+                    <span class="status-pill"><span class="dot"></span> LM Studio</span>
+                </div>
+                <div class="header-right">
+                    <button class="btn-secondary" type="button">Экспорт PDF</button>
+                    <button class="btn-icon" type="button">☀</button>
+                    <span class="meta">admin@corp</span>
+                    <button class="btn-secondary" type="button">Выйти</button>
+                    <button class="btn-primary" type="button">+ Новый чат</button>
+                </div>
+            </header>
+
+            <div class="chat-zone">
+                <div class="messages">
+                    <div class="message">
+                        <div class="avatar">AI</div>
+                        <div class="bubble">Навигация — слева в шапке. Учётная запись и создание чата — справа в шапке. Все RAG-настройки и ввод — столбиком внизу.</div>
+                    </div>
+                    <div class="message user">
+                        <div class="bubble">Удобно для длинных вопросов и нескольких режимов ответа</div>
+                        <div class="avatar">Вы</div>
+                    </div>
+                </div>
+
+                <div class="input-stack">
+                    <div class="input-toolbar">
+                        <label>Стиль
+                            <select><option>Инструкция для сотрудника</option><option>Кратко</option><option>Подробно</option></select>
+                        </label>
+                        <label>Источников
+                            <select><option>5</option><option>3</option><option>10</option></select>
+                        </label>
+                        <label>Min score
+                            <select><option>0.00</option><option>0.35</option></select>
+                        </label>
+                        <button class="btn-ghost" type="button" style="align-self:end">Расширенный поиск ▾</button>
+                    </div>
+                    <div class="input-row">
+                        <div class="tools">
+                            <button class="btn-icon" type="button" title="Прикрепить">📎</button>
+                            <button class="btn-icon" type="button" title="Шаблон">📋</button>
+                        </div>
+                        <textarea placeholder="Опишите задачу или вопрос по регламенту…"></textarea>
+                        <button class="btn-secondary" type="button">Предпросмотр</button>
+                        <button class="btn-primary" type="button">Отправить</button>
+                    </div>
+                    <div class="input-meta">
+                        <span>Shift+Enter — новая строка</span>
+                        <span>Источники: 2 найдено в прошлом ответе</span>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </div>
+    <div class="shell shell-admin">
+        <aside class="panel sidebar">
+            <div class="brand"><div class="logo">БИ</div><div><h2 style="margin:0;font-size:16px">История</h2></div></div>
+            <p class="meta" style="font-size:12px">В режиме админки сайдбар не используется для чатов — оставлен для сравнения компоновки.</p>
+        </aside>
+        <section class="panel main workspace-admin">
+            <header class="header-split">
+                <div class="header-left">
+                    <nav class="tabs-inline" aria-label="Разделы">
+                        <button type="button">Чат</button>
+                        <button type="button">База знаний</button>
+                        <button class="active" type="button">Админка</button>
+                    </nav>
+                    <span class="status-pill"><span class="dot"></span> Все сервисы OK</span>
+                </div>
+                <div class="header-right">
+                    <button class="btn-secondary" type="button">Проверить</button>
+                    <button class="btn-icon" type="button">☀</button>
+                    <span class="meta">admin@corp</span>
+                    <button class="btn-secondary" type="button">Выйти</button>
+                </div>
+            </header>
+            <div class="admin-workspace" style="flex:1;min-height:0;display:flex;flex-direction:column">
+                <div class="admin-body" style="flex:1;overflow:auto">
+                    <div class="admin-subtabs" role="tablist">
+                        <button class="active" type="button" data-admin-tab="overview">Обзор</button>
+                        <button type="button" data-admin-tab="settings">Настройки</button>
+                    </div>
+                    <div class="admin-subpanel active" data-admin-panel="overview">
+                        <div class="admin-grid">
+                            <div class="admin-card"><strong>LLM</strong><span class="ok">доступен</span></div>
+                            <div class="admin-card"><strong>Chroma</strong><span>18 240 чанков</span></div>
+                            <div class="admin-card"><strong>Модели</strong><span>qwen2.5:7b / nomic-embed</span></div>
+                            <div class="admin-card"><strong>Документы</strong><span>42 · дублей 1</span></div>
+                            <div class="admin-card wide"><strong>Топ источников</strong><ul class="admin-list"><li>24 × access_policy.docx</li></ul></div>
+                            <div class="admin-card wide"><strong>Пробелы в БЗ</strong><ul class="admin-list"><li>4 × «отпуск за свой счёт»</li></ul></div>
+                        </div>
+                    </div>
+                    <div class="admin-subpanel" data-admin-panel="settings">
+                        <div class="admin-settings-toolbar">
+                            <input class="search" type="search" placeholder="Поиск по настройкам">
+                            <button class="btn-secondary" type="button">Обновить</button>
+                            <button class="btn-ghost" type="button" disabled>Сбросить</button>
+                            <button class="btn-primary" type="button" disabled>Сохранить всё</button>
+                        </div>
+                        <div class="admin-settings-group">
+                            <div class="admin-settings-group__head">RAG</div>
+                            <div class="admin-settings-row"><div><code>rag_top_k</code><div class="env">RAG_TOP_K</div></div><input value="5"><button class="btn-ghost" type="button">↺</button></div>
+                            <div class="admin-settings-row"><div><code>rag_min_score</code><div class="env">RAG_MIN_SCORE</div></div><input value="0"><button class="btn-ghost" type="button">↺</button></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </div>
+    <a class="prototype-badge" href="index.html">← Все компоновки</a>
+    <script src="proto-switch.js"></script>
+</body>
+</html>

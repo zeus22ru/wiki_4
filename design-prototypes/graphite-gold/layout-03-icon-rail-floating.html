@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>03 · Icon rail + плавающий ввод — Graphite Gold</title>
+    <link rel="stylesheet" href="tokens.css">
+    <link rel="stylesheet" href="admin-shared.css">
+    <style>
+        .shell {
+            display: grid;
+            grid-template-columns: 72px 260px minmax(0, 1fr);
+            gap: 14px;
+            min-height: 100vh;
+            padding: 14px;
+        }
+
+        .rail {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 10px;
+            padding: 14px 8px;
+        }
+
+        .rail-btn {
+            display: grid;
+            place-items: center;
+            width: 48px;
+            height: 48px;
+            border: 1px solid var(--line);
+            border-radius: 14px;
+            background: var(--panel);
+            color: var(--muted);
+            font-size: 18px;
+            cursor: pointer;
+        }
+
+        .rail-btn.active {
+            color: #fff;
+            border-color: transparent;
+            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+        }
+
+        .rail-btn.primary-fab {
+            margin-bottom: 6px;
+            color: #fff;
+            border: 0;
+            background: linear-gradient(135deg, var(--accent), var(--primary));
+            font-size: 22px;
+            font-weight: 300;
+        }
+
+        .rail .spacer {
+            flex: 1;
+        }
+
+        .chats {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            padding: 16px;
+            overflow: auto;
+        }
+
+        .chats h2 {
+            margin: 0 0 4px;
+            font-size: 15px;
+        }
+
+        .chat-row {
+            padding: 10px;
+            border-radius: var(--radius-sm);
+            border: 1px solid var(--line);
+            font-size: 13px;
+            background: var(--panel);
+        }
+
+        .chat-row.active {
+            background: var(--primary-soft);
+            border-color: color-mix(in srgb, var(--primary) 30%, var(--line));
+        }
+
+        .workspace {
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
+            padding: 0;
+            overflow: hidden;
+        }
+
+        .workspace-top {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 14px 20px;
+            border-bottom: 1px solid var(--line);
+        }
+
+        .rag-chips {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            padding: 12px 20px 0;
+        }
+
+        .messages {
+            flex: 1;
+            display: grid;
+            align-content: end;
+            gap: 14px;
+            padding: 20px 20px 120px;
+            overflow: auto;
+        }
+
+        .floating-composer-wrap {
+            position: relative;
+            padding: 0 24px 24px;
+            margin-top: auto;
+        }
+
+        .floating-composer {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            max-width: 720px;
+            margin: 0 auto;
+            padding: 8px 8px 8px 18px;
+            border: 1px solid var(--line-strong);
+            border-radius: 999px;
+            background: var(--panel);
+            box-shadow: var(--shadow);
+        }
+
+        .floating-composer input {
+            flex: 1;
+            border: 0;
+            background: transparent;
+            padding: 10px 0;
+            font: inherit;
+            outline: none;
+        }
+
+        .floating-composer .send-in {
+            display: grid;
+            place-items: center;
+            width: 44px;
+            height: 44px;
+            border: 0;
+            border-radius: 999px;
+            color: #fff;
+            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+            font-size: 18px;
+            cursor: pointer;
+        }
+
+        .floating-hint {
+            max-width: 720px;
+            margin: 8px auto 0;
+            text-align: center;
+            font-size: 12px;
+            color: var(--muted);
+        }
+
+        .shell-admin {
+            grid-template-columns: 72px minmax(0, 1fr);
+        }
+
+        .workspace-admin {
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
+        }
+
+        @media (max-width: 900px) {
+            .shell {
+                grid-template-columns: 72px minmax(0, 1fr);
+            }
+
+            .chats {
+                display: none;
+            }
+        }
+    </style>
+</head>
+<body data-screen="chat">
+    <div class="proto-switch" role="tablist" aria-label="Экран прототипа">
+        <button class="active" type="button" data-screen="chat">Чат</button>
+        <button type="button" data-screen="admin">Админка</button>
+    </div>
+    <div class="shell shell-chat">
+        <nav class="panel rail" aria-label="Главная навигация">
+            <button class="rail-btn primary-fab" type="button" title="Новый диалог">+</button>
+            <button class="rail-btn active" type="button" title="Чат">💬</button>
+            <button class="rail-btn" type="button" title="База знаний">📁</button>
+            <button class="rail-btn" type="button" title="Админка">🛡</button>
+            <span class="spacer"></span>
+            <button class="rail-btn" type="button" title="Войти">👤</button>
+            <button class="rail-btn" type="button" title="Тема">☀</button>
+            <span class="status-pill" style="writing-mode:vertical-rl;padding:10px 6px;font-size:10px"><span class="dot"></span></span>
+        </nav>
+
+        <aside class="panel chats">
+            <h2>Диалоги</h2>
+            <input class="search" type="search" placeholder="Поиск…">
+            <div class="chat-row active"><strong>Доступ сотруднику</strong><p class="meta" style="margin:4px 0 0">Сейчас</p></div>
+            <div class="chat-row"><strong>Отпуска 2026</strong><p class="meta" style="margin:4px 0 0">Вчера</p></div>
+        </aside>
+
+        <section class="panel workspace">
+            <div class="workspace-top">
+                <div>
+                    <p class="eyebrow">Чат · RAG</p>
+                    <h2 style="margin:0;font-size:20px">AI-ассистент</h2>
+                </div>
+                <button class="btn-secondary" type="button">Источники (2)</button>
+            </div>
+            <div class="rag-chips">
+                <span class="chip active">Обычный</span>
+                <span class="chip">Кратко</span>
+                <span class="chip">По шагам</span>
+                <span class="chip">Top K: 5</span>
+                <button class="btn-ghost" type="button">⋯</button>
+            </div>
+            <div class="messages">
+                <div class="message">
+                    <div class="avatar">AI</div>
+                    <div class="bubble">Навигация — иконки слева. RAG — чипы над лентой. Поле ввода — плавающая «капсула» по центру, отправка внутри поля справа.</div>
+                </div>
+                <div class="message user">
+                    <div class="bubble">Понятно, спасибо</div>
+                    <div class="avatar">Вы</div>
+                </div>
+            </div>
+            <div class="floating-composer-wrap">
+                <form class="floating-composer">
+                    <input type="text" placeholder="Спросите что-нибудь по документации…">
+                    <button class="send-in" type="submit" aria-label="Отправить">→</button>
+                </form>
+                <p class="floating-hint">Enter — отправить · Источники откроются после ответа</p>
+            </div>
+        </section>
+    </div>
+    <div class="shell shell-admin">
+        <nav class="panel rail" aria-label="Главная навигация">
+            <button class="rail-btn primary-fab" type="button" title="Новый диалог">+</button>
+            <button class="rail-btn" type="button" title="Чат">💬</button>
+            <button class="rail-btn" type="button" title="База знаний">📁</button>
+            <button class="rail-btn active" type="button" title="Админка">🛡</button>
+            <span class="spacer"></span>
+            <button class="rail-btn" type="button" title="Профиль">👤</button>
+            <button class="rail-btn" type="button" title="Тема">☀</button>
+        </nav>
+        <section class="panel workspace workspace-admin">
+            <div class="workspace-top">
+                <div>
+                    <p class="eyebrow">Админ · runtime</p>
+                    <h2 style="margin:0;font-size:20px">Админ-консоль</h2>
+                </div>
+                <button class="btn-secondary" type="button">Проверить</button>
+            </div>
+            <div class="admin-workspace" style="flex:1;min-height:0">
+                <div class="admin-body" style="padding-top:0">
+                    <div class="admin-subtabs" role="tablist">
+                        <button class="active" type="button" data-admin-tab="overview">Обзор</button>
+                        <button type="button" data-admin-tab="settings">Настройки</button>
+                    </div>
+                    <div class="admin-subpanel active" data-admin-panel="overview">
+                        <div class="admin-grid">
+                            <div class="admin-card"><strong>LLM</strong><span class="ok">Ollama OK</span></div>
+                            <div class="admin-card"><strong>Chroma</strong><span>18 240 чанков</span></div>
+                            <div class="admin-card"><strong>Flask</strong><span>200 · 24ms ping</span></div>
+                            <div class="admin-card"><strong>LLM latency</strong><span>1.4s avg</span></div>
+                            <div class="admin-card wide"><strong>Риски</strong><ul class="admin-list"><li>3 устаревших документа</li><li>2 слабых ответа</li></ul></div>
+                            <div class="admin-card wide"><strong>Дизлайки</strong><ul class="admin-list"><li>Регламент отпусков</li></ul></div>
+                        </div>
+                    </div>
+                    <div class="admin-subpanel" data-admin-panel="settings">
+                        <div class="admin-settings-toolbar">
+                            <input class="search" type="search" placeholder="Поиск настроек">
+                            <button class="btn-secondary" type="button">Обновить</button>
+                        </div>
+                        <div class="admin-settings-group">
+                            <div class="admin-settings-group__head">Инференс</div>
+                            <div class="admin-settings-row"><div><code>inference_backend</code></div><input value="ollama"><button class="btn-ghost" type="button">↺</button></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </div>
+    <a class="prototype-badge" href="index.html">← Все компоновки</a>
+    <script src="proto-switch.js"></script>
+</body>
+</html>
