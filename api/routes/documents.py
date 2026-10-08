@@ -25,7 +25,11 @@ documents_bp = Blueprint("documents", __name__, url_prefix="/api/documents")
 @documents_bp.before_request
 def require_admin_role():
     """Управление базой знаний доступно только администраторам."""
-    if request.endpoint in {"documents.open_document", "documents.related_documents"}:
+    if request.endpoint in {
+        "documents.open_document",
+        "documents.related_documents",
+        "documents.get_knowledge_image",
+    }:
         return None
     return require_admin_access()
 
@@ -560,3 +564,44 @@ def list_jobs():
         _prune_jobs_locked()
         jobs = sorted(_jobs.values(), key=lambda item: item.get("started_at", ""), reverse=True)
     return jsonify({"jobs": [dict(job) for job in jobs[:20]]})
+
+
+@documents_bp.route("/images/<occurrence_id>", methods=["GET"])
+def get_knowledge_image(occurrence_id):
+    """Выдать изображение визуального источника (ТЗ §16.2).
+
+    ID разрешается через каталог; путь файловой системы из запроса не принимается.
+    """
+    from core.visual_serving import KnowledgeImageService
+
+    variant = (request.args.get("variant") or "original").strip().lower()
+    if variant not in {"original", "preview", "thumbnail"}:
+        return jsonify({"error": "invalid_variant"}), 400
+    try:
+        service = KnowledgeImageService()
+        response = service.resolve(occurrence_id, variant=variant)
+    except Exception as exc:
+        logger.exception("Ошибка выдачи изображения %s", occurrence_id)
+        return jsonify({"error": "image_error", "message": str(exc)}), 500
+
+    if response.error_code:
+        status = 404 if response.error_code in ("not_found", "no_asset") else 410
+        return jsonify({"error": response.error_code}), status
+
+    if request.headers.get("If-None-Match") == response.etag:
+        return ("", 304, {"ETag": response.etag})
+
+    import io as _io
+
+    payload = _io.BytesIO(response.data)
+    resp = send_file(
+        payload,
+        mimetype=response.mime_type,
+        as_attachment=response.download_only,
+        download_name=f"{occurrence_id.replace(':', '_')}",
+        max_age=3600,
+    )
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    resp.headers["ETag"] = response.etag
+    resp.headers["Cache-Control"] = "private, max-age=3600"
+    return resp

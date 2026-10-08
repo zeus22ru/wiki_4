@@ -375,7 +375,13 @@ def fetch_page(session: requests.Session, url: str, timeout: int) -> tuple[str, 
     return response.text, soup
 
 
-def save_page(output_dir: Path, url: str, soup: BeautifulSoup, used_paths: set[Path]) -> dict:
+def save_page(
+    output_dir: Path,
+    url: str,
+    soup: BeautifulSoup,
+    used_paths: set[Path],
+    session: "requests.Session | None" = None,
+) -> dict:
     fallback = root_space_from_url(url) or "Страница"
     title = title_from_soup(soup, fallback)
     html_tag = soup.find("html")
@@ -383,13 +389,50 @@ def save_page(output_dir: Path, url: str, soup: BeautifulSoup, used_paths: set[P
     article_html = clean_article_html(soup)
     output_path = readable_output_path(output_dir, url, title, used_paths)
     output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Загрузка изображений статьи (ТЗ §10.1) до публикации экспорта.
+    asset_info: dict = {}
+    if session is not None:
+        try:
+            from core.xwiki_assets import download_page_assets, write_asset_manifest
+            from config import settings as _settings
+
+            asset_root = output_path.parent / (output_path.stem + "_assets")
+            asset_result = download_page_assets(
+                session,
+                url,
+                article_html,
+                asset_root,
+                allowed_hosts=[
+                    h.strip()
+                    for h in str(getattr(_settings, "XWIKI_ASSET_ALLOWED_HOSTS", "") or "").split(",")
+                    if h.strip()
+                ],
+                max_bytes=int(getattr(_settings, "XWIKI_ASSET_MAX_BYTES", 50 * 1024 * 1024)),
+                timeout=float(getattr(_settings, "XWIKI_ASSET_TIMEOUT_SEC", 30)),
+                enabled=bool(getattr(_settings, "XWIKI_DOWNLOAD_ASSETS", False)),
+                download_attachments=bool(getattr(_settings, "XWIKI_DOWNLOAD_ATTACHMENTS", False)),
+            )
+            article_html = asset_result.get("html", article_html)
+            asset_info = {
+                "assets": asset_result.get("assets", []),
+                "assets_status": asset_result.get("status"),
+                "assets_diagnostics": asset_result.get("diagnostics", []),
+            }
+            if asset_result.get("assets"):
+                write_asset_manifest(asset_root, url, asset_result.get("assets", []))
+        except Exception as exc:  # не ронять экспорт страницы из-за ресурсов
+            asset_info = {"assets_status": "failed", "assets_error": str(exc)}
+
     output_path.write_text(render_exported_html(title, url, full_name, article_html), encoding="utf-8")
-    return {
+    saved = {
         "title": title,
         "url": url,
         "xwiki_page": full_name,
         "path": str(output_path.as_posix()),
     }
+    saved.update(asset_info)
+    return saved
 
 
 def unique_candidates(candidates: Iterable[PageCandidate]) -> list[PageCandidate]:
@@ -476,7 +519,7 @@ def main() -> int:
             continue
 
         html, soup = fetched
-        saved = save_page(args.output, candidate.url, soup, used_paths)
+        saved = save_page(args.output, candidate.url, soup, used_paths, session=session)
         saved["discovered_by"] = candidate.source
         manifest.append(saved)
 

@@ -29,10 +29,31 @@ _SETTINGS_FINGERPRINT_KEYS = (
     "STRIKETHROUGH_INDEX_MODE",
 )
 
+# Поля визуального индекса (ТЗ §12–§14). Их смена меняет состав визуальных
+# чанков, поэтому обязана переводить reindex в полный.
+_VISUAL_FINGERPRINT_KEYS = (
+    "KB_VISUAL_ENABLED",
+    "KB_VISUAL_INDEX_NAMESPACE",
+    "VISUAL_SCHEMA_VERSION",
+    "VISUAL_ANALYSIS_ENABLED",
+    "VISUAL_CHAT_MODEL",
+    "VISUAL_TILE_SIZE",
+    "VISUAL_TILE_OVERLAP",
+    "VISUAL_MAX_PAGES_PER_SOURCE",
+    "VISUAL_MAX_OCCURRENCES_PER_SOURCE",
+    "OCR_PROVIDER",
+    "OCR_MODEL_PROFILE",
+    "OCR_SECONDARY_PROFILE",
+    "OCR_DUAL_PASS",
+    "OCR_ENGINE_VERSION",
+    "OCR_MODEL_FINGERPRINT",
+)
+
 
 def settings_fingerprint() -> str:
     """Хэш настроек, от которых зависит состав и смысл чанков индекса."""
-    payload = {key: getattr(settings, key, None) for key in _SETTINGS_FINGERPRINT_KEYS}
+    keys = _SETTINGS_FINGERPRINT_KEYS + _VISUAL_FINGERPRINT_KEYS
+    payload = {key: getattr(settings, key, None) for key in keys}
     raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 

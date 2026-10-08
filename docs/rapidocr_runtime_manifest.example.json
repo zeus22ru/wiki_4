@@ -1,0 +1,40 @@
+{
+  "_comment": "Пример runtime_manifest.json для portable RapidOCR-json. Реальный манифест генерируется scripts/rapidocr_manifest.py (ТЗ §8.1, §24.3).",
+  "engine": "rapidocr-json",
+  "release_version": "0.2.0",
+  "runtime_version": "1.1.0",
+  "platform": "windows-x64",
+  "installed_path": ".tools/rapidocr-json/0.2.0",
+  "executable": "RapidOCR-json.exe",
+  "active_profiles": ["cyrillic", "english"],
+  "profiles": {
+    "cyrillic": [
+      "ch_PP-OCRv3_det_infer.onnx",
+      "ch_ppocr_mobile_v2.0_cls_infer.onnx",
+      "rec_cyrillic_PP-OCRv3_infer.onnx",
+      "dict_cyrillic.txt"
+    ],
+    "english": [
+      "ch_PP-OCRv3_det_infer.onnx",
+      "ch_ppocr_mobile_v2.0_cls_infer.onnx",
+      "rec_en_PP-OCRv3_infer.onnx",
+      "dict_en.txt"
+    ]
+  },
+  "files": {
+    "RapidOCR-json.exe": "<sha256>",
+    "models/ch_PP-OCRv3_det_infer.onnx": "<sha256>",
+    "models/ch_ppocr_mobile_v2.0_cls_infer.onnx": "<sha256>",
+    "models/rec_cyrillic_PP-OCRv3_infer.onnx": "<sha256>",
+    "models/dict_cyrillic.txt": "<sha256>",
+    "licenses/LICENSE-RapidOCR-json.txt": "<sha256>"
+  },
+  "licenses": [
+    "licenses/LICENSE-RapidOCR-json.txt",
+    "licenses/LICENSE-onnxruntime.txt",
+    "licenses/LICENSE-PaddleOCR.txt"
+  ],
+  "archive_url": "https://github.com/hiroi-sora/RapidOCR-json/releases/download/v0.2.0/RapidOCR-json_v0.2.0.7z",
+  "archive_sha256": "7ad9b283d03436c6cd0296723188699299cb4e5cf9140b410c59543aa5793c40",
+  "generated_at": "<ISO-8601>"
+}

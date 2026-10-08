@@ -522,7 +522,7 @@ def scan_supported_files(data_dir: str) -> List[Path]:
     file_handlers = get_file_handlers()
     supported_exts = {ext.lower() for ext in file_handlers.keys()}
     excluded_extensions = {".crdownload", ".tmp", ".temp", ".bak"}
-    skip_dir_names = {".git", "__pycache__"}
+    skip_dir_names = {".git", "__pycache__", ".tools"}
 
     attachments_dir: Optional[Path] = None
     raw_attachments = getattr(settings, "CHAT_ATTACHMENTS_DIR", None)
@@ -531,6 +531,16 @@ def scan_supported_files(data_dir: str) -> List[Path]:
             attachments_dir = Path(str(raw_attachments)).resolve()
         except OSError:
             attachments_dir = None
+
+    # Каталог визуальных ассетов исключаем: extracted images не должны
+    # индексироваться повторно и создавать рекурсивные дубли (ТЗ §7).
+    assets_dir: Optional[Path] = None
+    raw_assets = getattr(settings, "KB_ASSETS_DIR", None)
+    if raw_assets:
+        try:
+            assets_dir = Path(str(raw_assets)).resolve()
+        except OSError:
+            assets_dir = None
 
     all_files: List[Path] = []
     for path in data_path.rglob("*"):
@@ -541,6 +551,8 @@ def scan_supported_files(data_dir: str) -> List[Path]:
         if path.name.startswith("~$"):
             continue
         if _is_under_dir(path, attachments_dir):
+            continue
+        if _is_under_dir(path, assets_dir):
             continue
         suffix = path.suffix.lower()
         if suffix not in supported_exts:
@@ -716,6 +728,7 @@ def preview_document(file_path: Path, duplicate_exists: bool = False) -> Dict:
         warnings.append("После разбиения не получилось полезных чанков")
 
     headings = re.findall(r"(?:(?:^|[.!?])\s*)([А-ЯA-Z][^.!?]{8,80})", content)
+    visual_summary = _preview_visual_summary(path)
     return {
         "filename": path.name,
         "file_type": ext.lstrip("."),
@@ -727,7 +740,20 @@ def preview_document(file_path: Path, duplicate_exists: bool = False) -> Dict:
         "title": doc_data.get("title") or path.stem,
         "text_length": len(content),
         "headings": headings[:5],
+        "visual": visual_summary,
     }
+
+
+def _preview_visual_summary(path: Path) -> Optional[Dict]:
+    """Сводка визуального извлечения для preview (ТЗ §17). None, если отключено."""
+    if not bool(getattr(settings, "KB_VISUAL_ENABLED", False)):
+        return None
+    try:
+        from core.visual_pipeline import preview_source
+
+        return preview_source(path)
+    except Exception as exc:
+        return {"status": "failed", "warnings": [str(exc)]}
 
 
 def process_files(file_paths: List[Path]) -> List[Dict]:
@@ -830,11 +856,70 @@ def process_files(file_paths: List[Path]) -> List[Dict]:
     return documents
 
 
+def _process_all_documents(files: List[Path]) -> List[Dict]:
+    """Текстовые и визуальные чанки для полной или частичной индексации (ТЗ §12).
+
+    Единая точка сборки: и CLI (`process_all_files`), и reindex обязаны идти
+    через неё, иначе визуальные чанки не попадут в индекс.
+    """
+    documents = process_files(files)
+    documents.extend(_collect_visual_documents_for_files(files))
+    return documents
+
+
 def process_all_files(data_dir: str) -> List[Dict]:
     """Обработать все поддерживаемые файлы в директории"""
     data_path = Path(data_dir)
     logger.info(f"Сканирование директории: {data_path}")
-    return process_files(scan_supported_files(data_dir))
+    files = scan_supported_files(data_dir)
+    return _process_all_documents(files)
+
+
+def _collect_visual_documents_for_files(files: List[Path]) -> List[Dict]:
+    """Собрать визуальные чанки (ТЗ §12, §13), если включён визуальный индекс."""
+    if not files:
+        return []
+    try:
+        from core.visual_pipeline import visual_indexing_enabled, collect_visual_documents
+    except Exception as exc:  # pragma: no cover
+        logger.warning("Визуальная подсистема недоступна: %s", exc)
+        return []
+    if not visual_indexing_enabled():
+        logger.info("Визуальная индексация отключена (KB_VISUAL_ENABLED=false)")
+        return []
+
+    total = len(files)
+
+    def report(update: Dict) -> None:
+        """Логировать прогресс, иначе визуальный этап выглядит как зависание."""
+        if str(update.get("stage")) != "visual":
+            return
+        current = int(update.get("current") or 0)
+        if current == total or current % 10 == 0:
+            logger.info(
+                "Визуальная индексация: %s/%s — %s",
+                current,
+                total,
+                update.get("file"),
+            )
+
+    logger.info("Визуальная индексация: старт, файлов=%s", total)
+    try:
+        visual_docs, diagnostics = collect_visual_documents(
+            files, progress_callback=report
+        )
+    except Exception as exc:
+        logger.error("Визуальная индексация не удалась: %s", exc)
+        return []
+    failed = [d for d in diagnostics if d.get("status") == "failed"]
+    if failed:
+        logger.warning("Визуальная индексация: %s источник(ов) с ошибками", len(failed))
+    logger.info(
+        "Визуальная индексация: visual_chunks=%s sources=%s",
+        len(visual_docs),
+        len(diagnostics),
+    )
+    return visual_docs
 
 
 def create_vector_db(documents: List[Dict], progress_callback: Optional[Callable[[Dict], None]] = None):
@@ -1196,7 +1281,7 @@ def reindex_vector_db(
 
     if full_reason:
         report(5, "scan", f"Полная индексация: {full_reason}", diagnostics={"index_mode": "full"})
-        documents = process_files(all_files)
+        documents = _process_all_documents(all_files)
         if not documents:
             raise RuntimeError("Не найдено документов для индексации")
         result = create_vector_db(documents, progress_callback=progress_callback)
@@ -1250,7 +1335,7 @@ def reindex_vector_db(
         return diagnostics
 
     changed_files = [current_by_path[path] for path in paths_to_process]
-    changed_documents = process_files(changed_files) if changed_files else []
+    changed_documents = _process_all_documents(changed_files) if changed_files else []
     process_stats = getattr(process_files, "last_stats", {}) or {}
     changed_docs_by_path = _documents_by_path(changed_documents)
 
@@ -1285,7 +1370,7 @@ def reindex_vector_db(
         collection = client.get_collection(settings.CHROMA_COLLECTION_NAME)
     except Exception as exc:
         logger.warning("Incremental reindex fallback to full: collection unavailable: %s", exc)
-        documents = process_files(all_files)
+        documents = _process_all_documents(all_files)
         result = create_vector_db(documents, progress_callback=progress_callback)
         result["full_reason"] = "collection_missing"
         result["files_total"] = len(all_files)

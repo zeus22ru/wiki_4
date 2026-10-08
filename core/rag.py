@@ -8,7 +8,7 @@ import chromadb
 from typing import List, Dict, Optional, Tuple, Any, Iterator
 import re
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import time
 from pathlib import Path
 import logging
@@ -196,6 +196,8 @@ class RAGResult:
     #: Код ошибки retrieval: embedding_unavailable | search_error | None при успехе или «нет документов»
     retrieve_error: Optional[str] = None
     diagnostics: Optional[Dict[str, Any]] = None
+    #: Найденные визуальные источники базы знаний (ТЗ §16.1). Пустой список при отсутствии.
+    images: List[Dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> Dict:
         """Преобразование в словарь"""
@@ -203,6 +205,7 @@ class RAGResult:
             'answer': self.answer,
             'citations': [c.to_dict() for c in self.citations],
             'sources': self.sources,
+            'images': list(self.images or []),
         }
         if self.retrieve_error is not None:
             d['retrieve_error'] = self.retrieve_error
@@ -1726,29 +1729,68 @@ class RAGSystem:
         self,
         prompt: str,
         attachments: Optional[AttachmentBundle] = None,
+        visual_image_urls: Optional[List[str]] = None,
+        visual_labels: str = "",
     ) -> str:
         """
         Генерация ответа через Ollama (/api/generate) или OpenAI-совместимый API (/v1/chat/completions).
+
+        ``visual_image_urls`` — изображения базы знаний (data URL), найденные RAG.
+        ``visual_labels`` — текстовая маркировка визуальных источников перед картинками.
         """
         mode = getattr(settings, "CHAT_API_MODE", "ollama") or "ollama"
         rag_logger.debug("Генерация ответа (CHAT_API_MODE=%s)...", mode)
-        if mode == "openai" and attachments and attachments.has_images:
-            image_urls = [
-                image_to_data_url(item)
-                for item in attachments.items
-                if item.kind == "image"
-            ]
+        self._vision_fallback_reason = None
+        user_images = [
+            image_to_data_url(item)
+            for item in (attachments.items if attachments else [])
+            if item.kind == "image"
+        ] if attachments else []
+        all_images = list(user_images) + list(visual_image_urls or [])
+        if mode == "openai" and all_images:
+            prompt_with_labels = prompt
+            if visual_labels:
+                prompt_with_labels = f"{prompt}\n\n{visual_labels}"
             messages = [
                 {
                     "role": "user",
-                    "content": build_multimodal_user_content(prompt, image_urls),
+                    "content": build_multimodal_user_content(prompt_with_labels, all_images),
                 }
             ]
-            answer = chat_completion_messages(messages, timeout=120)
+            try:
+                answer = chat_completion_messages(messages, timeout=120)
+            except ChatCompletionError as exc:
+                # Модель не принимает изображения (например, текстовая модель).
+                # Не ломаем ответ: повторяем без картинок и фиксируем причину явно
+                # (ТЗ §15.1 — не отправлять молча только текст).
+                if getattr(exc, "code", "") != "vision_unsupported":
+                    raise
+                rag_logger.warning(
+                    "Модель %s не приняла изображения (vision_unsupported); повтор без картинок",
+                    settings.OLLAMA_CHAT_MODEL,
+                )
+                self._vision_fallback_reason = "vision_unsupported"
+                answer = chat_completion(prompt, timeout=120)
         else:
             answer = chat_completion(prompt, timeout=120)
         rag_logger.debug(f"Ответ сгенерирован, длина: {len(answer)} символов")
         return answer
+
+    def _resolve_visual_bundle(self, documents: List[Dict]) -> Optional[Any]:
+        """Визуальные источники базы знаний по найденным чанкам (ТЗ §14).
+
+        Возвращает :class:`VisualEvidenceBundle` или None, если визуальный
+        контекст отключён либо подсистема недоступна.
+        """
+        if not bool(getattr(settings, "RAG_VISUAL_CONTEXT_ENABLED", True)):
+            return None
+        try:
+            from core.visual_context import resolve_visual_evidence
+
+            return resolve_visual_evidence(documents)
+        except Exception as exc:  # не ронять основной ответ из-за визуальной части
+            rag_logger.warning("Визуальный контекст недоступен: %s", exc)
+            return None
 
     def _postprocess_generated_answer(
         self,
@@ -2179,6 +2221,13 @@ class RAGSystem:
         
         rag_logger.debug(f"Найдено {len(documents)} релевантных документов")
         
+        # 1b. Визуальные источники базы знаний (ТЗ §14).
+        visual_bundle = self._resolve_visual_bundle(documents)
+        query_timings_ms["visual_context_ms"] = 0
+        visual_images = list(visual_bundle.image_data_urls) if visual_bundle else []
+        visual_labels = visual_bundle.labels_text() if visual_bundle else ""
+        visual_evidence_dicts = [ev.to_dict() for ev in (visual_bundle.evidence if visual_bundle else [])]
+
         # 2. Генерация промпта с контекстом
         rag_logger.debug("Шаг 2: Генерация промпта с контекстом")
         prompt_started = time.perf_counter()
@@ -2204,7 +2253,10 @@ class RAGSystem:
         # 3. Генерация ответа через Ollama
         rag_logger.debug("Шаг 3: Генерация ответа через Ollama")
         gen_started = time.time()
-        answer = self._generate_answer(prompt, attachments=attachments)
+        answer = self._generate_answer(
+            prompt, attachments=attachments,
+            visual_image_urls=visual_images, visual_labels=visual_labels,
+        )
         gen_ms = int((time.time() - gen_started) * 1000)
         query_timings_ms["llm_generation_ms"] = gen_ms
         answer = self._postprocess_generated_answer(answer)
@@ -2254,6 +2306,17 @@ class RAGSystem:
             expansion=expansion,
             attachment_enrichment=attachment_enrichment,
         )
+        rag_result.images = visual_evidence_dicts
+        if visual_bundle is not None:
+            rag_result.diagnostics["visual"] = visual_bundle.diagnostics
+        # Если картинки не были доставлены модели (не поддержаны), честно помечаем это.
+        fallback_reason = getattr(self, "_vision_fallback_reason", None)
+        if fallback_reason:
+            visual_diag = rag_result.diagnostics.setdefault("visual", {})
+            visual_diag["fallback"] = fallback_reason
+            visual_diag["images_delivered"] = 0
+            for image in rag_result.images:
+                image["used_for_answer"] = False
         rag_logger.info("RAG запрос завершен за %.3f сек, timings_ms=%s", elapsed, query_timings_ms)
         rag_logger.debug(f"Результат: {len(documents)} документов, {len(rag_result.citations)} цитат")
         
@@ -2279,6 +2342,13 @@ class RAGSystem:
         """
         max_citations = max_citations if max_citations is not None else settings.RAG_MAX_CITATIONS
         rag_logger.info("Потоковая генерация RAG-ответа (%s документов)", len(documents))
+
+        # Визуальные источники базы знаний (ТЗ §14) — одинаково с не-потоковым путём.
+        visual_bundle = self._resolve_visual_bundle(documents)
+        visual_images = list(visual_bundle.image_data_urls) if visual_bundle else []
+        visual_labels = visual_bundle.labels_text() if visual_bundle else ""
+        visual_evidence_dicts = [ev.to_dict() for ev in (visual_bundle.evidence if visual_bundle else [])]
+        self._vision_fallback_reason = None
 
         exchange_id = uuid.uuid4().hex
         exchange_started = time.time()
@@ -2336,27 +2406,40 @@ class RAGSystem:
         raw_chunks: List[str] = []
         gen_started = time.time()
         mode = getattr(settings, "CHAT_API_MODE", "ollama") or "ollama"
-        use_multimodal = bool(
-            mode == "openai" and attachments and attachments.has_images
-        )
+        user_images = [
+            image_to_data_url(item)
+            for item in (attachments.items if attachments else [])
+            if item.kind == "image"
+        ] if attachments else []
+        all_images = user_images + visual_images
+        use_multimodal = bool(mode == "openai" and all_images)
 
         def _live_llm_chunks() -> Iterator[str]:
             if use_multimodal:
-                image_urls = [
-                    image_to_data_url(item)
-                    for item in attachments.items
-                    if item.kind == "image"
-                ]
+                prompt_with_labels = prompt
+                if visual_labels:
+                    prompt_with_labels = f"{prompt}\n\n{visual_labels}"
                 messages = [
                     {
                         "role": "user",
-                        "content": build_multimodal_user_content(prompt, image_urls),
+                        "content": build_multimodal_user_content(prompt_with_labels, all_images),
                     }
                 ]
-                iterator = chat_completion_messages_stream(messages, timeout=120)
-            else:
-                iterator = chat_completion_stream(prompt, timeout=120)
-            for fragment in iterator:
+                try:
+                    for fragment in chat_completion_messages_stream(messages, timeout=120):
+                        raw_chunks.append(fragment)
+                        yield fragment
+                    return
+                except ChatCompletionError as exc:
+                    if getattr(exc, "code", "") != "vision_unsupported" or raw_chunks:
+                        raise
+                    # Модель не принимает изображения: перезапускаем текстом (ТЗ §15.1).
+                    rag_logger.warning(
+                        "Модель %s не приняла изображения в потоке; повтор без картинок",
+                        settings.OLLAMA_CHAT_MODEL,
+                    )
+                    self._vision_fallback_reason = "vision_unsupported"
+            for fragment in chat_completion_stream(prompt, timeout=120):
                 raw_chunks.append(fragment)
                 yield fragment
 
@@ -2407,6 +2490,15 @@ class RAGSystem:
             timings_ms=stream_timings_ms,
             attachment_enrichment=attachment_enrichment,
         )
+        rag_result.images = visual_evidence_dicts
+        if visual_bundle is not None:
+            rag_result.diagnostics["visual"] = visual_bundle.diagnostics
+        if getattr(self, "_vision_fallback_reason", None):
+            visual_diag = rag_result.diagnostics.setdefault("visual", {})
+            visual_diag["fallback"] = self._vision_fallback_reason
+            visual_diag["images_delivered"] = 0
+            for image in rag_result.images:
+                image["used_for_answer"] = False
 
         _safe_json_log(
             {

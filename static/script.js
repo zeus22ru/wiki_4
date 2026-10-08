@@ -1380,6 +1380,7 @@ async function openChat(chatId, options = {}) {
                 citations: msg.citations || [],
                 messageId: msg.id,
                 attachments: (msg.metadata && msg.metadata.attachments) || [],
+                images: (msg.metadata && msg.metadata.images) || [],
             });
             if (type === 'bot' && ((msg.sources || []).length || (msg.citations || []).length)) {
                 addSourcesButton(messageEl, msg.sources || [], msg.citations || []);
@@ -1544,6 +1545,7 @@ async function sendChatClassic(message, payload = null) {
         sources: data.sources || [],
         citations: data.citations || [],
         messageId: data.message_id,
+        images: data.images || [],
     });
     setCurrentChatId(data.chat_id || currentChatId);
     addSourcesButton(botMessage, data.sources || [], data.citations || []);
@@ -1770,6 +1772,131 @@ function renderMessageAttachments(container, attachments) {
         }
     });
     container.appendChild(wrap);
+}
+
+// --- Изображения из источников базы знаний (ТЗ §16.3) ------------------------
+
+function kbImageLocationLabel(item) {
+    const parts = [];
+    if (item.page != null) parts.push(`стр. ${item.page}`);
+    if (item.slide != null) parts.push(`слайд ${item.slide}`);
+    if (item.sheet) parts.push(`лист ${item.sheet}`);
+    return parts.join(', ');
+}
+
+function openKbImageModal(item) {
+    const src = item.url || item.thumbnail_url;
+    if (!src) return;
+    const root = document.createElement('div');
+    root.className = 'kb-image-lightbox';
+    const backdrop = document.createElement('div');
+    backdrop.className = 'kb-image-lightbox__backdrop';
+    const dialog = document.createElement('div');
+    dialog.className = 'kb-image-lightbox__dialog';
+    dialog.setAttribute('role', 'dialog');
+    dialog.setAttribute('aria-modal', 'true');
+    const img = document.createElement('img');
+    img.src = src;
+    img.alt = item.caption || item.title || 'Изображение источника';
+    const caption = document.createElement('div');
+    caption.className = 'kb-image-lightbox__caption';
+    const loc = kbImageLocationLabel(item);
+    caption.textContent = [item.source_title || item.title, item.section_path, loc]
+        .filter(Boolean).join(' — ');
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.className = 'kb-image-lightbox__close';
+    close.setAttribute('aria-label', 'Закрыть');
+    close.textContent = '×';
+    const closeAll = () => {
+        root.remove();
+        document.body.classList.remove('kb-image-lightbox-open');
+        document.removeEventListener('keydown', onKey);
+    };
+    const onKey = (event) => {
+        if (event.key === 'Escape') closeAll();
+    };
+    backdrop.addEventListener('click', closeAll);
+    close.addEventListener('click', closeAll);
+    document.addEventListener('keydown', onKey);
+    dialog.append(close, img, caption);
+    root.append(backdrop, dialog);
+    document.body.appendChild(root);
+    document.body.classList.add('kb-image-lightbox-open');
+}
+
+function renderKnowledgeImages(messageEl, images) {
+    if (!messageEl || !images || !images.length) {
+        return;
+    }
+    const content = messageEl.querySelector('.message-content');
+    if (!content || content.querySelector('.kb-images')) {
+        return;
+    }
+    const wrap = document.createElement('div');
+    wrap.className = 'kb-images';
+    const heading = document.createElement('div');
+    heading.className = 'kb-images__heading';
+    heading.textContent = 'Изображения из источников';
+    wrap.appendChild(heading);
+
+    const grid = document.createElement('div');
+    grid.className = 'kb-images__grid';
+    images.forEach((item) => {
+        if (!item || !(item.url || item.thumbnail_url)) return;
+        const card = document.createElement('figure');
+        card.className = 'kb-image-card';
+        if (item.visual_type) card.dataset.visualType = item.visual_type;
+
+        const thumb = document.createElement('img');
+        thumb.className = 'kb-image-card__thumb';
+        thumb.loading = 'lazy';
+        thumb.src = item.thumbnail_url || item.url;
+        thumb.alt = item.caption || item.title || 'Изображение источника';
+        thumb.addEventListener('click', () => openKbImageModal(item));
+        thumb.addEventListener('error', () => {
+            if (item.url && thumb.src !== item.url) thumb.src = item.url;
+        });
+        card.appendChild(thumb);
+
+        const meta = document.createElement('figcaption');
+        meta.className = 'kb-image-card__meta';
+        const title = document.createElement('div');
+        title.className = 'kb-image-card__title';
+        title.textContent = item.caption || item.title || item.source_title || 'Изображение';
+        meta.appendChild(title);
+        const subParts = [item.source_title, item.section_path, kbImageLocationLabel(item)].filter(Boolean);
+        if (subParts.length) {
+            const sub = document.createElement('div');
+            sub.className = 'kb-image-card__sub';
+            if (item.evidence_label) {
+                const badge = document.createElement('span');
+                badge.className = 'kb-image-card__badge';
+                badge.textContent = item.evidence_label;
+                sub.appendChild(badge);
+            }
+            sub.appendChild(document.createTextNode(subParts.join(' — ')));
+            meta.appendChild(sub);
+        }
+        if (item.source_path || item.source_url) {
+            const link = document.createElement('button');
+            link.type = 'button';
+            link.className = 'kb-image-card__source';
+            link.textContent = 'Открыть источник';
+            link.addEventListener('click', () => {
+                if (item.source_url) {
+                    window.open(item.source_url, '_blank', 'noopener');
+                } else if (item.source_path) {
+                    openDocumentFromSource({path: item.source_path});
+                }
+            });
+            meta.appendChild(link);
+        }
+        card.appendChild(meta);
+        grid.appendChild(card);
+    });
+    wrap.appendChild(grid);
+    content.appendChild(wrap);
 }
 
 async function handleSubmit(e) {
@@ -2093,6 +2220,7 @@ async function readStream(response, requestId) {
                 streamContent.classList.remove('streaming-in-progress');
                 linkifySourceReferences(streamShell, payload.sources || [], payload.citations || []);
                 addSourcesButton(streamShell, payload.sources || [], payload.citations || []);
+                renderKnowledgeImages(streamShell, payload.images || []);
                 addVerifyButton(streamShell, {
                     answer: textToRender,
                     sources: payload.sources || [],
@@ -2201,6 +2329,7 @@ function addMessage(text, type, details = {}) {
     messagesContainer.appendChild(messageDiv);
     if (type === 'bot') {
         linkifySourceReferences(messageDiv, details.sources || [], details.citations || []);
+        renderKnowledgeImages(messageDiv, details.images || []);
     }
     syncEmptyTilesState();
     scrollToBottom();

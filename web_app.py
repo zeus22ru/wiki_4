@@ -107,6 +107,7 @@ def _rag_result_to_api_dict(rag_result: RAGResult) -> dict:
         "answer": rag_result.answer,
         "sources": sources,
         "citations": citations,
+        "images": list(getattr(rag_result, "images", None) or []),
         "diagnostics": rag_result.diagnostics or {},
     }
 
@@ -653,6 +654,7 @@ def chat():
             },
             "latency_ms": latency_ms,
             "diagnostics": payload.get("diagnostics", {}),
+            "images": payload.get("images", []),
         },
         retrieval_query_text=expansion.get("rewritten"),
     )
@@ -841,6 +843,7 @@ def chat_stream():
                             },
                             "latency_ms": int((time.time() - started) * 1000),
                             "diagnostics": payload.get("diagnostics", {}),
+                            "images": payload.get("images", []),
                         },
                         retrieval_query_text=expansion.get("rewritten"),
                     )
