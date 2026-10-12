@@ -2339,6 +2339,7 @@ async function readStream(response, requestId) {
                 streamContent.classList.remove('streaming-in-progress');
                 linkifySourceReferences(streamShell, payload.sources || [], payload.citations || []);
                 addSourcesButton(streamShell, payload.sources || [], payload.citations || []);
+                showSourcesForAnswer(payload.sources || [], payload.citations || []);
                 renderKnowledgeImages(streamShell, payload.images || []);
                 addVerifyButton(streamShell, {
                     answer: textToRender,
@@ -2452,6 +2453,9 @@ function addMessage(text, type, details = {}) {
     if (type === 'bot') {
         linkifySourceReferences(messageDiv, details.sources || [], details.citations || []);
         renderKnowledgeImages(messageDiv, details.images || []);
+        if ((details.sources || []).length || (details.citations || []).length) {
+            showSourcesForAnswer(details.sources || [], details.citations || []);
+        }
     }
     syncEmptyTilesState();
     scrollToBottom();
@@ -3052,9 +3056,9 @@ function showSourcesEmpty(message = SOURCES_EMPTY_IDLE) {
     sourcesList.appendChild(empty);
 }
 
-function openSourcesPanel(options = {}) {
-    if (!isSourcesDrawerMode() && readSourcesCollapsedPreference()) {
-        setSourcesCollapsed(false);
+function renderSourcesList(options = {}) {
+    if (!sourcesList || !sourcesPanel) {
+        return 0;
     }
     const citations = currentCitations || [];
     const sources = currentSources || [];
@@ -3107,8 +3111,16 @@ function openSourcesPanel(options = {}) {
         }
         sourcesList.appendChild(sourceItem);
     }
-    sourcesPanel.classList.add('open');
     sourcesPanel.setAttribute('data-populated', max > 0 ? 'true' : 'false');
+    return max;
+}
+
+function openSourcesPanel(options = {}) {
+    if (!isSourcesDrawerMode() && readSourcesCollapsedPreference()) {
+        setSourcesCollapsed(false);
+    }
+    renderSourcesList(options);
+    sourcesPanel.classList.add('open');
     if (isSourcesDrawerMode()) {
         _sourcesFocusRestore = document.activeElement;
         closeSources?.focus();
@@ -3116,6 +3128,20 @@ function openSourcesPanel(options = {}) {
     const activeSource = sourcesList.querySelector('.source-item--active');
     if (activeSource) {
         activeSource.scrollIntoView({block: 'nearest'});
+    }
+}
+
+// Автоматически показывает источники ответа в правой панели сразу после ответа модели.
+// На мобильных (панель в режиме шторки) список не выдвигается, чтобы не перекрывать чат.
+function showSourcesForAnswer(sources = [], citations = [], options = {}) {
+    currentSources = sources || [];
+    currentCitations = citations || [];
+    if (isSourcesDrawerMode()) {
+        return;
+    }
+    const max = renderSourcesList(options);
+    if (max > 0 && sourcesPanel) {
+        sourcesPanel.scrollTop = 0;
     }
 }
 
