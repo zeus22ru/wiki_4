@@ -7,9 +7,10 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='vendor/fonts/inter.css') }}?v=1">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/theme.css') }}?v=15">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/markdown.css') }}?v=3">
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=25">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=28">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/components.css') }}?v=25">
     <link rel="stylesheet" href="{{ url_for('static', filename='vendor/highlight.js/11.9.0/github-dark.min.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/solutions.css') }}?v=1">
 </head>
 <body>
     <div class="app-container">
@@ -289,6 +290,7 @@
                         <button class="tab-btn active" id="adminOverviewTab" type="button" data-admin-panel="adminOverviewPanel">Обзор</button>
                         <button class="tab-btn" id="adminSettingsTab" type="button" data-admin-panel="adminSettingsPanel">Настройки</button>
                         <button class="tab-btn" id="adminUsersTab" type="button" data-admin-panel="adminUsersPanel">Пользователи</button>
+                        <button class="tab-btn" id="adminEvalsTab" type="button" data-admin-panel="adminEvalsPanel">Проверки</button>
                     </div>
                     <div class="admin-subpanel active" id="adminOverviewPanel" role="tabpanel" aria-labelledby="adminOverviewTab">
                     <div class="admin-grid" id="adminOverview"></div>
@@ -327,19 +329,60 @@
                         <div class="admin-users" id="adminUsersList"></div>
                         <div class="admin-users-pager" id="adminUsersPager"></div>
                     </div>
+                    <div class="admin-subpanel" id="adminEvalsPanel" role="tabpanel" aria-labelledby="adminEvalsTab">
+                        <div class="admin-evals-toolbar">
+                            <button class="new-chat-btn" id="evalStartBtn" type="button">Запустить</button>
+                            <button class="secondary-btn" id="evalImportBtn" type="button">Импорт JSONL</button>
+                            <input id="evalImportFile" type="file" accept=".jsonl,application/jsonl,text/plain" hidden>
+                            <button class="secondary-btn" id="evalCompareBtn" type="button" disabled>Сравнить</button>
+                            <span class="admin-evals-status" id="evalRunStatus" aria-live="polite"></span>
+                        </div>
+                        <p class="admin-evals-note">Поиск «нашёл / не нашёл» считается только у вопросов с ожидаемым документом. «Содержательный» значит, что модель не отказалась.</p>
+                        <section class="admin-evals-block">
+                            <div class="admin-evals-block__head">
+                                <h3>Вопросы</h3>
+                                <button class="new-chat-btn" id="evalAddBtn" type="button">Добавить вопрос</button>
+                            </div>
+                            <div id="evalCases"></div>
+                        </section>
+                        <section class="admin-evals-block">
+                            <h3>Прогоны</h3>
+                            <div id="evalRuns"></div>
+                            <div id="evalRunDetail" hidden></div>
+                            <div id="evalCompare" hidden></div>
+                        </section>
+                    </div>
                 </section>
             </main>
 
             <aside class="sources-panel" id="sourcesPanel" aria-label="Источники">
                 <div class="sources-header">
                     <h3>Источники</h3>
-                    <button class="close-sources" id="closeSources" type="button" aria-label="Закрыть источники">✕</button>
+                    <button class="close-sources" id="closeSources" type="button" aria-controls="sourcesPanel" aria-expanded="true" aria-label="Скрыть источники" title="Скрыть источники">×</button>
                 </div>
                 <p class="sources-intro">Фрагменты, которые подтверждают ответ. Выберите источник, чтобы увидеть связь с выводом.</p>
                 <div class="sources-list" id="sourcesList">
                     <p class="empty-state" id="sourcesEmpty">Источники появятся после ответа</p>
                 </div>
             </aside>
+            <button type="button" class="sources-reveal" id="sourcesReveal" hidden aria-controls="sourcesPanel" aria-expanded="false" aria-label="Показать источники" title="Показать источники">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <polyline points="15 18 9 12 15 6"/>
+                </svg>
+                <span>Источники</span>
+            </button>
+            <script>
+                (function () {
+                    try {
+                        if (localStorage.getItem('wiki4.sourcesPanelCollapsed') !== '1') return;
+                        if (window.matchMedia('(max-width: 980px)').matches) return;
+                        document.querySelector('.main-shell')?.classList.add('sources-collapsed');
+                        document.getElementById('sourcesPanel')?.setAttribute('hidden', '');
+                        var reveal = document.getElementById('sourcesReveal');
+                        if (reveal) reveal.hidden = false;
+                    } catch (e) {}
+                })();
+            </script>
         </div>
     </div>
 
@@ -391,6 +434,27 @@
                 </div>
             </form>
             <div class="auth-message" id="issueMessage"></div>
+        </div>
+    </div>
+
+    <div class="auth-modal" id="solutionModal" hidden>
+        <div class="auth-modal__backdrop" id="solutionBackdrop"></div>
+        <div class="auth-modal__dialog solution-modal__dialog" role="dialog" aria-modal="true" aria-labelledby="solutionTitle">
+            <div class="auth-modal__header"><div><h2 id="solutionTitle">Проблема решена</h2><p class="solution-form__status" id="solutionStatus"></p></div><button class="icon-btn" id="solutionCloseBtn" type="button" aria-label="Закрыть">×</button></div>
+            <div class="solution-form">
+                <fieldset class="solution-form__choices"><legend>Что помогло?</legend><label><input id="solutionKind" type="radio" name="solutionKind" value="answer" checked> Шаги из ответа</label><label><input type="radio" name="solutionKind" value="modified"> Помогло с изменениями</label><label><input type="radio" name="solutionKind" value="other"> Нашёл другое решение</label></fieldset>
+                <label class="field"><span class="field__label">Что именно сработало?</span><textarea class="field__control solution-form__textarea" id="solutionClarification" maxlength="4000" placeholder="Обязательно для изменённого или другого решения"></textarea></label>
+                <div id="solutionDraftFields" hidden>
+                    <label class="field"><span class="field__label">Заголовок</span><input class="field__control" id="solutionArticleTitle" maxlength="200"></label>
+                    <label class="field"><span class="field__label">Проблема</span><textarea class="field__control solution-form__textarea" id="solutionProblem" maxlength="8000"></textarea></label>
+                    <label class="field"><span class="field__label">Условия</span><textarea class="field__control solution-form__textarea" id="solutionConditions" maxlength="8000"></textarea></label>
+                    <label class="field"><span class="field__label">Решение</span><textarea class="field__control solution-form__textarea" id="solutionSolution" maxlength="8000"></textarea></label>
+                    <label class="field"><span class="field__label">Проверка результата</span><textarea class="field__control solution-form__textarea" id="solutionVerification" maxlength="8000"></textarea></label>
+                    <label class="field"><span class="field__label">Причина (если она явно установлена)</span><textarea class="field__control solution-form__textarea" id="solutionReason" maxlength="8000"></textarea></label>
+                </div>
+                <p class="solution-form__message" id="solutionMessage" aria-live="polite"></p>
+                <div class="solution-form__actions"><button class="secondary-btn" id="solutionCancelBtn" type="button">Закрыть</button><button class="secondary-btn" id="solutionPrepareBtn" type="button">Подготовить черновик</button><button class="new-chat-btn" id="solutionSubmitBtn" type="button" hidden>Отправить на проверку</button></div>
+            </div>
         </div>
     </div>
 
@@ -512,6 +576,52 @@
         </div>
     </div>
 
+    <div class="auth-modal" id="evalCaseModal" hidden>
+        <div class="auth-modal__backdrop" id="evalCaseBackdrop"></div>
+        <div class="auth-modal__dialog eval-case-modal__dialog" role="dialog" aria-modal="true" aria-labelledby="evalCaseTitle">
+            <div class="auth-modal__header">
+                <h2 id="evalCaseTitle">Новый вопрос</h2>
+                <button class="icon-btn" id="evalCaseCloseBtn" type="button" aria-label="Закрыть">×</button>
+            </div>
+            <form class="admin-evals-form" id="evalCaseForm" autocomplete="off">
+                <label class="field">Вопрос
+                    <textarea class="field__control" id="evalQuestion" rows="3" required></textarea>
+                </label>
+                <label class="field">Метка
+                    <select class="field__control" id="evalLabel">
+                        <option value="answerable">Ответ есть</option>
+                        <option value="unanswerable">Ответа нет</option>
+                    </select>
+                </label>
+                <label class="field">Ожидаемый документ
+                    <input class="field__control" id="evalExpected" type="text" placeholder="часть пути или названия, через запятую">
+                </label>
+                <label class="field">Фрагмент в чанке
+                    <input class="field__control" id="evalEvidence" type="text" placeholder="необязательно: текст, который должен попасть в найденный чанк">
+                </label>
+                <label class="field">Должно быть в ответе
+                    <input class="field__control" id="evalMustAny" type="text" placeholder="фразы через запятую, достаточно одной">
+                </label>
+                <label class="field">Не должно быть
+                    <input class="field__control" id="evalMustNot" type="text" placeholder="фразы через запятую">
+                </label>
+                <label class="field">Заметка
+                    <input class="field__control" id="evalNotes" type="text">
+                </label>
+                <label class="admin-users-check" for="evalActive">
+                    <input id="evalActive" type="checkbox" checked>
+                    <span>Включён в прогон</span>
+                </label>
+                <p class="eval-check-hint">Если снять галку, вопрос останется в списке, но не попадёт в запуск.</p>
+                <div class="admin-evals-form__actions">
+                    <button class="secondary-btn" id="evalCancelEditBtn" type="button">Отмена</button>
+                    <button class="new-chat-btn" id="evalSaveBtn" type="submit">Добавить</button>
+                </div>
+            </form>
+            <div class="auth-message" id="evalCaseMessage"></div>
+        </div>
+    </div>
+
     <div class="auth-modal" id="ownPasswordModal" hidden>
         <div class="auth-modal__backdrop" id="ownPasswordBackdrop"></div>
         <div class="auth-modal__dialog" role="dialog" aria-modal="true" aria-labelledby="ownPasswordTitle">
@@ -538,6 +648,7 @@
     <script src="{{ url_for('static', filename='vendor/mermaid/10.9.1/mermaid.min.js') }}"></script>
     <script src="{{ url_for('static', filename='js/theme.js') }}?v=2"></script>
     <script src="{{ url_for('static', filename='js/clipboard.js') }}"></script>
-    <script src="{{ url_for('static', filename='script.js') }}?v=25"></script>
+    <script src="{{ url_for('static', filename='solutions.js') }}?v=1"></script>
+    <script src="{{ url_for('static', filename='script.js') }}?v=28"></script>
 </body>
 </html>

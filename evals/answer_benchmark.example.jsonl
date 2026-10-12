@@ -1,0 +1,20 @@
+{"id":"q01","question":"Как сделать рассылку должникам?","label":"answerable","expected_sources":[],"must_contain_any":[],"must_not_contain":[],"notes":""}
+{"id":"q02","question":"Как настроить состояние сертификации?","label":"answerable","expected_sources":[],"must_contain_any":[],"must_not_contain":[],"notes":""}
+{"id":"q03","question":"Инструкция по добавлению пользователя в 1С","label":"answerable","expected_sources":[],"must_contain_any":[],"must_not_contain":[],"notes":""}
+{"id":"q04","question":"Как найти ошибку в журнале регистрации?","label":"answerable","expected_sources":[],"must_contain_any":[],"must_not_contain":[],"notes":""}
+{"id":"q05","question":"Что делать с ошибкой недостаточно прав для работы с таблицей?","label":"answerable","expected_sources":[],"must_contain_any":[],"must_not_contain":[],"notes":""}
+{"id":"q06","question":"В документе количество поэкземплярной продукции не соответствует количеству подобронного товара","label":"answerable","expected_sources":[],"must_contain_any":[],"must_not_contain":[],"notes":""}
+{"id":"q07","question":"Проблема с печатью ТТН","label":"answerable","expected_sources":[],"must_contain_any":[],"must_not_contain":[],"notes":""}
+{"id":"q08","question":"Как добавить ЭЦП и сертификат?","label":"answerable","expected_sources":[],"must_contain_any":[],"must_not_contain":[],"notes":""}
+{"id":"q09","question":"Группа товаров должна быть в архиве","label":"answerable","expected_sources":[],"must_contain_any":[],"must_not_contain":[],"notes":""}
+{"id":"q10","question":"Пустая упаковка при отправке в EDI","label":"answerable","expected_sources":[],"must_contain_any":[],"must_not_contain":[],"notes":""}
+{"id":"q11","question":"Перемещение не подгружается из УПП в ВМС","label":"answerable","expected_sources":[],"must_contain_any":[],"must_not_contain":[],"notes":""}
+{"id":"q12","question":"Ошибка обновления АРМ егаис. Нет вкладки Выпуск продукции","label":"answerable","expected_sources":[],"must_contain_any":[],"must_not_contain":[],"notes":""}
+{"id":"q13","question":"УПП, не хватает остатка ЕГАИС","label":"answerable","expected_sources":[],"must_contain_any":[],"must_not_contain":[],"notes":""}
+{"id":"q14","question":"Как поменять статус у ТТН ЕГАИС?","label":"answerable","expected_sources":[],"must_contain_any":[],"must_not_contain":[],"notes":""}
+{"id":"q15","question":"Как загрузить номенклатуру на кассу в базу УПП?","label":"answerable","expected_sources":[],"must_contain_any":[],"must_not_contain":[],"notes":""}
+{"id":"q16","question":"Что делать с ошибкой конфликт блокировок?","label":"answerable","expected_sources":[],"must_contain_any":[],"must_not_contain":[],"notes":""}
+{"id":"q17","question":"Не проводится документ требование накладная, что делать?","label":"answerable","expected_sources":[],"must_contain_any":[],"must_not_contain":[],"notes":""}
+{"id":"q18","question":"Как активировать лицензии дата мобайл?","label":"answerable","expected_sources":[],"must_contain_any":[],"must_not_contain":[],"notes":""}
+{"id":"q19","question":"Как настраивается АТС переадресации?","label":"answerable","expected_sources":[],"must_contain_any":[],"must_not_contain":[],"notes":""}
+{"id":"q20","question":"Чеклист работы УТМ","label":"answerable","expected_sources":[],"must_contain_any":[],"must_not_contain":[],"notes":""}

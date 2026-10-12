@@ -7,3 +7,4 @@ API маршруты
 from . import admin, chat, documents
 
 __all__ = ['admin', 'chat', 'documents']
+from .solutions import solutions_bp

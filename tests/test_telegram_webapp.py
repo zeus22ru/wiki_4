@@ -78,7 +78,7 @@ def test_telegram_app_page(client):
     assert "telegram-web-app.js" in html
     assert "mermaid.min.js" in html
     assert "telegram-app.js') }}?v=3" not in html
-    assert "telegram-app.js?v=" in html
+    assert "telegram-app.js?v=4" in html
 
 
 def test_telegram_app_renders_mermaid_blocks():
@@ -90,6 +90,18 @@ def test_telegram_app_renders_mermaid_blocks():
     assert "renderMermaidIn(bubble)" in script
     assert "replaceStreamingMermaidWithPlaceholder(target.bubble)" in script
     assert "'/api/mermaid/fix'" in script
+
+
+def test_telegram_app_attachment_settings(client, monkeypatch):
+    from bs4 import BeautifulSoup
+
+    monkeypatch.setattr("web_app.settings.CHAT_ATTACHMENTS_ENABLED", False)
+    monkeypatch.setattr("web_app.settings.CHAT_ATTACHMENT_MAX_COUNT", 2)
+    monkeypatch.setattr("web_app.settings.CHAT_ATTACHMENT_MAX_BYTES", 123456)
+    page = BeautifulSoup(client.get("/telegram-app").get_data(as_text=True), "html.parser")
+    assert page.select_one("#attachButton").has_attr("hidden")
+    assert page.select_one("#messageForm")["data-attachment-max-count"] == "2"
+    assert page.select_one("#messageForm")["data-attachment-max-bytes"] == "123456"
 
 
 def test_webapp_auth_sets_session_for_linked_user(client, monkeypatch):

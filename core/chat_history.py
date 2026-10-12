@@ -225,6 +225,7 @@ class ChatHistoryManager:
             ''')
 
             self._migrate_telegram_links_schema(cursor)
+            self._create_eval_tables(cursor)
             conn.commit()
             logger.info("Таблицы истории чатов созданы или уже существуют")
 
@@ -285,6 +286,62 @@ class ChatHistoryManager:
             logger.info("Миграция telegram_links: снят UNIQUE с code")
 
         cursor.execute(f"PRAGMA user_version = {_TELEGRAM_LINK_SCHEMA_VERSION}")
+
+    def _create_eval_tables(self, cursor: sqlite3.Cursor) -> None:
+        """Корзина проверок и история прогонов. Строки корзины не удаляются."""
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS eval_cases (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                external_id TEXT NOT NULL UNIQUE,
+                question TEXT NOT NULL,
+                label TEXT NOT NULL,
+                expected_sources_json TEXT NOT NULL DEFAULT '[]',
+                evidence_contains TEXT NOT NULL DEFAULT '',
+                must_contain_any_json TEXT NOT NULL DEFAULT '[]',
+                must_not_contain_json TEXT NOT NULL DEFAULT '[]',
+                notes TEXT NOT NULL DEFAULT '',
+                active INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+        ''')
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS eval_runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                status TEXT NOT NULL,
+                started_by INTEGER,
+                started_at TEXT NOT NULL,
+                finished_at TEXT,
+                dataset_hash TEXT NOT NULL DEFAULT '',
+                params_json TEXT NOT NULL DEFAULT '{}',
+                index_json TEXT NOT NULL DEFAULT '{}',
+                summary_json TEXT NOT NULL DEFAULT '{}',
+                progress_done INTEGER NOT NULL DEFAULT 0,
+                progress_total INTEGER NOT NULL DEFAULT 0,
+                error TEXT,
+                FOREIGN KEY (started_by) REFERENCES users (id)
+            )
+        ''')
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS eval_run_items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id INTEGER NOT NULL,
+                case_id INTEGER,
+                external_id TEXT NOT NULL,
+                question TEXT NOT NULL,
+                label TEXT NOT NULL,
+                search_verdict TEXT NOT NULL,
+                answer_verdict TEXT NOT NULL,
+                rank INTEGER,
+                answer_excerpt TEXT NOT NULL DEFAULT '',
+                sources_json TEXT NOT NULL DEFAULT '[]',
+                detail_json TEXT NOT NULL DEFAULT '{}',
+                FOREIGN KEY (run_id) REFERENCES eval_runs (id)
+            )
+        ''')
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_eval_run_items_run_id ON eval_run_items(run_id)"
+        )
 
     def _generate_telegram_link_code(self, cursor: sqlite3.Cursor, now_iso: str) -> str:
         """Сгенерировать код, уникальный среди активных (неиспользованных и непросроченных)."""

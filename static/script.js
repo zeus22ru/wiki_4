@@ -58,9 +58,13 @@ const statusText = document.getElementById('statusText');
 const serviceStatus = document.getElementById('serviceStatus');
 const sourcesPanel = document.getElementById('sourcesPanel');
 const sourcesList = document.getElementById('sourcesList');
+const mainShell = document.querySelector('.main-shell');
 const SOURCES_EMPTY_IDLE = 'Источники появятся после ответа';
 const SOURCES_EMPTY_NONE = 'Источники не найдены';
+const SOURCES_PANEL_COLLAPSED_KEY = 'wiki4.sourcesPanelCollapsed';
+const sourcesDrawerMedia = window.matchMedia('(max-width: 980px)');
 const closeSources = document.getElementById('closeSources');
+let sourcesReveal = document.getElementById('sourcesReveal');
 const sidebarNewChatBtn = document.getElementById('sidebarNewChatBtn');
 const workspaceSidebar = document.getElementById('workspaceSidebar');
 const sidebarToggle = document.getElementById('sidebarToggle');
@@ -669,7 +673,14 @@ document.addEventListener('DOMContentLoaded', () => {
     setInterval(checkHealth, 30000);
 
     messageForm.addEventListener('submit', handleSubmit);
-    closeSources.addEventListener('click', closeSourcesPanel);
+    initSourcesCollapse();
+    closeSources.addEventListener('click', () => {
+        if (isSourcesDrawerMode()) {
+            closeSourcesPanel();
+            return;
+        }
+        setSourcesCollapsed(true, {focusReveal: true});
+    });
     document.addEventListener('keydown', (event) => {
         if (event.key === 'Escape' && sourcesPanel?.classList.contains('open') && isSourcesDrawerMode()) {
             closeSourcesPanel();
@@ -1219,7 +1230,77 @@ function initSidebarToggle() {
 }
 
 function isSourcesDrawerMode() {
-    return window.matchMedia('(max-width: 980px)').matches;
+    return sourcesDrawerMedia.matches;
+}
+
+function readSourcesCollapsedPreference() {
+    try {
+        return localStorage.getItem(SOURCES_PANEL_COLLAPSED_KEY) === '1';
+    } catch (_) {
+        return false;
+    }
+}
+
+function applySourcesCollapsed(collapsed) {
+    const hideColumn = Boolean(collapsed) && !isSourcesDrawerMode();
+    mainShell?.classList.toggle('sources-collapsed', hideColumn);
+    if (sourcesPanel) {
+        sourcesPanel.toggleAttribute('hidden', hideColumn);
+        if (hideColumn) {
+            sourcesPanel.classList.remove('open');
+        }
+    }
+    if (closeSources) {
+        closeSources.setAttribute('aria-expanded', hideColumn ? 'false' : 'true');
+    }
+    if (sourcesReveal) {
+        sourcesReveal.hidden = !hideColumn;
+        sourcesReveal.setAttribute('aria-expanded', hideColumn ? 'false' : 'true');
+    }
+}
+
+function setSourcesCollapsed(collapsed, {focusReveal = false} = {}) {
+    try {
+        localStorage.setItem(SOURCES_PANEL_COLLAPSED_KEY, collapsed ? '1' : '0');
+    } catch (_) {}
+    applySourcesCollapsed(collapsed);
+    if (focusReveal && collapsed && !isSourcesDrawerMode()) {
+        sourcesReveal?.focus();
+    }
+}
+
+function ensureSourcesRevealButton() {
+    if (sourcesReveal || !mainShell) {
+        return sourcesReveal;
+    }
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'sources-reveal';
+    button.id = 'sourcesReveal';
+    button.hidden = true;
+    button.setAttribute('aria-controls', 'sourcesPanel');
+    button.setAttribute('aria-expanded', 'false');
+    button.setAttribute('aria-label', 'Показать источники');
+    button.title = 'Показать источники';
+    button.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="15 18 9 12 15 6"/></svg><span>Источники</span>';
+    mainShell.appendChild(button);
+    sourcesReveal = button;
+    return button;
+}
+
+function initSourcesCollapse() {
+    ensureSourcesRevealButton();
+    sourcesReveal?.addEventListener('click', () => {
+        setSourcesCollapsed(false);
+        closeSources?.focus();
+    });
+    applySourcesCollapsed(readSourcesCollapsedPreference());
+    const onModeChange = () => applySourcesCollapsed(readSourcesCollapsedPreference());
+    if (typeof sourcesDrawerMedia.addEventListener === 'function') {
+        sourcesDrawerMedia.addEventListener('change', onModeChange);
+    } else if (typeof sourcesDrawerMedia.addListener === 'function') {
+        sourcesDrawerMedia.addListener(onModeChange);
+    }
 }
 
 async function loadChats(search = '') {
@@ -1429,10 +1510,13 @@ async function openChat(chatId, options = {}) {
                     sources: msg.sources || [],
                     citations: msg.citations || [],
                 });
+            }
+            if (type === 'bot') {
                 addFeedbackControls(messageEl, msg.id);
                 addIssueReportButton(messageEl, msg.id);
             }
         });
+        window.SolutionsUI?.setSession(data.chat.id);
         updateActiveChatListItem();
         switchPanel('chatPanel');
         syncEmptyTilesState();
@@ -2361,6 +2445,9 @@ function addMessage(text, type, details = {}) {
     }
 
     messageDiv.append(avatar, content);
+    if (type === 'bot' && details.messageId) {
+        window.SolutionsUI?.attach(messageDiv, details.messageId);
+    }
     messagesContainer.appendChild(messageDiv);
     if (type === 'bot') {
         linkifySourceReferences(messageDiv, details.sources || [], details.citations || []);
@@ -2966,6 +3053,9 @@ function showSourcesEmpty(message = SOURCES_EMPTY_IDLE) {
 }
 
 function openSourcesPanel(options = {}) {
+    if (!isSourcesDrawerMode() && readSourcesCollapsedPreference()) {
+        setSourcesCollapsed(false);
+    }
     const citations = currentCitations || [];
     const sources = currentSources || [];
     const max = Math.max(citations.length, sources.length);
@@ -3579,6 +3669,8 @@ function initAdminSubtabs() {
                 loadAdminSettings();
             } else if (panelId === 'adminUsersPanel') {
                 loadAdminUsers(1);
+            } else if (panelId === 'adminEvalsPanel') {
+                loadEvals();
             }
             updateAdminSettingsDraftToolbar();
         });
@@ -4408,4 +4500,571 @@ function escapeHtml(text) {
     const div = document.createElement('div');
     div.textContent = text == null ? '' : String(text);
     return div.innerHTML;
+}
+
+const evalStartBtn = document.getElementById('evalStartBtn');
+const evalImportBtn = document.getElementById('evalImportBtn');
+const evalImportFile = document.getElementById('evalImportFile');
+const evalCompareBtn = document.getElementById('evalCompareBtn');
+const evalCaseForm = document.getElementById('evalCaseForm');
+const evalAddBtn = document.getElementById('evalAddBtn');
+const evalCancelEditBtn = document.getElementById('evalCancelEditBtn');
+let evalEditingId = null;
+let evalSelected = [];
+let evalPollTimer = null;
+
+function evalSplitList(value) {
+    return String(value || '').split(/[\n,]/).map((part) => part.trim()).filter(Boolean);
+}
+
+function evalEl(tag, className, text) {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text != null) node.textContent = text;
+    return node;
+}
+
+async function loadEvals() {
+    if (!document.getElementById('adminEvalsPanel') || currentAuth.role !== 'admin') return;
+    const [casesRes, runsRes] = await Promise.all([
+        apiJson('/api/admin/evals/cases'),
+        apiJson('/api/admin/evals/runs'),
+    ]);
+    renderEvalCases(casesRes.cases || []);
+    renderEvalRuns(runsRes.runs || []);
+    const running = (runsRes.runs || []).find((run) => run.status === 'queued' || run.status === 'running');
+    const status = document.getElementById('evalRunStatus');
+    if (running) {
+        if (status) status.textContent = `Идёт прогон: ${running.progress_done}/${running.progress_total}`;
+        if (!evalPollTimer) {
+            evalPollTimer = setInterval(() => {
+                loadEvals().catch(() => {});
+            }, 2000);
+        }
+    } else if (evalPollTimer) {
+        clearInterval(evalPollTimer);
+        evalPollTimer = null;
+        if (status) status.textContent = 'Прогон завершён';
+    }
+}
+
+function renderEvalCases(cases) {
+    const root = document.getElementById('evalCases');
+    if (!root) return;
+    root.replaceChildren();
+    const active = cases.filter((item) => item.active).length;
+    if (evalStartBtn) evalStartBtn.disabled = active === 0;
+    cases.forEach((item) => {
+        const row = evalEl('article', `eval-case${item.active ? '' : ' is-off'}`);
+        const title = evalEl('div', 'eval-case__title', item.question);
+        const meta = evalEl('div', 'eval-case__meta', `${item.external_id} · ${item.label === 'unanswerable' ? 'ответа нет' : 'ответ есть'}${item.active ? '' : ' · выключен'}${item.expected_sources && item.expected_sources.length ? '' : ' · без эталона'}`);
+        const edit = evalEl('button', 'secondary-btn', 'Изменить');
+        edit.type = 'button';
+        edit.addEventListener('click', () => openEvalCaseModal(item));
+        row.append(title, meta, edit);
+        root.append(row);
+    });
+    if (!cases.length) {
+        root.append(evalEl('p', 'eval-empty', 'Вопросов пока нет'));
+    }
+}
+
+function fillEvalForm(item) {
+    evalEditingId = item.id;
+    document.getElementById('evalQuestion').value = item.question || '';
+    document.getElementById('evalLabel').value = item.label || 'answerable';
+    document.getElementById('evalExpected').value = (item.expected_sources || []).join(', ');
+    document.getElementById('evalEvidence').value = item.evidence_contains || '';
+    document.getElementById('evalMustAny').value = (item.must_contain_any || []).join(', ');
+    document.getElementById('evalMustNot').value = (item.must_not_contain || []).join(', ');
+    document.getElementById('evalNotes').value = item.notes || '';
+    document.getElementById('evalActive').checked = !!item.active;
+    const save = document.getElementById('evalSaveBtn');
+    if (save) save.textContent = 'Сохранить';
+    const title = document.getElementById('evalCaseTitle');
+    if (title) title.textContent = 'Изменить вопрос';
+}
+
+function resetEvalForm() {
+    evalEditingId = null;
+    if (evalCaseForm) evalCaseForm.reset();
+    const active = document.getElementById('evalActive');
+    if (active) active.checked = true;
+    const save = document.getElementById('evalSaveBtn');
+    if (save) save.textContent = 'Добавить';
+    const title = document.getElementById('evalCaseTitle');
+    if (title) title.textContent = 'Новый вопрос';
+    const message = document.getElementById('evalCaseMessage');
+    if (message) message.textContent = '';
+}
+
+function openEvalCaseModal(item) {
+    const modal = document.getElementById('evalCaseModal');
+    if (!modal) return;
+    if (item) fillEvalForm(item);
+    else resetEvalForm();
+    const message = document.getElementById('evalCaseMessage');
+    if (message) message.textContent = '';
+    modal.hidden = false;
+    setTimeout(() => document.getElementById('evalQuestion')?.focus(), 0);
+}
+
+function closeEvalCaseModal() {
+    const modal = document.getElementById('evalCaseModal');
+    if (modal) modal.hidden = true;
+    resetEvalForm();
+}
+
+function renderEvalRuns(runs) {
+    const root = document.getElementById('evalRuns');
+    if (!root) return;
+    root.replaceChildren();
+    if (!runs.length) {
+        root.append(evalEl('p', 'eval-empty', 'Прогонов ещё нет'));
+        return;
+    }
+    runs.forEach((run) => {
+        const row = evalEl('article', 'eval-run');
+        const check = document.createElement('input');
+        check.type = 'checkbox';
+        check.checked = evalSelected.includes(run.id);
+        check.addEventListener('change', () => toggleEvalSelect(run.id, check.checked));
+        const body = evalEl('button', 'eval-run__open');
+        body.type = 'button';
+        const params = run.params || {};
+        const headline = run.headline || {};
+        body.append(
+            evalEl('strong', '', `${run.started_at || ''} · ${run.status}`),
+            evalEl('span', '', `${params.OLLAMA_CHAT_MODEL || 'модель'} · чанк ${params.CHUNK_SIZE ?? '—'}`),
+            evalEl('span', '', `Ответ ${headline.answer || '—'} · Поиск ${headline.search || '—'}${headline.progress && run.status !== 'done' ? ` · ${headline.progress}` : ''}`),
+        );
+        body.addEventListener('click', () => openEvalRun(run.id));
+        row.append(check, body);
+        root.append(row);
+    });
+    if (evalCompareBtn) evalCompareBtn.disabled = evalSelected.length !== 2;
+}
+
+function toggleEvalSelect(id, checked) {
+    evalSelected = evalSelected.filter((item) => item !== id);
+    if (checked) evalSelected.push(id);
+    if (evalSelected.length > 2) evalSelected = evalSelected.slice(-2);
+    if (evalCompareBtn) evalCompareBtn.disabled = evalSelected.length !== 2;
+    loadEvals();
+}
+
+const EVAL_STATUS_LABEL = {
+    done: 'готово',
+    running: 'идёт',
+    queued: 'в очереди',
+    failed: 'ошибка',
+};
+
+function evalClock(value) {
+    const date = value ? new Date(value) : null;
+    if (!date || Number.isNaN(date.getTime())) return '';
+    return date.toLocaleString('ru-RU', {day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit'});
+}
+
+function evalWhen(run) {
+    const start = run.started_at ? new Date(run.started_at) : null;
+    const end = run.finished_at ? new Date(run.finished_at) : null;
+    const startLabel = evalClock(run.started_at);
+    if (!start || Number.isNaN(start.getTime())) return run.started_at || '';
+    let range = startLabel;
+    if (end && !Number.isNaN(end.getTime())) {
+        range = `${startLabel}–${end.toLocaleTimeString('ru-RU', {hour: '2-digit', minute: '2-digit'})}`;
+    }
+    const minutes = end && !Number.isNaN(end.getTime())
+        ? Math.max(1, Math.round((end.getTime() - start.getTime()) / 60000))
+        : 0;
+    return minutes ? `${range} · ${minutes} мин` : range;
+}
+
+function evalNeedsAttention(item) {
+    return item.search_verdict === 'search_miss'
+        || item.answer_verdict === 'abstained_despite_hit'
+        || item.answer_verdict === 'unclear'
+        || item.answer_verdict === 'refusal'
+        || item.answer_verdict === 'false_answer'
+        || item.answer_verdict === 'facts_mismatch'
+        || item.answer_verdict === 'infra_error';
+}
+
+function evalSwatch(item) {
+    if (item.search_verdict === 'search_miss' || item.answer_verdict === 'abstained_despite_hit' || item.answer_verdict === 'false_answer' || item.answer_verdict === 'facts_mismatch' || item.answer_verdict === 'infra_error') return 'bad';
+    if (item.answer_verdict === 'unclear' || item.answer_verdict === 'refusal') return 'warn';
+    if (item.search_verdict === 'unlabeled' || item.search_verdict === 'search_neighbors' || item.search_verdict === 'search_empty') return 'muted';
+    return 'ok';
+}
+
+function evalSearchTone(verdict) {
+    if (verdict === 'search_hit') return 'ok';
+    if (verdict === 'search_miss' || verdict === 'infra_error') return 'bad';
+    if (verdict === 'search_neighbors' || verdict === 'search_empty') return 'warn';
+    return 'muted';
+}
+
+function evalAnswerTone(verdict) {
+    if (verdict === 'substantive' || verdict === 'correct_abstain') return 'ok';
+    if (verdict === 'unclear' || verdict === 'refusal') return 'warn';
+    if (verdict === 'abstained_despite_hit' || verdict === 'false_answer' || verdict === 'facts_mismatch' || verdict === 'infra_error') return 'bad';
+    return 'muted';
+}
+
+function evalFact(label, value) {
+    const node = evalEl('div', 'eval-fact');
+    node.append(evalEl('span', 'eval-fact__label', label), evalEl('span', 'eval-fact__value', value));
+    return node;
+}
+
+function evalStat(value, label, tone) {
+    const node = evalEl('div', 'eval-stat');
+    const number = evalEl('strong', tone ? `is-${tone}` : '', String(value));
+    node.append(number, evalEl('span', '', label));
+    return node;
+}
+
+function evalBar(label, caption, segments, total) {
+    const wrap = evalEl('div', 'eval-bar');
+    const head = evalEl('div', 'eval-bar__head');
+    head.append(evalEl('span', '', label), evalEl('span', '', caption));
+    const track = evalEl('div', 'eval-bar__track');
+    let used = 0;
+    segments.forEach((segment) => {
+        const value = Number(segment.value) || 0;
+        if (value <= 0) return;
+        used += value;
+        const part = evalEl('span', `eval-bar__seg is-${segment.tone}`);
+        part.style.flexGrow = String(value);
+        part.title = segment.title || '';
+        track.append(part);
+    });
+    const rest = Math.max(0, total - used);
+    if (rest > 0) {
+        const part = evalEl('span', 'eval-bar__seg is-rest');
+        part.style.flexGrow = String(rest);
+        track.append(part);
+    }
+    if (!track.childElementCount) return null;
+    wrap.append(head, track);
+    return wrap;
+}
+
+function evalScore(value) {
+    const number = Number(value);
+    return Number.isFinite(number) ? number.toFixed(2) : '';
+}
+
+function renderEvalItems(host, items, filter) {
+    host.replaceChildren();
+    const matched = items.filter((item) => {
+        if (filter === 'attention') return evalNeedsAttention(item);
+        if (filter === 'miss') return item.search_verdict === 'search_miss';
+        if (filter === 'abstain') return item.answer_verdict === 'abstained_despite_hit';
+        return true;
+    });
+    const ordered = matched
+        .map((item, index) => ({item, index}))
+        .sort((left, right) => Number(evalNeedsAttention(right.item)) - Number(evalNeedsAttention(left.item)) || left.index - right.index);
+    ordered.forEach(({item}, position) => {
+        const details = document.createElement('details');
+        details.className = 'eval-item';
+        if (position === 0 && evalNeedsAttention(item)) details.open = true;
+        const summaryNode = document.createElement('summary');
+        const swatch = evalEl('span', `eval-swatch is-${evalSwatch(item)}`);
+        swatch.setAttribute('aria-hidden', 'true');
+        const question = evalEl('span', 'eval-item__question', item.question);
+        const tags = evalEl('span', 'eval-item__tags');
+        tags.append(
+            evalEl('span', `is-${evalSearchTone(item.search_verdict)}`, item.search_label || ''),
+            evalEl('span', `is-${evalAnswerTone(item.answer_verdict)}`, item.answer_label || ''),
+        );
+        summaryNode.append(swatch, question, tags);
+        details.append(summaryNode);
+        const body = evalEl('div', 'eval-item__body');
+        const detail = item.detail || {};
+        const source = detail.matched_source || (item.sources && item.sources[0]) || null;
+        if (source) {
+            const score = evalScore(source.score);
+            const bits = [
+                source.title || source.path || '',
+                item.rank ? `место ${item.rank}` : '',
+                score,
+            ].filter(Boolean);
+            body.append(evalEl('p', 'eval-item__source', `Источник: ${bits.join(' · ')}`));
+        }
+        if (detail.evidence_hit === true || detail.evidence_hit === false) {
+            body.append(evalEl('p', 'eval-item__meta', `Эталонная фраза: ${detail.evidence_hit ? 'найдена' : 'нет в выдаче'}`));
+        }
+        body.append(evalEl('p', 'eval-item__answer-label', 'Ответ'));
+        body.append(evalEl('pre', 'eval-answer', item.answer_excerpt || ''));
+        details.append(body);
+        host.append(details);
+    });
+}
+
+async function openEvalRun(id) {
+    const data = await apiJson(`/api/admin/evals/runs/${id}`);
+    const run = data.run;
+    const root = document.getElementById('evalRunDetail');
+    const compare = document.getElementById('evalCompare');
+    if (compare) compare.hidden = true;
+    root.hidden = false;
+    root.replaceChildren();
+    const params = run.params || {};
+    const index = run.index || {};
+    const summary = run.summary || {};
+    const answer = summary.answer || {};
+    const search = summary.search || {};
+    const items = run.items || [];
+    const evaluated = summary.evaluated || items.length || 0;
+    const labeled = search.labeled || 0;
+    const hit1 = search.hit_at_1 || 0;
+    const hitk = search.hit_at_k || 0;
+    const unlabeled = search.unlabeled || 0;
+    const misses = Math.max(0, labeled - hitk);
+    const substantive = answer.substantive || 0;
+    const unclear = answer.unclear || 0;
+    const abstain = answer.abstained_despite_hit || 0;
+    const attentionCount = items.filter(evalNeedsAttention).length;
+    const missCount = items.filter((item) => item.search_verdict === 'search_miss').length;
+
+    const detail = evalEl('article', 'eval-detail');
+    const title = evalEl('div', 'eval-detail__title');
+    title.append(evalEl('h3', '', `Прогон ${run.id}`));
+    const status = evalEl('span', `eval-pill${run.status === 'done' ? ' is-on' : ''}${run.status === 'failed' ? ' is-bad' : ''}`, EVAL_STATUS_LABEL[run.status] || run.status || '');
+    title.append(status);
+    detail.append(title);
+    const when = evalWhen(run);
+    if (when) detail.append(evalEl('p', 'eval-detail__when', when));
+
+    const facts = evalEl('div', 'eval-facts');
+    const factRows = [
+        ['Модель', params.OLLAMA_CHAT_MODEL],
+        ['Эмбеддинг', params.OLLAMA_EMBEDDING_MODEL],
+        ['Чанк', params.CHUNK_SIZE != null ? String(params.CHUNK_SIZE) : ''],
+        ['Top-k', params.RAG_TOP_K != null ? String(params.RAG_TOP_K) : ''],
+        ['Индекс', index.chunk_count != null ? `${index.chunk_count} чанков` : ''],
+        ['Поиск', params.RETRIEVAL_MODE],
+    ];
+    factRows.forEach(([label, value]) => {
+        if (value) facts.append(evalFact(label, value));
+    });
+    if (facts.childElementCount) detail.append(facts);
+
+    const modes = [];
+    if (params.RAG_MULTI_QUERY_ENABLED) modes.push('multi-query');
+    if (params.RAG_HYDE_ENABLED) modes.push('HyDE');
+    if (params.DEEP_RETRIEVAL_ENABLED) modes.push('deep retrieval');
+    if (modes.length) {
+        const modeRow = evalEl('div', 'eval-modes');
+        modes.forEach((name) => modeRow.append(evalEl('span', 'eval-pill', name)));
+        detail.append(modeRow);
+    }
+    if (params.nondeterministic && modes.length) {
+        detail.append(evalEl('p', 'eval-warn', `Включены ${modes.join(' и ')}. Повтор прогона может дать другой набор чанков.`));
+    }
+    if (run.error) detail.append(evalEl('p', 'eval-warn', run.error));
+
+    const stats = evalEl('div', 'eval-stats');
+    if (labeled) {
+        stats.append(
+            evalStat(`${hitk}/${labeled}`, 'Поиск, hit@k'),
+            evalStat(`${hit1}/${labeled}`, 'Поиск, hit@1'),
+            evalStat(`${substantive}/${evaluated}`, 'Содержательный ответ', 'ok'),
+            evalStat(abstain, 'Отказ при документе', abstain ? 'bad' : ''),
+        );
+    } else {
+        stats.append(
+            evalStat(`${substantive}/${evaluated}`, 'Содержательный ответ', 'ok'),
+            evalStat(unclear, 'Неясно', unclear ? 'warn' : ''),
+            evalStat(unlabeled, 'Без эталона, поиск не оценён'),
+        );
+    }
+    detail.append(stats);
+
+    const answerBar = evalBar(
+        'Ответы',
+        `${substantive} содержательных из ${evaluated}`,
+        [
+            {value: substantive, tone: 'ok', title: 'содержательный'},
+            {value: answer.correct_abstain || 0, tone: 'ok', title: 'отказался правильно'},
+            {value: answer.refusal || 0, tone: 'warn', title: 'отказ'},
+            {value: abstain, tone: 'bad', title: 'отказ при документе'},
+            {value: unclear, tone: 'warn', title: 'неясно'},
+            {value: answer.facts_mismatch || 0, tone: 'bad', title: 'факты не сошлись'},
+            {value: answer.false_answer || 0, tone: 'bad', title: 'ответил, хотя ответа нет'},
+            {value: answer.infra_error || 0, tone: 'bad', title: 'ошибка'},
+        ],
+        evaluated,
+    );
+    if (answerBar) detail.append(answerBar);
+    if (labeled) {
+        const searchBar = evalBar(
+            'Поиск',
+            `hit@1 ${hit1} · hit@k ${hitk} · мимо ${misses} · без эталона ${unlabeled}`,
+            [
+                {value: hit1, tone: 'ok', title: 'hit@1'},
+                {value: Math.max(0, hitk - hit1), tone: 'info', title: 'hit@k, не первое место'},
+                {value: misses, tone: 'bad', title: 'не найден'},
+                {value: unlabeled, tone: 'muted', title: 'без эталона'},
+            ],
+            evaluated || labeled + unlabeled,
+        );
+        if (searchBar) detail.append(searchBar);
+    } else if (unlabeled) {
+        detail.append(evalEl('p', 'eval-detail__note', 'Hit@1 и hit@k скрыты: ни у одного вопроса нет ожидаемого документа, поэтому «нашёл / не нашёл» посчитать нельзя.'));
+    }
+
+    const pin = evalEl('div', 'eval-detail__pin');
+    const filtersHost = evalEl('div', 'eval-filters');
+    const itemsHost = evalEl('div', 'eval-detail__items');
+    const filters = [{id: 'all', label: `Все ${items.length}`}];
+    if (attentionCount) filters.push({id: 'attention', label: `Проблемы ${attentionCount}`});
+    if (missCount) filters.push({id: 'miss', label: `Поиск мимо ${missCount}`});
+    if (abstain) filters.push({id: 'abstain', label: `Отказ при документе ${items.filter((item) => item.answer_verdict === 'abstained_despite_hit').length}`});
+
+    function paint(filter) {
+        filtersHost.replaceChildren();
+        filters.forEach((entry) => {
+            const button = evalEl('button', `eval-filter${entry.id === filter ? ' is-on' : ''}`, entry.label);
+            button.type = 'button';
+            button.setAttribute('aria-pressed', entry.id === filter ? 'true' : 'false');
+            button.addEventListener('click', () => paint(entry.id));
+            filtersHost.append(button);
+        });
+        renderEvalItems(itemsHost, items, filter);
+    }
+
+    pin.append(filtersHost);
+    detail.append(pin, itemsHost);
+    paint('all');
+    root.append(detail);
+    root.scrollIntoView({block: 'nearest'});
+}
+
+async function startEvalRun() {
+    const status = document.getElementById('evalRunStatus');
+    status.dataset.hold = '';
+    try {
+        await apiJson('/api/admin/evals/runs', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}'});
+        status.textContent = 'Прогон запущен';
+        delete status.dataset.hold;
+        await loadEvals();
+    } catch (error) {
+        status.textContent = error.message || 'Не удалось запустить';
+        delete status.dataset.hold;
+    }
+}
+
+if (evalStartBtn) evalStartBtn.addEventListener('click', startEvalRun);
+if (evalImportBtn && evalImportFile) {
+    evalImportBtn.addEventListener('click', () => evalImportFile.click());
+    evalImportFile.addEventListener('change', async () => {
+        const file = evalImportFile.files && evalImportFile.files[0];
+        evalImportFile.value = '';
+        if (!file) return;
+        const jsonl = await file.text();
+        const status = document.getElementById('evalRunStatus');
+        try {
+            const result = await apiJson('/api/admin/evals/cases/import', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({jsonl}),
+            });
+            status.textContent = `Импорт: новых ${result.created}, обновлено ${result.updated}`;
+            await loadEvals();
+        } catch (error) {
+            status.textContent = error.message || 'Импорт не удался';
+        }
+    });
+}
+if (evalCaseForm) {
+    evalCaseForm.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const payload = {
+            question: document.getElementById('evalQuestion').value,
+            label: document.getElementById('evalLabel').value,
+            expected_sources: evalSplitList(document.getElementById('evalExpected').value),
+            evidence_contains: document.getElementById('evalEvidence').value,
+            must_contain_any: evalSplitList(document.getElementById('evalMustAny').value),
+            must_not_contain: evalSplitList(document.getElementById('evalMustNot').value),
+            notes: document.getElementById('evalNotes').value,
+            active: document.getElementById('evalActive').checked,
+        };
+        const status = document.getElementById('evalRunStatus');
+        const message = document.getElementById('evalCaseMessage');
+        if (message) message.textContent = 'Сохранение...';
+        try {
+            if (evalEditingId) {
+                await apiJson(`/api/admin/evals/cases/${evalEditingId}`, {
+                    method: 'PATCH',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(payload),
+                });
+            } else {
+                await apiJson('/api/admin/evals/cases', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(payload),
+                });
+            }
+            closeEvalCaseModal();
+            if (status) status.textContent = 'Вопрос сохранён';
+            await loadEvals();
+        } catch (error) {
+            if (message) message.textContent = error.message || 'Не удалось сохранить';
+        }
+    });
+}
+if (evalAddBtn) evalAddBtn.addEventListener('click', () => openEvalCaseModal(null));
+if (evalCancelEditBtn) evalCancelEditBtn.addEventListener('click', closeEvalCaseModal);
+const evalCaseCloseBtn = document.getElementById('evalCaseCloseBtn');
+const evalCaseBackdrop = document.getElementById('evalCaseBackdrop');
+if (evalCaseCloseBtn) evalCaseCloseBtn.addEventListener('click', closeEvalCaseModal);
+if (evalCaseBackdrop) evalCaseBackdrop.addEventListener('click', closeEvalCaseModal);
+document.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape') return;
+    const modal = document.getElementById('evalCaseModal');
+    if (modal && !modal.hidden) closeEvalCaseModal();
+});
+if (evalCompareBtn) {
+    evalCompareBtn.addEventListener('click', async () => {
+        if (evalSelected.length !== 2) return;
+        const [a, b] = [...evalSelected].sort((left, right) => left - right);
+        const report = await apiJson(`/api/admin/evals/compare?before=${a}&after=${b}`);
+        const root = document.getElementById('evalCompare');
+        const detail = document.getElementById('evalRunDetail');
+        if (detail) detail.hidden = true;
+        root.hidden = false;
+        root.replaceChildren();
+        root.append(evalEl('h3', '', 'Сравнение'));
+        const line = evalEl('p', '');
+        line.textContent = `Содержательный ответ ${report.substantive.before} → ${report.substantive.after}`;
+        root.append(line);
+        const before = report.before || {};
+        const after = report.after || {};
+        root.append(evalEl('p', '', `Было: ${before.model || ''} · чанк ${before.chunk_size ?? '—'} · ${before.started_at || ''}`));
+        root.append(evalEl('p', '', `Стало: ${after.model || ''} · чанк ${after.chunk_size ?? '—'} · ${after.started_at || ''}`));
+        const warnings = {
+            dataset_changed: 'Между прогонами менялась корзина вопросов.',
+            index_unchanged: 'Размер чанка или эмбеддинги изменились, а отпечаток индекса совпал. Корпус, похоже, не пересобирали.',
+            delta_within_one: 'Сдвиг не больше одного вопроса.',
+        };
+        (report.warnings || []).forEach((code) => {
+            if (warnings[code]) root.append(evalEl('p', 'eval-warn', warnings[code]));
+        });
+        if (!(report.changed || []).length) {
+            root.append(evalEl('p', '', 'Вердикты вопросов не изменились.'));
+            return;
+        }
+        (report.changed || []).forEach((item) => {
+            const row = evalEl('article', 'eval-change');
+            row.append(evalEl('strong', '', item.question));
+            row.append(evalEl('p', '', `Поиск: ${item.search_before} → ${item.search_after}`));
+            row.append(evalEl('p', '', `Ответ: ${item.answer_before} → ${item.answer_after}`));
+            root.append(row);
+        });
+    });
 }

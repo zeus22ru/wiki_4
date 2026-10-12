@@ -53,6 +53,8 @@ from api.routes.auth import auth_bp
 from api.routes.chat_attachments import chat_attachments_bp
 from api.routes.issues import issues_bp
 from api.routes.telegram import telegram_bp
+from api.routes.solutions import solutions_bp
+from api.routes.evals import evals_bp
 from api.middleware.auth import can_access_chat, current_user_id, remember_guest_chat
 from api.middleware.internal_auth import is_trusted_internal_request
 
@@ -454,6 +456,8 @@ app.register_blueprint(auth_bp)
 app.register_blueprint(chat_attachments_bp)
 app.register_blueprint(issues_bp)
 app.register_blueprint(telegram_bp)
+app.register_blueprint(solutions_bp)
+app.register_blueprint(evals_bp)
 
 # K2: хук сброса RAG после переиндексации (поток A регистрирует set_reindex_callback)
 # Глобальные переменные объявлены ниже; reset_rag_state регистрируется после определения.
@@ -537,6 +541,9 @@ def telegram_mini_app():
     return render_template(
         'telegram_app.html',
         telegram_bot_username=settings.TELEGRAM_BOT_USERNAME,
+        attachments_enabled=attachments_enabled(),
+        attachment_max_count=settings.CHAT_ATTACHMENT_MAX_COUNT,
+        attachment_max_bytes=settings.CHAT_ATTACHMENT_MAX_BYTES,
     )
 
 

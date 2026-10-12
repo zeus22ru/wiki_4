@@ -1,0 +1,13 @@
+.solution-confirm-btn { display:inline-flex; margin-top:12px; padding:6px 9px; border:1px solid var(--border-color); border-radius:var(--radius); background:transparent; color:var(--secondary-text); font:inherit; font-size:var(--text-xs); cursor:pointer; }
+.solution-confirm-btn:hover, .solution-confirm-btn:focus-visible { border-color:var(--primary-color); color:var(--text-color); outline:2px solid transparent; }
+.solution-confirm-btn.is-confirmed { color:var(--text-color); background:var(--surface-muted); }
+.solution-modal-open { overflow:hidden; }
+.solution-modal__dialog { width:min(720px, calc(100vw - 32px)); max-height:calc(100vh - 32px); overflow:auto; }
+.solution-form { display:grid; gap:12px; }
+.solution-form__status { margin:0; color:var(--secondary-text); }
+.solution-form__message { min-height:1.25em; margin:0; color:var(--secondary-text); }
+.solution-form__choices { display:grid; gap:8px; }
+.solution-form__choices label { display:flex; gap:8px; align-items:center; }
+.solution-form__textarea { min-height:92px; resize:vertical; }
+.solution-form__actions { display:flex; justify-content:flex-end; gap:8px; flex-wrap:wrap; }
+@media (max-width: 620px) { .solution-modal__dialog { width:calc(100vw - 20px); max-height:calc(100vh - 20px); } .solution-form__actions > * { flex:1 1 auto; } }

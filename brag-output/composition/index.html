@@ -1,0 +1,683 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, height=1080" />
+    <title>БочкарИИ — brag</title>
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+    <style>
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      html, body {
+        margin: 0;
+        width: 1920px;
+        height: 1080px;
+        overflow: hidden;
+        background: #0a0a0a;
+      }
+      #root {
+        position: relative;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+        color: #fff;
+        background: #0a0a0a;
+      }
+      .clip {
+        position: absolute;
+        inset: 0;
+        overflow: hidden;
+      }
+      .scene-inner {
+        position: absolute;
+        inset: 0;
+        width: 1920px;
+        height: 1080px;
+      }
+
+      /* —— Chaos —— */
+      .chaos-bg {
+        position: absolute;
+        inset: 0;
+        background:
+          radial-gradient(ellipse at 20% 30%, rgba(168,134,86,0.35), transparent 50%),
+          radial-gradient(ellipse at 80% 70%, rgba(33,37,41,0.9), #0a0a0a 70%);
+      }
+      .doc-card {
+        position: absolute;
+        width: 420px;
+        padding: 28px 32px;
+        border-radius: 4px;
+        background: #F4F5F6;
+        color: #212529;
+        box-shadow: 0 18px 48px rgba(0,0,0,0.45);
+        border: 1px solid #DDE1E5;
+        opacity: 0;
+      }
+      .doc-card .ext {
+        display: inline-block;
+        font-size: 18px;
+        font-weight: 800;
+        letter-spacing: 0.08em;
+        color: #6b4d26;
+        margin-bottom: 10px;
+      }
+      .doc-card .title {
+        font-size: 28px;
+        font-weight: 800;
+        line-height: 1.2;
+        margin-bottom: 12px;
+      }
+      .doc-card .meta {
+        font-size: 16px;
+        color: #68717B;
+        font-weight: 600;
+      }
+      .doc-a { left: 120px; top: 160px; }
+      .doc-b { left: 720px; top: 120px; background: #fff; }
+      .doc-c { left: 1180px; top: 280px; }
+      .doc-d { left: 360px; top: 520px; background: #1a1d21; color: #e8eaed; border-color: #343a42; }
+      .doc-d .ext { color: #D6BC8A; }
+      .doc-d .meta { color: #9aa3ad; }
+      .hook-line {
+        position: absolute;
+        left: 96px;
+        right: 96px;
+        bottom: 120px;
+        text-align: center;
+        font-size: 92px;
+        font-weight: 900;
+        letter-spacing: -0.03em;
+        line-height: 1.05;
+        text-transform: uppercase;
+        color: #fff;
+        text-shadow: 0 8px 40px rgba(0,0,0,0.65);
+        opacity: 0;
+      }
+
+      /* —— Shared UI stage —— */
+      .ui-stage {
+        position: absolute;
+        inset: 0;
+        background: #1a1d21;
+      }
+      .ui-shot {
+        position: absolute;
+        width: 1680px;
+        height: 945px;
+        left: 120px;
+        top: 68px;
+        border-radius: 4px;
+        overflow: hidden;
+        box-shadow: 0 24px 80px rgba(0,0,0,0.55);
+        border: 1px solid #343a42;
+        background: #F4F5F6;
+      }
+      .ui-shot img {
+        display: block;
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        object-position: left top;
+      }
+      .caption {
+        position: absolute;
+        left: 96px;
+        right: 96px;
+        bottom: 56px;
+        text-align: center;
+        font-size: 56px;
+        font-weight: 900;
+        letter-spacing: -0.02em;
+        text-transform: uppercase;
+        color: #fff;
+        text-shadow: 0 6px 28px rgba(0,0,0,0.75);
+        opacity: 0;
+      }
+      .caption.gold { color: #D6BC8A; }
+      .brand-stamp {
+        position: absolute;
+        top: 48px;
+        left: 120px;
+        z-index: 5;
+        font-size: 42px;
+        font-weight: 900;
+        letter-spacing: 0.04em;
+        color: #D6BC8A;
+        opacity: 0;
+        text-shadow: 0 2px 12px rgba(0,0,0,0.65);
+      }
+      .brand-stamp span { color: #fff; }
+
+      /* —— Q&A mock —— */
+      .qa-panel {
+        position: absolute;
+        left: 160px;
+        top: 140px;
+        width: 1600px;
+        height: 720px;
+        background: #F4F5F6;
+        border-radius: 4px;
+        border: 1px solid #DDE1E5;
+        overflow: hidden;
+        box-shadow: 0 24px 80px rgba(0,0,0,0.5);
+      }
+      .qa-topbar {
+        height: 64px;
+        background: #fff;
+        border-bottom: 1px solid #DDE1E5;
+        display: flex;
+        align-items: center;
+        padding: 0 28px;
+        font-weight: 800;
+        color: #6b4d26;
+        font-size: 22px;
+        letter-spacing: 0.06em;
+      }
+      .qa-topbar span { color: #212529; }
+      .qa-body { padding: 36px 40px; }
+      .qa-input-wrap {
+        display: flex;
+        gap: 16px;
+        align-items: center;
+        background: #fff;
+        border: 1px solid #b9c2cb;
+        border-radius: 4px;
+        padding: 18px 20px;
+        margin-bottom: 28px;
+      }
+      .qa-input {
+        flex: 1;
+        font-size: 34px;
+        font-weight: 700;
+        color: #212529;
+        min-height: 44px;
+        opacity: 0;
+      }
+      .qa-send {
+        background: #A88656;
+        color: #fff;
+        font-weight: 800;
+        font-size: 18px;
+        padding: 14px 22px;
+        border-radius: 4px;
+        opacity: 0;
+      }
+      .qa-answer {
+        background: #fff;
+        border: 1px solid #DDE1E5;
+        border-radius: 4px;
+        padding: 28px 32px;
+        color: #212529;
+        opacity: 0;
+      }
+      .qa-answer h3 {
+        font-size: 28px;
+        font-weight: 800;
+        margin-bottom: 14px;
+        color: #212529;
+      }
+      .qa-answer p {
+        font-size: 24px;
+        line-height: 1.45;
+        color: #212529;
+        font-weight: 500;
+      }
+      .qa-answer .hl {
+        background: rgba(168,134,86,0.22);
+        border-left: 4px solid #A88656;
+        padding: 10px 14px;
+        margin-top: 16px;
+        font-weight: 700;
+      }
+
+      /* —— Sources —— */
+      .src-grid {
+        position: absolute;
+        left: 160px;
+        top: 180px;
+        width: 1600px;
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 24px;
+      }
+      .src-card {
+        background: #fff;
+        border: 1px solid #DDE1E5;
+        border-radius: 4px;
+        padding: 28px 30px;
+        color: #212529;
+        opacity: 0;
+        box-shadow: 0 12px 36px rgba(0,0,0,0.28);
+      }
+      .src-card.active {
+        border-color: #e4c99e;
+        background: #fcfaf7;
+      }
+      .src-card .badge {
+        display: inline-block;
+        background: rgba(168,134,86,0.14);
+        color: #5a4322;
+        font-size: 16px;
+        font-weight: 800;
+        padding: 6px 10px;
+        border-radius: 4px;
+        margin-bottom: 12px;
+      }
+      .src-card h4 {
+        font-size: 26px;
+        font-weight: 800;
+        margin-bottom: 10px;
+      }
+      .src-card p {
+        font-size: 20px;
+        color: #68717B;
+        font-weight: 600;
+        line-height: 1.4;
+      }
+      .link-line {
+        position: absolute;
+        left: 50%;
+        top: 120px;
+        width: 4px;
+        height: 0;
+        background: #A88656;
+        transform: translateX(-50%);
+        opacity: 0;
+      }
+
+      /* —— Knowledge —— */
+      .kb-row {
+        position: absolute;
+        left: 200px;
+        width: 1520px;
+        height: 120px;
+        background: #fff;
+        border: 1px solid #DDE1E5;
+        border-radius: 4px;
+        display: flex;
+        align-items: center;
+        gap: 28px;
+        padding: 0 36px;
+        color: #212529;
+        opacity: 0;
+        box-shadow: 0 10px 28px rgba(0,0,0,0.25);
+      }
+      .kb-row .chip {
+        background: #A88656;
+        color: #2a2114;
+        font-weight: 800;
+        font-size: 18px;
+        padding: 10px 16px;
+        border-radius: 4px;
+      }
+      .kb-row .name {
+        font-size: 28px;
+        font-weight: 800;
+      }
+      .kb-row .sub {
+        margin-left: auto;
+        font-size: 20px;
+        color: #68717B;
+        font-weight: 700;
+      }
+
+      /* —— Integrations —— */
+      .integ {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 64px;
+        background: #0a0a0a;
+      }
+      .integ-card {
+        width: 620px;
+        height: 320px;
+        border-radius: 4px;
+        border: 2px solid #A88656;
+        background: linear-gradient(160deg, #24282d, #1a1d21);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 18px;
+        opacity: 0;
+        box-shadow: 0 20px 60px rgba(168,134,86,0.2);
+      }
+      .integ-card .label {
+        font-size: 64px;
+        font-weight: 900;
+        letter-spacing: 0.04em;
+        color: #fff;
+      }
+      .integ-card .sub {
+        font-size: 24px;
+        font-weight: 700;
+        color: #D6BC8A;
+        text-transform: uppercase;
+      }
+
+      /* —— Outro —— */
+      .outro {
+        position: absolute;
+        inset: 0;
+        background:
+          radial-gradient(ellipse at 50% 40%, rgba(168,134,86,0.28), transparent 55%),
+          #0a0a0a;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        text-align: center;
+      }
+      .outro-brand {
+        font-size: 140px;
+        font-weight: 900;
+        letter-spacing: -0.02em;
+        color: #D6BC8A;
+        opacity: 0;
+        line-height: 1;
+      }
+      .outro-tag {
+        margin-top: 28px;
+        font-size: 42px;
+        font-weight: 800;
+        color: #fff;
+        letter-spacing: -0.01em;
+        opacity: 0;
+      }
+      .outro-link {
+        margin-top: 36px;
+        font-size: 28px;
+        font-weight: 700;
+        color: #9aa3ad;
+        opacity: 0;
+      }
+
+      /* Flash / glitch overlays */
+      .flash {
+        position: absolute;
+        inset: 0;
+        background: #fff;
+        opacity: 0;
+        pointer-events: none;
+      }
+      .glitch-bar {
+        position: absolute;
+        left: -40px;
+        width: 2000px;
+        height: 28px;
+        background: rgba(214,188,138,0.55);
+        opacity: 0;
+        pointer-events: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div
+      id="root"
+      data-composition-id="main"
+      data-start="0"
+      data-duration="22"
+      data-width="1920"
+      data-height="1080"
+    >
+      <!-- SCENE 1: Chaos 0–3 -->
+      <section id="s1" class="clip" data-start="0" data-duration="3.05" data-track-index="1">
+        <div class="scene-inner" id="s1-inner">
+          <div class="chaos-bg"></div>
+          <div class="doc-card doc-a" id="docA">
+            <div class="ext">PDF</div>
+            <div class="title">Инструкция по ТСД</div>
+            <div class="meta">склад · версия 3.2</div>
+          </div>
+          <div class="doc-card doc-b" id="docB">
+            <div class="ext">DOCX</div>
+            <div class="title">Регламент печати этикеток</div>
+            <div class="meta">wiki_pars / faq</div>
+          </div>
+          <div class="doc-card doc-c" id="docC">
+            <div class="ext">XLSX</div>
+            <div class="title">Таблица доступов 1С</div>
+            <div class="meta">NSI · отчёт</div>
+          </div>
+          <div class="doc-card doc-d" id="docD">
+            <div class="ext">WIKI</div>
+            <div class="title">Как добавить пользователя</div>
+            <div class="meta">внутренняя база</div>
+          </div>
+          <div class="hook-line" id="hookLine">Где эта инструкция?</div>
+          <div class="flash" id="flash1"></div>
+          <div class="glitch-bar" id="glitch1" style="top: 340px;"></div>
+        </div>
+      </section>
+
+      <!-- SCENE 2: Reveal 3–6 -->
+      <section id="s2" class="clip" data-start="3" data-duration="3.08" data-track-index="2">
+        <div class="scene-inner" id="s2-inner">
+          <div class="ui-stage"></div>
+          <div class="brand-stamp" id="brandStamp">БОЧКАР<span>ИИ</span></div>
+          <div class="ui-shot" id="uiReveal">
+            <img src="assets/ui/02-new-chat.png" alt="" />
+          </div>
+          <div class="caption gold" id="capAsk">Спроси у базы знаний</div>
+          <div class="flash" id="flash2"></div>
+        </div>
+      </section>
+
+      <!-- SCENE 3: Q→A 6–10 -->
+      <section id="s3" class="clip" data-start="6" data-duration="4.08" data-track-index="3">
+        <div class="scene-inner" id="s3-inner">
+          <div class="ui-stage"></div>
+          <div class="qa-panel" id="qaPanel">
+            <div class="qa-topbar">БОЧКАР<span>ИИ</span> · чат</div>
+            <div class="qa-body">
+              <div class="qa-input-wrap" id="qaInputWrap">
+                <div class="qa-input" id="qaInput">Как настроить принтер на ТСД?</div>
+                <div class="qa-send" id="qaSend">Отправить</div>
+              </div>
+              <div class="qa-answer" id="qaAnswer">
+                <h3>Настройка принтера на ТСД</h3>
+                <p>Откройте настройки терминала, выберите профиль печати и укажите драйвер этикеток из внутренней инструкции.</p>
+                <div class="hl" id="qaHl">Шаг 3. Проверьте тестовую печать этикетки на ТСД.</div>
+              </div>
+            </div>
+          </div>
+          <div class="caption" id="capQa">Вопрос → инструкция</div>
+          <div class="flash" id="flash3"></div>
+        </div>
+      </section>
+
+      <!-- SCENE 4: Sources 10–14 -->
+      <section id="s4" class="clip" data-start="10" data-duration="4.08" data-track-index="4">
+        <div class="scene-inner" id="s4-inner">
+          <div class="ui-stage"></div>
+          <div class="ui-shot" id="uiSources" style="height: 620px; top: 90px;">
+            <img src="assets/ui/03-answer-sources.png" alt="" />
+          </div>
+          <div class="src-grid" id="srcGrid" style="top: 740px; grid-template-columns: 1fr 1fr 1fr; gap: 16px; left: 120px; width: 1680px;">
+            <div class="src-card active" id="src1">
+              <div class="badge">Релевантность</div>
+              <h4>Цитата из документа</h4>
+              <p>Фрагмент инструкции привязан к ответу.</p>
+            </div>
+            <div class="src-card" id="src2">
+              <div class="badge">Источник</div>
+              <h4>wiki · FAQ</h4>
+              <p>Карточка документа из базы знаний.</p>
+            </div>
+            <div class="src-card" id="src3">
+              <div class="badge">Проверка</div>
+              <h4>Открыть</h4>
+              <p>Сверьте ответ с оригиналом.</p>
+            </div>
+          </div>
+          <div class="caption gold" id="capSrc">С источниками</div>
+          <div class="flash" id="flash4"></div>
+        </div>
+      </section>
+
+      <!-- SCENE 5: Knowledge 14–17 -->
+      <section id="s5" class="clip" data-start="14" data-duration="3.08" data-track-index="5">
+        <div class="scene-inner" id="s5-inner">
+          <div class="ui-stage"></div>
+          <div class="ui-shot" id="uiDocs" style="opacity: 0.35; filter: saturate(0.85);">
+            <img src="assets/ui/05-documents-admin.png" alt="" />
+          </div>
+          <div class="kb-row" id="kb1" style="top: 220px;"><span class="chip">Загрузить</span><span class="name">reglament-tsd.docx</span><span class="sub">в индекс</span></div>
+          <div class="kb-row" id="kb2" style="top: 380px;"><span class="chip">PDF</span><span class="name">printer-setup.pdf</span><span class="sub">готово</span></div>
+          <div class="kb-row" id="kb3" style="top: 540px;"><span class="chip">Wiki</span><span class="name">Переиндексация</span><span class="sub">база знаний</span></div>
+          <div class="caption" id="capKb">Документы → знания</div>
+          <div class="flash" id="flash5"></div>
+        </div>
+      </section>
+
+      <!-- SCENE 6: Integrations 17–19 -->
+      <section id="s6" class="clip" data-start="17" data-duration="2.08" data-track-index="6">
+        <div class="scene-inner" id="s6-inner">
+          <div class="integ">
+            <div class="integ-card" id="tgCard">
+              <div class="label">TELEGRAM</div>
+              <div class="sub">Интеграция</div>
+            </div>
+            <div class="integ-card" id="bxCard">
+              <div class="label">БИТРИКС24</div>
+              <div class="sub">Интеграция</div>
+            </div>
+          </div>
+          <div class="flash" id="flash6"></div>
+          <div class="glitch-bar" id="glitch6" style="top: 520px;"></div>
+        </div>
+      </section>
+
+      <!-- SCENE 7: Outro 19–22 -->
+      <section id="s7" class="clip" data-start="19" data-duration="3" data-track-index="7">
+        <div class="scene-inner" id="s7-inner">
+          <div class="outro">
+            <div class="outro-brand" id="outroBrand">БОЧКАРИИ</div>
+            <div class="outro-tag" id="outroTag">Твои документы. Ответы по делу.</div>
+            <div class="outro-link" id="outroLink">github.com/zeus22ru/wiki_4</div>
+          </div>
+          <div class="flash" id="flash7"></div>
+        </div>
+      </section>
+
+      <!-- Music -->
+      <audio
+        id="bgm"
+        data-start="0"
+        data-duration="22"
+        data-track-index="20"
+        data-volume="0.52"
+        src="assets/music/happy-beats-business-moves-vol-1-by-ende-dot-app.mp3"
+      ></audio>
+
+      <!-- SFX -->
+      <audio id="sfxImpact1" data-start="0.05" data-duration="0.4" data-track-index="21" data-volume="0.7" src="assets/sfx/impact/impactSoft_medium_001.ogg"></audio>
+      <audio id="sfxGlitch1" data-start="0.45" data-duration="0.2" data-track-index="21" data-volume="0.45" src="assets/sfx/interface/glitch_002.ogg"></audio>
+      <audio id="sfxImpact2" data-start="0.9" data-duration="0.35" data-track-index="21" data-volume="0.65" src="assets/sfx/impact/impactSoft_medium_004.ogg"></audio>
+      <audio id="sfxGlitch2" data-start="1.4" data-duration="0.2" data-track-index="21" data-volume="0.4" src="assets/sfx/interface/glitch_004.ogg"></audio>
+      <audio id="sfxImpact3" data-start="1.95" data-duration="0.35" data-track-index="21" data-volume="0.7" src="assets/sfx/impact/impactSoft_medium_001.ogg"></audio>
+      <audio id="sfxWhoosh1" data-start="2.95" data-duration="0.5" data-track-index="22" data-volume="0.55" src="assets/sfx/casino/card-slide-1.ogg"></audio>
+      <audio id="sfxImpactReveal" data-start="3.1" data-duration="0.55" data-track-index="23" data-volume="0.75" src="assets/sfx/impact/impactSoft_heavy_000.ogg"></audio>
+      <audio id="sfxClickSend" data-start="7.35" data-duration="0.2" data-track-index="21" data-volume="0.7" src="assets/sfx/interface/click_003.ogg"></audio>
+      <audio id="sfxWhoosh2" data-start="7.55" data-duration="0.45" data-track-index="21" data-volume="0.5" src="assets/sfx/casino/card-slide-3.ogg"></audio>
+      <audio id="sfxCard1" data-start="10.15" data-duration="0.35" data-track-index="21" data-volume="0.55" src="assets/sfx/casino/card-place-1.ogg"></audio>
+      <audio id="sfxCard2" data-start="10.7" data-duration="0.35" data-track-index="21" data-volume="0.5" src="assets/sfx/casino/card-slide-1.ogg"></audio>
+      <audio id="sfxCard3" data-start="11.25" data-duration="0.35" data-track-index="21" data-volume="0.5" src="assets/sfx/casino/card-place-1.ogg"></audio>
+      <audio id="sfxKb1" data-start="14.15" data-duration="0.35" data-track-index="21" data-volume="0.55" src="assets/sfx/interface/click_002.ogg"></audio>
+      <audio id="sfxKb2" data-start="14.55" data-duration="0.35" data-track-index="21" data-volume="0.5" src="assets/sfx/ui/click2.ogg"></audio>
+      <audio id="sfxKb3" data-start="14.95" data-duration="0.4" data-track-index="21" data-volume="0.55" src="assets/sfx/casino/cards-pack-open-1.ogg"></audio>
+      <audio id="sfxTg" data-start="17.05" data-duration="0.4" data-track-index="21" data-volume="0.7" src="assets/sfx/impact/impactSoft_medium_004.ogg"></audio>
+      <audio id="sfxGlitch3" data-start="17.9" data-duration="0.2" data-track-index="22" data-volume="0.4" src="assets/sfx/interface/glitch_002.ogg"></audio>
+      <audio id="sfxBx" data-start="18.05" data-duration="0.4" data-track-index="21" data-volume="0.7" src="assets/sfx/impact/impactSoft_medium_001.ogg"></audio>
+      <audio id="sfxFinal" data-start="19.05" data-duration="0.7" data-track-index="23" data-volume="0.85" src="assets/sfx/impact/impactBell_heavy_000.ogg"></audio>
+      <audio id="sfxFinalHit" data-start="19.2" data-duration="0.55" data-track-index="24" data-volume="0.55" src="assets/sfx/impact/impactSoft_heavy_000.ogg"></audio>
+    </div>
+
+    <script>
+      const tl = gsap.timeline({ paused: true });
+
+      // —— Scene 1: chaos ——
+      tl.fromTo("#docA", { opacity: 0, x: -120, scale: 1.18, rotation: -6 }, { opacity: 1, x: 0, scale: 1, rotation: -2, duration: 0.14, ease: "power4.out" }, 0.05);
+      tl.fromTo("#flash1", { opacity: 0 }, { opacity: 0.85, duration: 0.05, yoyo: true, repeat: 1, ease: "none" }, 0.05);
+      tl.fromTo("#docB", { opacity: 0, x: 140, scale: 1.22, rotation: 5 }, { opacity: 1, x: 0, scale: 1, rotation: 2, duration: 0.14, ease: "power4.out" }, 0.45);
+      tl.fromTo("#glitch1", { opacity: 0, x: -80 }, { opacity: 0.9, x: 40, duration: 0.08, ease: "none" }, 0.45);
+      tl.to("#glitch1", { opacity: 0, duration: 0.06 }, 0.55);
+      tl.fromTo("#docC", { opacity: 0, y: -100, scale: 1.2 }, { opacity: 1, y: 0, scale: 1, duration: 0.12, ease: "power4.out" }, 0.9);
+      tl.fromTo("#flash1", { opacity: 0 }, { opacity: 0.7, duration: 0.04, yoyo: true, repeat: 1, ease: "none", immediateRender: false }, 0.9);
+      tl.fromTo("#docD", { opacity: 0, y: 120, scale: 1.25 }, { opacity: 1, y: 0, scale: 1, duration: 0.12, ease: "power4.out" }, 1.35);
+      tl.fromTo("#hookLine", { opacity: 0, scale: 1.35, y: 40 }, { opacity: 1, scale: 1, y: 0, duration: 0.18, ease: "power4.out" }, 1.7);
+      tl.fromTo("#flash1", { opacity: 0 }, { opacity: 1, duration: 0.05, yoyo: true, repeat: 1, ease: "none", immediateRender: false }, 1.7);
+      tl.to("#s1-inner", { scale: 1.08, duration: 0.9, ease: "power1.in" }, 2.1);
+      tl.to(["#docA", "#docB", "#docC", "#docD"], { x: 0, y: 0, scale: 0.2, opacity: 0.15, duration: 0.22, ease: "power3.in" }, 2.78);
+      tl.to("#hookLine", { opacity: 0, scale: 0.85, duration: 0.15 }, 2.85);
+
+      // —— Scene 2: reveal ——
+      tl.fromTo("#s2-inner", { scale: 1.28, x: 80 }, { scale: 1, x: 0, duration: 0.22, ease: "power4.out" }, 3.0);
+      tl.fromTo("#flash2", { opacity: 0 }, { opacity: 0.9, duration: 0.05, yoyo: true, repeat: 1, ease: "none" }, 3.0);
+      tl.fromTo("#uiReveal", { opacity: 0, scale: 1.2 }, { opacity: 1, scale: 1, duration: 0.28, ease: "power3.out" }, 3.05);
+      tl.fromTo("#brandStamp", { opacity: 0, y: -30, scale: 1.2 }, { opacity: 1, y: 0, scale: 1, duration: 0.2, ease: "power4.out" }, 3.35);
+      tl.fromTo("#capAsk", { opacity: 0, y: 36, scale: 1.15 }, { opacity: 1, y: 0, scale: 1, duration: 0.18, ease: "power4.out" }, 3.9);
+      tl.to("#uiReveal", { scale: 1.06, duration: 1.6, ease: "none" }, 3.4);
+      tl.to("#s2-inner", { x: -90, scale: 1.12, duration: 0.16, ease: "power3.in" }, 5.85);
+
+      // —— Scene 3: Q→A ——
+      tl.fromTo("#s3-inner", { x: 110, scale: 1.12 }, { x: 0, scale: 1, duration: 0.16, ease: "power4.out" }, 6.0);
+      tl.fromTo("#flash3", { opacity: 0 }, { opacity: 0.75, duration: 0.04, yoyo: true, repeat: 1, ease: "none" }, 6.0);
+      tl.fromTo("#qaPanel", { opacity: 0, scale: 1.18 }, { opacity: 1, scale: 1, duration: 0.22, ease: "power3.out" }, 6.05);
+      tl.fromTo("#qaInput", { opacity: 0, x: -24 }, { opacity: 1, x: 0, duration: 0.16, ease: "power4.out" }, 6.4);
+      tl.fromTo("#qaSend", { opacity: 0, scale: 0.8 }, { opacity: 1, scale: 1, duration: 0.12, ease: "power3.out", overwrite: "auto" }, 7.3);
+      tl.to("#qaSend", { scale: 0.92, duration: 0.06, yoyo: true, repeat: 1, overwrite: "auto" }, 7.42);
+      tl.fromTo("#qaAnswer", { opacity: 0, y: 40, scale: 1.08 }, { opacity: 1, y: 0, scale: 1, duration: 0.22, ease: "power3.out" }, 7.55);
+      tl.fromTo("#qaHl", { backgroundColor: "rgba(168,134,86,0.08)" }, { backgroundColor: "rgba(168,134,86,0.38)", duration: 0.25, ease: "power2.out" }, 8.2);
+      tl.to("#qaPanel", { scale: 1.12, y: -40, duration: 0.35, ease: "power2.inOut" }, 8.55);
+      tl.fromTo("#capQa", { opacity: 0, y: 30 }, { opacity: 1, y: 0, duration: 0.16, ease: "power4.out" }, 8.7);
+      tl.to("#s3-inner", { scale: 1.1, x: -60, duration: 0.14, ease: "power3.in" }, 9.86);
+
+      // —— Scene 4: sources ——
+      tl.fromTo("#s4-inner", { scale: 1.22, x: 70 }, { scale: 1, x: 0, duration: 0.16, ease: "power4.out" }, 10.0);
+      tl.fromTo("#flash4", { opacity: 0 }, { opacity: 0.8, duration: 0.05, yoyo: true, repeat: 1, ease: "none" }, 10.0);
+      tl.fromTo("#uiSources", { opacity: 0, scale: 1.15 }, { opacity: 1, scale: 1, duration: 0.22, ease: "power3.out" }, 10.05);
+      tl.fromTo("#src1", { opacity: 0, y: 50, scale: 1.1 }, { opacity: 1, y: 0, scale: 1, duration: 0.14, ease: "power4.out" }, 10.15);
+      tl.fromTo("#src2", { opacity: 0, y: 50, scale: 1.1 }, { opacity: 1, y: 0, scale: 1, duration: 0.14, ease: "power4.out" }, 10.7);
+      tl.fromTo("#src3", { opacity: 0, y: 50, scale: 1.1 }, { opacity: 1, y: 0, scale: 1, duration: 0.14, ease: "power4.out" }, 11.25);
+      tl.fromTo("#capSrc", { opacity: 0, scale: 1.2 }, { opacity: 1, scale: 1, duration: 0.16, ease: "power4.out" }, 11.7);
+      tl.to("#uiSources", { scale: 1.05, duration: 1.8, ease: "none" }, 10.4);
+      tl.to("#s4-inner", { y: -70, scale: 1.08, duration: 0.14, ease: "power3.in" }, 13.86);
+
+      // —— Scene 5: knowledge ——
+      tl.fromTo("#s5-inner", { y: 90, scale: 1.1 }, { y: 0, scale: 1, duration: 0.14, ease: "power4.out" }, 14.0);
+      tl.fromTo("#flash5", { opacity: 0 }, { opacity: 0.7, duration: 0.04, yoyo: true, repeat: 1, ease: "none" }, 14.0);
+      tl.fromTo("#kb1", { opacity: 0, x: -160, scale: 1.08 }, { opacity: 1, x: 0, scale: 1, duration: 0.14, ease: "power4.out" }, 14.12);
+      tl.fromTo("#kb2", { opacity: 0, x: 160, scale: 1.08 }, { opacity: 1, x: 0, scale: 1, duration: 0.14, ease: "power4.out" }, 14.52);
+      tl.fromTo("#kb3", { opacity: 0, y: 60, scale: 1.1 }, { opacity: 1, y: 0, scale: 1, duration: 0.14, ease: "power4.out" }, 14.92);
+      tl.fromTo("#capKb", { opacity: 0, y: 28 }, { opacity: 1, y: 0, duration: 0.16, ease: "power4.out" }, 15.25);
+      tl.to("#s5-inner", { scale: 1.15, duration: 0.12, ease: "power3.in" }, 16.88);
+
+      // —— Scene 6: integrations ——
+      tl.fromTo("#s6-inner", { scale: 1.25 }, { scale: 1, duration: 0.12, ease: "power4.out" }, 17.0);
+      tl.fromTo("#flash6", { opacity: 0 }, { opacity: 0.85, duration: 0.04, yoyo: true, repeat: 1, ease: "none" }, 17.0);
+      tl.fromTo("#tgCard", { opacity: 0, x: -100, scale: 1.2, rotation: -4 }, { opacity: 1, x: 0, scale: 1, rotation: 0, duration: 0.16, ease: "power4.out" }, 17.05);
+      tl.fromTo("#glitch6", { opacity: 0, x: -60 }, { opacity: 0.85, x: 30, duration: 0.08, ease: "none" }, 17.9);
+      tl.to("#glitch6", { opacity: 0, duration: 0.06 }, 18.0);
+      tl.fromTo("#bxCard", { opacity: 0, x: 100, scale: 1.2, rotation: 4 }, { opacity: 1, x: 0, scale: 1, rotation: 0, duration: 0.16, ease: "power4.out" }, 18.0);
+      tl.to("#s6-inner", { scale: 1.18, duration: 0.12, ease: "power3.in" }, 18.88);
+
+      // —— Scene 7: outro ——
+      tl.fromTo("#s7-inner", { scale: 1.3 }, { scale: 1, duration: 0.18, ease: "power4.out" }, 19.0);
+      tl.fromTo("#flash7", { opacity: 0 }, { opacity: 1, duration: 0.06, yoyo: true, repeat: 1, ease: "none" }, 19.0);
+      tl.fromTo("#outroBrand", { opacity: 0, scale: 1.4, y: 30 }, { opacity: 1, scale: 1, y: 0, duration: 0.22, ease: "power4.out" }, 19.08);
+      tl.fromTo("#outroTag", { opacity: 0, y: 24 }, { opacity: 1, y: 0, duration: 0.18, ease: "power3.out" }, 19.55);
+      tl.fromTo("#outroLink", { opacity: 0, y: 16 }, { opacity: 1, y: 0, duration: 0.16, ease: "power3.out" }, 20.1);
+      // subtle bass punch on logo (static keyframes — audio-reactive optional enhancement)
+      tl.to("#outroBrand", { scale: 1.04, duration: 0.12, yoyo: true, repeat: 1, ease: "power2.out" }, 20.55);
+      tl.to("#outroBrand", { scale: 1.03, duration: 0.12, yoyo: true, repeat: 1, ease: "power2.out" }, 21.15);
+
+      window.__timelines["main"] = tl;
+      tl.seek(0);
+    </script>
+  </body>
+</html>

@@ -53,7 +53,20 @@ button { min-width: 44px; min-height: 44px; }
 .tg-mermaid-placeholder, .tg-mermaid-error { margin: 10px 0; padding: 12px; border: 1px solid var(--border-color); border-radius: 12px; background: var(--tg-bg); color: var(--tg-muted); font-size: 13px; }
 .tg-mermaid-placeholder::before { content: ""; display: inline-block; width: 12px; height: 12px; margin-right: 8px; vertical-align: -1px; border: 2px solid color-mix(in srgb, var(--tg-muted) 35%, transparent); border-top-color: var(--tg-accent); border-radius: 50%; animation: spin .8s linear infinite; }
 
-.tg-composer { display: grid; grid-template-columns: 1fr 48px; gap: 8px; padding: 10px 12px max(10px, env(safe-area-inset-bottom)); background: color-mix(in srgb, var(--tg-surface) 96%, transparent); border-top: 1px solid var(--border-color); }
+.tg-composer { display: grid; grid-template-columns: 44px minmax(0, 1fr) 48px; gap: 8px; padding: 10px 12px max(10px, env(safe-area-inset-bottom)); background: color-mix(in srgb, var(--tg-surface) 96%, transparent); border-top: 1px solid var(--border-color); }
+.tg-composer:has(#attachButton[hidden]) { grid-template-columns: minmax(0, 1fr) 48px; }
+.tg-attachments { display: flex; flex-wrap: wrap; gap: 8px; min-width: 0; }
+.tg-composer > .tg-attachments, .tg-composer-status { grid-column: 1 / -1; }
+.tg-composer-status { margin: 0; color: var(--tg-text); font-size: 13px; overflow-wrap: anywhere; }
+.tg-attachment { position: relative; min-width: 0; max-width: 100%; }
+.tg-attachment a { display: block; color: var(--link-color); overflow-wrap: anywhere; }
+.tg-attachment img { display: block; width: 80px; height: 80px; object-fit: cover; border-radius: 12px; }
+.tg-message-attachments { margin-top: 8px; }
+.tg-message-attachments img { width: auto; height: auto; max-width: 100%; max-height: 320px; object-fit: contain; }
+.tg-composer .tg-attachment button { position: absolute; top: 0; right: 0; width: 44px; height: 44px; border: 1px solid var(--border-color); background: var(--tg-surface); color: var(--tg-text); }
+.tg-composer .tg-attach-button { display: grid; place-items: center; align-self: end; min-height: 48px; background: var(--tg-bg); color: var(--tg-text); border: 1px solid var(--border-color); }
+.tg-composer button:focus-visible, .tg-attachment a:focus-visible { outline: 2px solid var(--tg-accent); outline-offset: 2px; }
+.tg-message__bubble img { max-width: 100%; height: auto; }
 .tg-composer textarea { width: 100%; max-height: 128px; resize: none; padding: 12px 14px; border: 1px solid var(--input-border); border-radius: 14px; outline: 0; background: var(--input-bg); color: var(--tg-text); line-height: 1.35; }
 .tg-composer textarea:focus { border-color: var(--tg-accent); box-shadow: 0 0 0 3px var(--focus-ring); }
 .tg-composer button { border: 0; border-radius: 14px; background: var(--tg-accent); color: var(--tg-on-accent); font-size: 20px; }

@@ -2,7 +2,7 @@
     'use strict';
 
     const tg = window.Telegram?.WebApp;
-    const state = {chatId: null, chats: [], busy: false, controller: null};
+    const state = {chatId: null, chats: [], busy: false, uploading: false, attachments: [], controller: null};
     let mermaidInitialized = false;
     let mermaidTheme = null;
     let markedConfigured = false;
@@ -13,6 +13,96 @@
     const messages = $('messages');
     const input = $('messageInput');
     const sendButton = $('sendButton');
+    const attachmentInput = $('attachmentInput');
+    const maxAttachments = Number($('messageForm').dataset.attachmentMaxCount) || 3;
+    const maxAttachmentBytes = Number($('messageForm').dataset.attachmentMaxBytes) || 5242880;
+
+    function attachmentStatus(text) {
+        $('attachmentStatus').textContent = text;
+        $('attachmentStatus').hidden = !text;
+    }
+
+    function renderAttachments(container, items, removable = false) {
+        items.forEach((item) => {
+            const card = document.createElement('div');
+            card.className = 'tg-attachment';
+            const link = document.createElement('a');
+            link.href = `/api/chat/attachments/${encodeURIComponent(item.id)}`;
+            link.target = '_blank';
+            link.rel = 'noopener';
+            if (item.kind === 'image') {
+                const img = document.createElement('img');
+                img.src = link.href;
+                img.alt = item.filename || 'Изображение';
+                img.loading = 'lazy';
+                img.addEventListener('load', scrollDown, {once: true});
+                img.addEventListener('error', () => { link.textContent = item.filename || 'Изображение недоступно'; }, {once: true});
+                link.appendChild(img);
+            } else {
+                link.textContent = item.filename || 'Вложение';
+            }
+            card.appendChild(link);
+            if (removable) {
+                const remove = document.createElement('button');
+                remove.type = 'button';
+                remove.textContent = '×';
+                remove.setAttribute('aria-label', `Убрать ${item.filename || 'изображение'}`);
+                remove.disabled = state.busy || state.uploading;
+                remove.addEventListener('click', () => {
+                    state.attachments = state.attachments.filter((entry) => entry.id !== item.id);
+                    renderPendingAttachments();
+                });
+                card.appendChild(remove);
+            }
+            container.appendChild(card);
+        });
+    }
+
+    function renderPendingAttachments() {
+        const preview = $('attachmentPreview');
+        preview.replaceChildren();
+        preview.hidden = !state.attachments.length;
+        renderAttachments(preview, state.attachments, true);
+    }
+
+    async function uploadImages(files) {
+        if (state.busy || state.uploading || $('attachButton').hidden || !files.length) return;
+        state.uploading = true;
+        setBusy(false);
+        attachmentStatus('Загрузка изображений…');
+        const errors = [];
+        try {
+            for (const file of files) {
+                if (state.attachments.length >= maxAttachments) {
+                    errors.push(`Можно прикрепить не более ${maxAttachments} изображений.`);
+                    break;
+                }
+                if (!/\.(png|jpe?g|webp|gif)$/i.test(file.name)) {
+                    errors.push(`${file.name}: выберите PNG, JPEG, WebP или GIF.`);
+                    continue;
+                }
+                if (file.size > maxAttachmentBytes) {
+                    errors.push(`${file.name}: размер превышает ${Math.round(maxAttachmentBytes / 1048576 * 10) / 10} МБ.`);
+                    continue;
+                }
+                const body = new FormData();
+                body.append('files', file);
+                try {
+                    const data = await api('/api/chat/attachments', {method: 'POST', body});
+                    if (!data.attachments?.length) throw new Error('Файл не загружен. Попробуйте ещё раз.');
+                    state.attachments.push(...data.attachments);
+                    renderPendingAttachments();
+                } catch (error) {
+                    errors.push(`${file.name}: ${error.message}`);
+                }
+            }
+        } finally {
+            state.uploading = false;
+            attachmentInput.value = '';
+            setBusy(false);
+            attachmentStatus(errors.join(' '));
+        }
+    }
 
     function telegramInitData() {
         if (tg?.initData) return tg.initData;
@@ -199,6 +289,12 @@
             renderMermaidIn(bubble);
         }
         else bubble.textContent = text;
+        if (details.attachments?.length) {
+            const attachments = document.createElement('div');
+            attachments.className = 'tg-attachments tg-message-attachments';
+            renderAttachments(attachments, details.attachments);
+            bubble.appendChild(attachments);
+        }
         row.appendChild(bubble);
         messages.appendChild(row);
 
@@ -281,21 +377,36 @@
     }
 
     async function openChat(chatId) {
+        if (state.busy || state.uploading) return;
         closeSheets();
+        setBusy(true);
+        try {
         const data = await api(`/api/chats/${chatId}`);
         state.chatId = chatId;
+        state.attachments = [];
+        attachmentStatus('');
         messages.replaceChildren();
         (data.messages || []).forEach((message) => addMessage(
             message.role === 'assistant' ? 'assistant' : 'user',
             message.content || '',
-            {sources: message.sources || [], messageId: message.role === 'assistant' ? message.id : null},
+            {sources: message.sources || [], messageId: message.role === 'assistant' ? message.id : null, attachments: message.metadata?.attachments || []},
         ));
+        } catch (error) {
+            attachmentStatus(error.message || 'Не удалось открыть диалог');
+        } finally {
+            setBusy(false);
+        }
         input.focus();
     }
 
     function newChat() {
+        if (state.busy || state.uploading) return;
         closeSheets();
         state.chatId = null;
+        state.attachments = [];
+        input.value = '';
+        renderPendingAttachments();
+        attachmentStatus('');
         messages.innerHTML = '<div class="tg-welcome" id="welcomeState"><span class="tg-welcome__badge">Новый диалог</span><h1>Чем помочь?</h1><p>Задайте вопрос по корпоративной базе знаний.</p></div>';
         input.focus();
     }
@@ -303,9 +414,15 @@
     function setBusy(busy) {
         state.busy = busy;
         input.disabled = busy;
-        sendButton.disabled = busy;
-        sendButton.textContent = busy ? '…' : '➤';
-        if (busy) tg?.enableClosingConfirmation?.(); else tg?.disableClosingConfirmation?.();
+        const locked = busy || state.uploading;
+        sendButton.disabled = locked;
+        $('attachButton').disabled = locked;
+        attachmentInput.disabled = locked;
+        $('historyButton').disabled = locked;
+        $('newChatButton').disabled = locked;
+        sendButton.textContent = locked ? '…' : '➤';
+        renderPendingAttachments();
+        if (locked) tg?.enableClosingConfirmation?.(); else tg?.disableClosingConfirmation?.();
     }
 
     async function readSse(response, target) {
@@ -353,27 +470,38 @@
     }
 
     async function sendMessage(text) {
-        if (state.busy) return;
-        addMessage('user', text);
+        if (state.busy || state.uploading) return;
+        const attachments = [...state.attachments];
+        if (!attachments.length && text.length < 3) return;
+        const userMessage = addMessage('user', text, {attachments});
+        state.attachments = [];
+        attachmentStatus('');
         input.value = '';
         input.style.height = '';
         const target = addMessage('assistant', 'Ищу информацию…');
         target.bubble.classList.add('tg-thinking');
         setBusy(true);
         state.controller = new AbortController();
+        let accepted = false;
         try {
             const response = await fetch('/api/chat/stream', {
                 method: 'POST', credentials: 'same-origin', signal: state.controller.signal,
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({message: text, chat_id: state.chatId, answer_mode: 'default'}),
+                body: JSON.stringify({message: text, chat_id: state.chatId, answer_mode: 'default', attachment_ids: attachments.map((item) => item.id)}),
             });
             if (!response.ok) {
                 let data = {}; try { data = await response.json(); } catch (_) { /* ignore */ }
                 throw new Error(data.error || `Ошибка ${response.status}`);
             }
+            accepted = true;
             await readSse(response, target);
             loadChats().catch(() => {});
         } catch (error) {
+            if (!accepted) {
+                state.attachments = attachments;
+                input.value = text;
+                userMessage.row.remove();
+            }
             target.bubble.textContent = error.name === 'AbortError' ? 'Ответ остановлен.' : (error.message || 'Не удалось получить ответ');
             tg?.HapticFeedback?.notificationOccurred('error');
         } finally {
@@ -419,7 +547,16 @@
     $('messageForm').addEventListener('submit', (event) => {
         event.preventDefault();
         const text = input.value.trim();
-        if (text.length >= 3) sendMessage(text);
+        if (text.length >= 3 || state.attachments.length) sendMessage(text);
+    });
+    $('attachButton').addEventListener('click', () => attachmentInput.click());
+    attachmentInput.addEventListener('change', () => uploadImages([...attachmentInput.files]));
+    input.addEventListener('paste', (event) => {
+        const images = [...(event.clipboardData?.files || [])].filter((file) => file.type.startsWith('image/'));
+        if (images.length && !$('attachButton').hidden) {
+            event.preventDefault();
+            uploadImages(images);
+        }
     });
     input.addEventListener('input', () => {
         input.style.height = 'auto';
