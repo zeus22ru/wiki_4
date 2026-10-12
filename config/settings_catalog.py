@@ -601,6 +601,17 @@ SPECS: list[SettingSpec] = [
         allowed="строка (секрет)",
         secret=True,
     ),
+    SettingSpec(
+        key="ENABLE_REGISTRATION",
+        env="ENABLE_REGISTRATION",
+        group=_GROUP_SECURITY,
+        type="bool",
+        description=(
+            "Разрешить самостоятельную регистрацию пользователей в интерфейсе. "
+            "Если выключено, аккаунты создаёт только администратор."
+        ),
+        allowed="true/false",
+    ),
     # Logs
     SettingSpec(
         key="LOG_LEVEL",

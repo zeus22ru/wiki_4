@@ -62,6 +62,20 @@ REQUIRED_IDS = (
     "refreshAdminBtn",
     "adminOverview",
     "adminSettings",
+    "adminUsersTab",
+    "adminUsersPanel",
+    "adminUsersSearch",
+    "adminUsersRoleFilter",
+    "adminUsersStatusFilter",
+    "refreshAdminUsersBtn",
+    "createAdminUserBtn",
+    "adminUsersList",
+    "adminUsersPager",
+    "userEditorModal",
+    "userEditorForm",
+    "userPasswordModal",
+    "ownPasswordModal",
+    "changePasswordBtn",
 )
 
 REQUIRED_CLASSES = (

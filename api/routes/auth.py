@@ -4,7 +4,6 @@
 
 from __future__ import annotations
 
-import re
 import sqlite3
 import threading
 import time
@@ -13,13 +12,11 @@ from flask import Blueprint, jsonify, request, session as flask_session
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from api.middleware.auth import ensure_guest_id, get_current_user
+from api.user_validation import validate_password, validate_registration_payload
+from config import settings
 from core.chat_history import get_chat_history
 
 auth_bp = Blueprint("auth", __name__, url_prefix="/api/auth")
-
-_USERNAME_RE = re.compile(r"^[A-Za-zА-Яа-я0-9_.-]{3,50}$")
-_EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
-_MIN_PASSWORD_LENGTH = 8
 
 
 class LoginAttemptLimiter:
@@ -87,22 +84,6 @@ def _user_payload(user=None) -> dict:
     return {"authenticated": True, "role": user.role, "user": user.to_dict()}
 
 
-def _validate_registration(data: dict) -> tuple[str, str, str] | tuple[None, None, None]:
-    username = (data.get("username") or "").strip()
-    email = (data.get("email") or "").strip().lower()
-    password = data.get("password") or ""
-
-    if not _USERNAME_RE.match(username):
-        return None, None, "Имя пользователя: 3-50 символов, буквы, цифры, точка, дефис или подчёркивание"
-    if not _EMAIL_RE.match(email) or len(email) > 255:
-        return None, None, "Укажите корректный email"
-    if len(password) < _MIN_PASSWORD_LENGTH:
-        return None, None, f"Пароль должен быть не короче {_MIN_PASSWORD_LENGTH} символов"
-    if password.lower() == username.lower():
-        return None, None, "Пароль не должен совпадать с именем пользователя"
-    return username, email, password
-
-
 def _login_user(user) -> None:
     flask_session.pop("telegram_user_id", None)
     flask_session.pop("auth_type", None)
@@ -125,8 +106,11 @@ def me():
 @auth_bp.route("/register", methods=["POST"])
 def register():
     """Зарегистрировать обычного пользователя и сразу выполнить вход."""
+    if not settings.ENABLE_REGISTRATION:
+        return jsonify({"error": "Самостоятельная регистрация отключена администратором"}), 403
+
     data = _json_body()
-    username, email, password_or_error = _validate_registration(data)
+    username, email, password_or_error = validate_registration_payload(data)
     if not username:
         return jsonify({"error": password_or_error}), 400
 
@@ -172,3 +156,30 @@ def logout():
     flask_session.pop("auth_type", None)
     ensure_guest_id()
     return jsonify(_user_payload(None))
+
+
+@auth_bp.route("/password", methods=["POST"])
+def change_password():
+    """Смена собственного пароля авторизованным пользователем."""
+    user = get_current_user()
+    if not user:
+        return jsonify({"error": "Требуется вход в аккаунт"}), 401
+
+    data = _json_body()
+    current_password = data.get("current_password") or ""
+    new_password = data.get("new_password") or ""
+
+    if not check_password_hash(user.password_hash, current_password):
+        return jsonify({"error": "Текущий пароль указан неверно"}), 400
+
+    error = validate_password(new_password, user.username)
+    if error:
+        return jsonify({"error": error}), 400
+    if current_password == new_password:
+        return jsonify({"error": "Новый пароль должен отличаться от текущего"}), 400
+
+    password_hash = generate_password_hash(new_password)
+    if not get_chat_history().update_user_password(user.id, password_hash):
+        return jsonify({"error": "Не удалось сохранить пароль"}), 500
+
+    return jsonify({"ok": True})

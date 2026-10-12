@@ -388,6 +388,196 @@ class ChatHistoryManager:
             conn.commit()
             return cursor.rowcount > 0
 
+    def list_users(
+        self,
+        query: Optional[str] = None,
+        role: Optional[str] = None,
+        is_active: Optional[bool] = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> tuple[List[User], int]:
+        """Список пользователей с фильтрами и общим количеством (для админки)."""
+        conditions: List[str] = []
+        params: List = []
+
+        value = (query or "").strip()
+        if value:
+            pattern = f"%{_escape_like_pattern(value)}%"
+            conditions.append(
+                "(username COLLATE NOCASE LIKE ? ESCAPE '\\' OR email COLLATE NOCASE LIKE ? ESCAPE '\\')"
+            )
+            params.extend([pattern, pattern])
+
+        role_value = (role or "").strip()
+        if role_value:
+            conditions.append("role = ?")
+            params.append(role_value)
+
+        if is_active is not None:
+            conditions.append("is_active = ?")
+            params.append(1 if is_active else 0)
+
+        where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        safe_limit = max(1, min(int(limit), 500))
+        safe_offset = max(0, int(offset))
+
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(f"SELECT COUNT(*) FROM users {where}", params)
+            total = int(cursor.fetchone()[0] or 0)
+            cursor.execute(
+                f'''
+                SELECT id, username, email, password_hash, role, is_active, created_at, updated_at
+                FROM users
+                {where}
+                ORDER BY created_at DESC, id DESC
+                LIMIT ? OFFSET ?
+                ''',
+                params + [safe_limit, safe_offset],
+            )
+            users = [User.from_row(row) for row in cursor.fetchall()]
+        return users, total
+
+    def update_user(
+        self,
+        user_id: int,
+        *,
+        username: Optional[str] = None,
+        email: Optional[str] = None,
+        role: Optional[str] = None,
+        is_active: Optional[bool] = None,
+    ) -> bool:
+        """Точечно обновить профиль пользователя (только переданные поля)."""
+        fields: List[str] = []
+        params: List = []
+
+        if username is not None:
+            fields.append("username = ?")
+            params.append(username.strip())
+        if email is not None:
+            fields.append("email = ?")
+            params.append(email.strip().lower())
+        if role is not None:
+            fields.append("role = ?")
+            params.append(role)
+        if is_active is not None:
+            fields.append("is_active = ?")
+            params.append(1 if is_active else 0)
+
+        if not fields:
+            return False
+
+        fields.append("updated_at = ?")
+        params.append(datetime.now().isoformat())
+        params.append(user_id)
+
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                f"UPDATE users SET {', '.join(fields)} WHERE id = ?",
+                params,
+            )
+            conn.commit()
+            return cursor.rowcount > 0
+
+    def update_user_password(self, user_id: int, password_hash: str) -> bool:
+        """Установить новый хэш пароля пользователя."""
+        now = datetime.now().isoformat()
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                UPDATE users
+                SET password_hash = ?, updated_at = ?
+                WHERE id = ?
+            ''', (password_hash, now, user_id))
+            conn.commit()
+            return cursor.rowcount > 0
+
+    def count_active_admins(self) -> int:
+        """Количество активных администраторов (для защиты последнего админа)."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM users WHERE role = 'admin' AND is_active = 1")
+            return int(cursor.fetchone()[0] or 0)
+
+    def get_user_stats(self, user_id: int) -> dict:
+        """Статистика пользователя: чаты, сообщения, привязка Telegram."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM chat_sessions WHERE user_id = ?", (user_id,))
+            chats = int(cursor.fetchone()[0] or 0)
+            cursor.execute('''
+                SELECT COUNT(m.id)
+                FROM messages m
+                JOIN chat_sessions s ON s.id = m.session_id
+                WHERE s.user_id = ?
+            ''', (user_id,))
+            messages = int(cursor.fetchone()[0] or 0)
+            cursor.execute('''
+                SELECT telegram_user_id, telegram_username
+                FROM telegram_links
+                WHERE user_id = ? AND telegram_user_id IS NOT NULL
+                ORDER BY id DESC
+                LIMIT 1
+            ''', (user_id,))
+            row = cursor.fetchone()
+        return {
+            "chats": chats,
+            "messages": messages,
+            "telegram_linked": bool(row and row["telegram_user_id"]),
+            "telegram_username": (row["telegram_username"] if row else None),
+        }
+
+    def get_user_stats_map(self, user_ids: List[int]) -> dict:
+        """Статистика для набора пользователей одним набором запросов."""
+        result = {
+            int(uid): {"chats": 0, "messages": 0, "telegram_linked": False, "telegram_username": None}
+            for uid in user_ids
+        }
+        if not result:
+            return result
+
+        ids = list(result.keys())
+        placeholders = ", ".join("?" for _ in ids)
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                f"SELECT user_id, COUNT(*) FROM chat_sessions "
+                f"WHERE user_id IN ({placeholders}) GROUP BY user_id",
+                ids,
+            )
+            for uid, count in cursor.fetchall():
+                if uid in result:
+                    result[uid]["chats"] = int(count or 0)
+
+            cursor.execute(
+                f'''
+                SELECT s.user_id, COUNT(m.id)
+                FROM messages m
+                JOIN chat_sessions s ON s.id = m.session_id
+                WHERE s.user_id IN ({placeholders})
+                GROUP BY s.user_id
+                ''',
+                ids,
+            )
+            for uid, count in cursor.fetchall():
+                if uid in result:
+                    result[uid]["messages"] = int(count or 0)
+
+            cursor.execute(
+                f'''
+                SELECT user_id, telegram_user_id, telegram_username
+                FROM telegram_links
+                WHERE user_id IN ({placeholders}) AND telegram_user_id IS NOT NULL
+                ''',
+                ids,
+            )
+            for uid, tg_id, tg_name in cursor.fetchall():
+                if uid in result and tg_id:
+                    result[uid]["telegram_linked"] = True
+                    result[uid]["telegram_username"] = tg_name
+        return result
+
     # ========== Методы для привязки Telegram ==========
 
     def create_telegram_link(self, user_id: int) -> dict:

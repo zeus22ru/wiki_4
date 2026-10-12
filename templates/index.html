@@ -7,8 +7,8 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='vendor/fonts/inter.css') }}?v=1">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/theme.css') }}?v=15">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/markdown.css') }}?v=3">
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=24">
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/components.css') }}?v=24">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=25">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/components.css') }}?v=25">
     <link rel="stylesheet" href="{{ url_for('static', filename='vendor/highlight.js/11.9.0/github-dark.min.css') }}">
 </head>
 <body>
@@ -75,6 +75,13 @@
                                     <path d="M21.198 2.433a2.242 2.242 0 0 0-1.022.215l-16.609 6.71a2.24 2.24 0 0 0 .124 4.214l3.609 1.207 1.667 5.439a2.24 2.24 0 0 0 4.006.553l1.922-3.2 3.606 1.202a2.24 2.24 0 0 0 2.928-2.043l1.403-9.366a2.242 2.242 0 0 0-2.658-2.505zM9.267 15.044l-.822 1.37a.239.239 0 0 1-.427-.058l-.73-2.384 1.979 1.072zm7.595-5.078l-5.84 2.36-2.898-1.565 8.738-3.795z"/>
                                 </svg>
                                 Telegram
+                            </button>
+                            <button class="secondary-btn" id="changePasswordBtn" type="button" hidden title="Сменить пароль">
+                                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                    <rect x="3" y="11" width="18" height="11" rx="2"/>
+                                    <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+                                </svg>
+                                Пароль
                             </button>
                             <button class="secondary-btn" id="logoutBtn" type="button" hidden>
                                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -281,6 +288,7 @@
                     <div class="admin-subtabs" role="tablist" aria-label="Разделы админки">
                         <button class="tab-btn active" id="adminOverviewTab" type="button" data-admin-panel="adminOverviewPanel">Обзор</button>
                         <button class="tab-btn" id="adminSettingsTab" type="button" data-admin-panel="adminSettingsPanel">Настройки</button>
+                        <button class="tab-btn" id="adminUsersTab" type="button" data-admin-panel="adminUsersPanel">Пользователи</button>
                     </div>
                     <div class="admin-subpanel active" id="adminOverviewPanel" role="tabpanel" aria-labelledby="adminOverviewTab">
                     <div class="admin-grid" id="adminOverview"></div>
@@ -296,6 +304,28 @@
                             </div>
                         </div>
                         <div class="admin-settings" id="adminSettings"></div>
+                    </div>
+                    <div class="admin-subpanel" id="adminUsersPanel" role="tabpanel" aria-labelledby="adminUsersTab">
+                        <div class="admin-users-toolbar">
+                            <input class="sidebar-search admin-users-toolbar__search" id="adminUsersSearch" type="search" placeholder="Поиск по логину или email">
+                            <select class="field__control admin-users-toolbar__select" id="adminUsersRoleFilter">
+                                <option value="">Все роли</option>
+                                <option value="admin">Администраторы</option>
+                                <option value="user">Пользователи</option>
+                            </select>
+                            <select class="field__control admin-users-toolbar__select" id="adminUsersStatusFilter">
+                                <option value="">Все статусы</option>
+                                <option value="active">Активные</option>
+                                <option value="blocked">Заблокированные</option>
+                            </select>
+                            <div class="admin-users-toolbar__actions">
+                                <button class="secondary-btn" id="refreshAdminUsersBtn" type="button">Обновить</button>
+                                <button class="new-chat-btn" id="createAdminUserBtn" type="button">Создать пользователя</button>
+                            </div>
+                        </div>
+                        <div class="admin-users-summary" id="adminUsersSummary" aria-live="polite"></div>
+                        <div class="admin-users" id="adminUsersList"></div>
+                        <div class="admin-users-pager" id="adminUsersPager"></div>
                     </div>
                 </section>
             </main>
@@ -429,12 +459,85 @@
         </div>
     </div>
 
+    <div class="auth-modal" id="userEditorModal" hidden>
+        <div class="auth-modal__backdrop" id="userEditorBackdrop"></div>
+        <div class="auth-modal__dialog" role="dialog" aria-modal="true" aria-labelledby="userEditorTitle">
+            <div class="auth-modal__header">
+                <h2 id="userEditorTitle">Новый пользователь</h2>
+                <button class="icon-btn" id="userEditorCloseBtn" type="button" aria-label="Закрыть">×</button>
+            </div>
+            <form class="auth-form active" id="userEditorForm">
+                <input type="hidden" id="userEditorId">
+                <label>Логин
+                    <input id="userEditorUsername" type="text" autocomplete="off" required>
+                </label>
+                <label>Email
+                    <input id="userEditorEmail" type="email" autocomplete="off" required>
+                </label>
+                <label id="userEditorPasswordLabel">Пароль
+                    <input id="userEditorPassword" type="password" autocomplete="new-password">
+                </label>
+                <label>Роль
+                    <select id="userEditorRole">
+                        <option value="user">Пользователь</option>
+                        <option value="admin">Администратор</option>
+                    </select>
+                </label>
+                <label class="admin-users-check" for="userEditorActive">
+                    <input type="checkbox" id="userEditorActive" checked>
+                    <span>Активен (может входить)</span>
+                </label>
+                <button class="new-chat-btn" type="submit" id="userEditorSubmitBtn">Сохранить</button>
+            </form>
+            <div class="auth-message" id="userEditorMessage"></div>
+        </div>
+    </div>
+
+    <div class="auth-modal" id="userPasswordModal" hidden>
+        <div class="auth-modal__backdrop" id="userPasswordBackdrop"></div>
+        <div class="auth-modal__dialog" role="dialog" aria-modal="true" aria-labelledby="userPasswordTitle">
+            <div class="auth-modal__header">
+                <h2 id="userPasswordTitle">Сброс пароля</h2>
+                <button class="icon-btn" id="userPasswordCloseBtn" type="button" aria-label="Закрыть">×</button>
+            </div>
+            <p class="issue-modal__hint" id="userPasswordHint"></p>
+            <form class="auth-form active" id="userPasswordForm">
+                <input type="hidden" id="userPasswordUserId">
+                <label>Новый пароль
+                    <input id="userPasswordNew" type="password" autocomplete="new-password" required>
+                </label>
+                <button class="new-chat-btn" type="submit">Сохранить пароль</button>
+            </form>
+            <div class="auth-message" id="userPasswordMessage"></div>
+        </div>
+    </div>
+
+    <div class="auth-modal" id="ownPasswordModal" hidden>
+        <div class="auth-modal__backdrop" id="ownPasswordBackdrop"></div>
+        <div class="auth-modal__dialog" role="dialog" aria-modal="true" aria-labelledby="ownPasswordTitle">
+            <div class="auth-modal__header">
+                <h2 id="ownPasswordTitle">Смена пароля</h2>
+                <button class="icon-btn" id="ownPasswordCloseBtn" type="button" aria-label="Закрыть">×</button>
+            </div>
+            <form class="auth-form active" id="ownPasswordForm">
+                <label>Текущий пароль
+                    <input id="ownPasswordCurrent" type="password" autocomplete="current-password" required>
+                </label>
+                <label>Новый пароль
+                    <input id="ownPasswordNew" type="password" autocomplete="new-password" required>
+                </label>
+                <button class="new-chat-btn" type="submit">Сменить пароль</button>
+            </form>
+            <div class="auth-message" id="ownPasswordMessage"></div>
+        </div>
+    </div>
+
     <script src="{{ url_for('static', filename='vendor/marked/12.0.2/marked.min.js') }}"></script>
     <script src="{{ url_for('static', filename='vendor/dompurify/3.2.4/purify.min.js') }}"></script>
     <script src="{{ url_for('static', filename='vendor/highlight.js/11.9.0/highlight.min.js') }}"></script>
     <script src="{{ url_for('static', filename='vendor/mermaid/10.9.1/mermaid.min.js') }}"></script>
     <script src="{{ url_for('static', filename='js/theme.js') }}?v=2"></script>
     <script src="{{ url_for('static', filename='js/clipboard.js') }}"></script>
-    <script src="{{ url_for('static', filename='script.js') }}?v=24"></script>
+    <script src="{{ url_for('static', filename='script.js') }}?v=25"></script>
 </body>
 </html>

@@ -275,6 +275,8 @@ class Settings:
     REQUIRE_SECRETS: bool = _env_bool("REQUIRE_SECRETS", False)
     API_KEY: str = os.getenv("API_KEY", "")
     ADMIN_API_KEY: str = os.getenv("ADMIN_API_KEY", "")
+    # Самостоятельная регистрация пользователей (можно отключить из админки)
+    ENABLE_REGISTRATION: bool = _env_bool("ENABLE_REGISTRATION", True)
 
     # GitHub Issues (user-reports из интерфейса; без токена — заглушка)
     GITHUB_ISSUES_ENABLED: bool = _env_bool("GITHUB_ISSUES_ENABLED", True)

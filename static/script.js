@@ -104,6 +104,16 @@ const resetAdminSettingsDraftFloatBtn = document.getElementById('resetAdminSetti
 const adminSettingsPanel = document.getElementById('adminSettingsPanel');
 const adminOverviewTab = document.getElementById('adminOverviewTab');
 const adminSettingsTab = document.getElementById('adminSettingsTab');
+const adminUsersTab = document.getElementById('adminUsersTab');
+const adminUsersPanel = document.getElementById('adminUsersPanel');
+const adminUsersSearch = document.getElementById('adminUsersSearch');
+const adminUsersRoleFilter = document.getElementById('adminUsersRoleFilter');
+const adminUsersStatusFilter = document.getElementById('adminUsersStatusFilter');
+const refreshAdminUsersBtn = document.getElementById('refreshAdminUsersBtn');
+const createAdminUserBtn = document.getElementById('createAdminUserBtn');
+const adminUsersSummary = document.getElementById('adminUsersSummary');
+const adminUsersList = document.getElementById('adminUsersList');
+const adminUsersPager = document.getElementById('adminUsersPager');
 const authStatus = document.getElementById('authStatus');
 const authOpenBtn = document.getElementById('authOpenBtn');
 const logoutBtn = document.getElementById('logoutBtn');
@@ -698,6 +708,27 @@ document.addEventListener('DOMContentLoaded', () => {
     if (resetAdminSettingsDraftFloatBtn) {
         resetAdminSettingsDraftFloatBtn.addEventListener('click', resetAdminSettingsDraft);
     }
+    if (adminUsersSearch) {
+        adminUsersSearch.addEventListener('input', debounce(() => loadAdminUsers(1), 250));
+    }
+    if (adminUsersRoleFilter) {
+        adminUsersRoleFilter.addEventListener('change', () => loadAdminUsers(1));
+    }
+    if (adminUsersStatusFilter) {
+        adminUsersStatusFilter.addEventListener('change', () => loadAdminUsers(1));
+    }
+    if (refreshAdminUsersBtn) {
+        refreshAdminUsersBtn.addEventListener('click', () => loadAdminUsers());
+    }
+    if (createAdminUserBtn) {
+        createAdminUserBtn.addEventListener('click', () => openUserEditor(null));
+    }
+    if (adminUsersList) {
+        adminUsersList.addEventListener('click', onAdminUsersListClick);
+    }
+    initUserEditorModal();
+    initUserPasswordModal();
+    initOwnPasswordModal();
     authOpenBtn.addEventListener('click', () => openAuthModal('login'));
     logoutBtn.addEventListener('click', logout);
     authBackdrop.addEventListener('click', closeAuthModal);
@@ -859,6 +890,10 @@ function applyAuthState() {
     const telegramLinkBtn = document.getElementById('telegramLinkBtn');
     if (telegramLinkBtn) {
         telegramLinkBtn.hidden = !currentAuth.authenticated;
+    }
+    const changePasswordBtn = document.getElementById('changePasswordBtn');
+    if (changePasswordBtn) {
+        changePasswordBtn.hidden = !currentAuth.authenticated;
     }
     document.querySelectorAll('.admin-only').forEach((node) => {
         node.hidden = !isAdminRole;
@@ -3198,6 +3233,336 @@ async function loadAdminOverview() {
     }
 }
 
+// ==================== Управление пользователями (админка) ====================
+
+const _adminUsersState = {page: 1, per_page: 25, total: 0, query: '', role: '', status: ''};
+let _adminUsersCache = {};
+
+async function loadAdminUsers(page) {
+    if (!adminUsersList) {
+        return;
+    }
+    if (currentAuth.role !== 'admin') {
+        adminUsersList.innerHTML = '<div class="empty-state">Раздел доступен только администратору</div>';
+        return;
+    }
+    if (typeof page === 'number' && page > 0) {
+        _adminUsersState.page = page;
+    }
+    _adminUsersState.query = (adminUsersSearch?.value || '').trim();
+    _adminUsersState.role = adminUsersRoleFilter?.value || '';
+    _adminUsersState.status = adminUsersStatusFilter?.value || '';
+
+    adminUsersList.innerHTML = '<div class="empty-state">Загрузка пользователей...</div>';
+    if (adminUsersPager) {
+        adminUsersPager.innerHTML = '';
+    }
+    try {
+        const params = new URLSearchParams({
+            page: String(_adminUsersState.page),
+            per_page: String(_adminUsersState.per_page),
+        });
+        if (_adminUsersState.query) params.set('query', _adminUsersState.query);
+        if (_adminUsersState.role) params.set('role', _adminUsersState.role);
+        if (_adminUsersState.status) params.set('status', _adminUsersState.status);
+        const data = await apiJson(`/api/admin/users?${params.toString()}`);
+        _adminUsersState.total = data.total || 0;
+        _adminUsersState.page = data.page || 1;
+        _adminUsersState.per_page = data.per_page || _adminUsersState.per_page;
+        renderAdminUsers(data.users || []);
+        renderAdminUsersPager();
+    } catch (error) {
+        adminUsersList.innerHTML = `<div class="empty-state">${escapeHtml(error.message)}</div>`;
+    }
+}
+
+function renderAdminUsers(users) {
+    _adminUsersCache = {};
+    users.forEach((user) => {
+        _adminUsersCache[user.id] = user;
+    });
+    if (adminUsersSummary) {
+        adminUsersSummary.textContent = users.length ? `Найдено: ${_adminUsersState.total}` : '';
+    }
+    if (!users.length) {
+        adminUsersList.innerHTML = '<div class="empty-state">Пользователи не найдены</div>';
+        return;
+    }
+    const currentUserId = currentAuth?.user?.id;
+    adminUsersList.innerHTML = users.map((user) => {
+        const stats = user.stats || {};
+        const isSelf = user.id === currentUserId;
+        const roleLabel = user.role === 'admin' ? 'Администратор' : 'Пользователь';
+        const roleClass = user.role === 'admin' ? 'admin-user-badge--admin' : '';
+        const statusLabel = user.is_active ? 'Активен' : 'Заблокирован';
+        const statusClass = user.is_active ? 'admin-user-badge--active' : 'admin-user-badge--blocked';
+        const tg = stats.telegram_linked
+            ? ` · Telegram: ${escapeHtml(stats.telegram_username || 'привязан')}`
+            : '';
+        const selfBadge = isSelf ? ' <span class="admin-user-badge admin-user-badge--self">это вы</span>' : '';
+        return `
+        <article class="admin-user-card" data-user-id="${user.id}">
+            <div class="admin-user-card__main">
+                <div class="admin-user-card__title">
+                    <strong>${escapeHtml(user.username)}</strong>
+                    <span class="admin-user-badge ${roleClass}">${roleLabel}</span>
+                    <span class="admin-user-badge ${statusClass}">${statusLabel}</span>${selfBadge}
+                </div>
+                <div class="admin-user-card__meta">${escapeHtml(user.email)} · чатов: ${stats.chats || 0} · сообщений: ${stats.messages || 0}${tg}</div>
+                <div class="admin-user-card__meta admin-user-card__meta--dim">создан: ${formatDate(user.created_at)} · изменён: ${formatDate(user.updated_at)}</div>
+            </div>
+            <div class="admin-user-card__actions">
+                <button class="secondary-btn" type="button" data-user-action="edit" data-user-id="${user.id}">Изменить</button>
+                <button class="secondary-btn" type="button" data-user-action="password" data-user-id="${user.id}">Пароль</button>
+                <button class="secondary-btn" type="button" data-user-action="toggle" data-user-id="${user.id}" ${isSelf ? 'disabled' : ''}>${user.is_active ? 'Заблокировать' : 'Разблокировать'}</button>
+            </div>
+        </article>`;
+    }).join('');
+}
+
+function renderAdminUsersPager() {
+    if (!adminUsersPager) {
+        return;
+    }
+    const totalPages = Math.max(1, Math.ceil(_adminUsersState.total / _adminUsersState.per_page));
+    if (totalPages <= 1) {
+        adminUsersPager.innerHTML = '';
+        return;
+    }
+    const page = _adminUsersState.page;
+    adminUsersPager.innerHTML = `
+        <button class="secondary-btn" type="button" id="adminUsersPrevPage" ${page <= 1 ? 'disabled' : ''}>Назад</button>
+        <span class="admin-users-pager__info">Стр. ${page} из ${totalPages}</span>
+        <button class="secondary-btn" type="button" id="adminUsersNextPage" ${page >= totalPages ? 'disabled' : ''}>Вперёд</button>
+    `;
+    const prev = document.getElementById('adminUsersPrevPage');
+    const next = document.getElementById('adminUsersNextPage');
+    if (prev) prev.addEventListener('click', () => loadAdminUsers(page - 1));
+    if (next) next.addEventListener('click', () => loadAdminUsers(page + 1));
+}
+
+function onAdminUsersListClick(event) {
+    const btn = event.target.closest('[data-user-action]');
+    if (!btn) {
+        return;
+    }
+    const userId = Number(btn.dataset.userId);
+    const action = btn.dataset.userAction;
+    const user = _adminUsersCache[userId];
+    if (action === 'edit') {
+        openUserEditor(user);
+    } else if (action === 'password') {
+        openUserPasswordModal(user);
+    } else if (action === 'toggle') {
+        toggleUserActive(user);
+    }
+}
+
+async function toggleUserActive(user) {
+    if (!user) {
+        return;
+    }
+    const nextActive = !user.is_active;
+    const verb = nextActive ? 'разблокировать' : 'заблокировать';
+    if (!confirm(`Вы действительно хотите ${verb} пользователя «${user.username}»?`)) {
+        return;
+    }
+    try {
+        await apiJson(`/api/admin/users/${user.id}`, {
+            method: 'PATCH',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({is_active: nextActive}),
+        });
+        loadAdminUsers();
+    } catch (error) {
+        showInlineError(error.message);
+    }
+}
+
+function openUserEditor(user) {
+    const modal = document.getElementById('userEditorModal');
+    if (!modal) {
+        return;
+    }
+    const isEdit = !!(user && user.id);
+    const currentUserId = currentAuth?.user?.id;
+    const isSelf = isEdit && user.id === currentUserId;
+    document.getElementById('userEditorTitle').textContent = isEdit ? 'Редактирование пользователя' : 'Новый пользователь';
+    document.getElementById('userEditorId').value = isEdit ? String(user.id) : '';
+    document.getElementById('userEditorUsername').value = isEdit ? (user.username || '') : '';
+    document.getElementById('userEditorEmail').value = isEdit ? (user.email || '') : '';
+    document.getElementById('userEditorPassword').value = '';
+    document.getElementById('userEditorPassword').required = !isEdit;
+    document.getElementById('userEditorPasswordLabel').hidden = isEdit;
+    document.getElementById('userEditorRole').value = isEdit ? (user.role || 'user') : 'user';
+    document.getElementById('userEditorRole').disabled = isSelf;
+    document.getElementById('userEditorActive').checked = isEdit ? !!user.is_active : true;
+    document.getElementById('userEditorActive').disabled = isSelf;
+    document.getElementById('userEditorMessage').textContent = '';
+    modal.hidden = false;
+    setTimeout(() => document.getElementById('userEditorUsername').focus(), 0);
+}
+
+function closeUserEditor() {
+    const modal = document.getElementById('userEditorModal');
+    if (modal) {
+        modal.hidden = true;
+    }
+}
+
+async function saveUserEditor(event) {
+    if (event) {
+        event.preventDefault();
+    }
+    const idValue = document.getElementById('userEditorId').value;
+    const id = idValue ? Number(idValue) : null;
+    const isEdit = !!id;
+    const payload = {
+        username: document.getElementById('userEditorUsername').value.trim(),
+        email: document.getElementById('userEditorEmail').value.trim(),
+        role: document.getElementById('userEditorRole').value,
+        is_active: document.getElementById('userEditorActive').checked,
+    };
+    if (!isEdit) {
+        payload.password = document.getElementById('userEditorPassword').value;
+    }
+    const message = document.getElementById('userEditorMessage');
+    message.textContent = 'Сохранение...';
+    try {
+        if (isEdit) {
+            await apiJson(`/api/admin/users/${id}`, {
+                method: 'PATCH',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(payload),
+            });
+        } else {
+            await apiJson('/api/admin/users', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(payload),
+            });
+        }
+        closeUserEditor();
+        loadAdminUsers(isEdit ? _adminUsersState.page : 1);
+    } catch (error) {
+        message.textContent = error.message;
+    }
+}
+
+function initUserEditorModal() {
+    const modal = document.getElementById('userEditorModal');
+    if (!modal) {
+        return;
+    }
+    document.getElementById('userEditorForm').addEventListener('submit', saveUserEditor);
+    document.getElementById('userEditorCloseBtn').addEventListener('click', closeUserEditor);
+    document.getElementById('userEditorBackdrop').addEventListener('click', closeUserEditor);
+}
+
+function openUserPasswordModal(user) {
+    const modal = document.getElementById('userPasswordModal');
+    if (!modal || !user) {
+        return;
+    }
+    document.getElementById('userPasswordUserId').value = String(user.id);
+    document.getElementById('userPasswordHint').textContent = `Новый пароль для ${user.username}`;
+    document.getElementById('userPasswordNew').value = '';
+    document.getElementById('userPasswordMessage').textContent = '';
+    modal.hidden = false;
+    setTimeout(() => document.getElementById('userPasswordNew').focus(), 0);
+}
+
+function closeUserPasswordModal() {
+    const modal = document.getElementById('userPasswordModal');
+    if (modal) {
+        modal.hidden = true;
+    }
+}
+
+async function saveUserPassword(event) {
+    if (event) {
+        event.preventDefault();
+    }
+    const id = Number(document.getElementById('userPasswordUserId').value);
+    const message = document.getElementById('userPasswordMessage');
+    message.textContent = 'Сохранение...';
+    try {
+        await apiJson(`/api/admin/users/${id}/password`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({new_password: document.getElementById('userPasswordNew').value}),
+        });
+        closeUserPasswordModal();
+    } catch (error) {
+        message.textContent = error.message;
+    }
+}
+
+function initUserPasswordModal() {
+    const modal = document.getElementById('userPasswordModal');
+    if (!modal) {
+        return;
+    }
+    document.getElementById('userPasswordForm').addEventListener('submit', saveUserPassword);
+    document.getElementById('userPasswordCloseBtn').addEventListener('click', closeUserPasswordModal);
+    document.getElementById('userPasswordBackdrop').addEventListener('click', closeUserPasswordModal);
+}
+
+function openOwnPasswordModal() {
+    const modal = document.getElementById('ownPasswordModal');
+    if (!modal) {
+        return;
+    }
+    document.getElementById('ownPasswordForm').reset();
+    document.getElementById('ownPasswordMessage').textContent = '';
+    modal.hidden = false;
+    setTimeout(() => document.getElementById('ownPasswordCurrent').focus(), 0);
+}
+
+function closeOwnPasswordModal() {
+    const modal = document.getElementById('ownPasswordModal');
+    if (modal) {
+        modal.hidden = true;
+    }
+}
+
+async function saveOwnPassword(event) {
+    if (event) {
+        event.preventDefault();
+    }
+    const message = document.getElementById('ownPasswordMessage');
+    message.textContent = 'Сохранение...';
+    try {
+        await apiJson('/api/auth/password', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                current_password: document.getElementById('ownPasswordCurrent').value,
+                new_password: document.getElementById('ownPasswordNew').value,
+            }),
+        });
+        document.getElementById('ownPasswordForm').reset();
+        message.textContent = 'Пароль изменён';
+        setTimeout(closeOwnPasswordModal, 1200);
+    } catch (error) {
+        message.textContent = error.message;
+    }
+}
+
+function initOwnPasswordModal() {
+    const modal = document.getElementById('ownPasswordModal');
+    if (!modal) {
+        return;
+    }
+    document.getElementById('ownPasswordForm').addEventListener('submit', saveOwnPassword);
+    document.getElementById('ownPasswordCloseBtn').addEventListener('click', closeOwnPasswordModal);
+    document.getElementById('ownPasswordBackdrop').addEventListener('click', closeOwnPasswordModal);
+    const changePasswordBtn = document.getElementById('changePasswordBtn');
+    if (changePasswordBtn) {
+        changePasswordBtn.addEventListener('click', openOwnPasswordModal);
+    }
+}
+
 function initAdminSubtabs() {
     const buttons = document.querySelectorAll('[data-admin-panel]');
     if (!buttons.length) {
@@ -3212,6 +3577,8 @@ function initAdminSubtabs() {
             });
             if (panelId === 'adminSettingsPanel') {
                 loadAdminSettings();
+            } else if (panelId === 'adminUsersPanel') {
+                loadAdminUsers(1);
             }
             updateAdminSettingsDraftToolbar();
         });

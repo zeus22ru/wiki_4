@@ -48,6 +48,7 @@ from utils.embeddings import ChatCompletionError
 from api.routes.chat import chat_bp
 from api.routes.documents import documents_bp
 from api.routes.admin import admin_bp
+from api.routes.admin_users import admin_users_bp
 from api.routes.auth import auth_bp
 from api.routes.chat_attachments import chat_attachments_bp
 from api.routes.issues import issues_bp
@@ -448,6 +449,7 @@ elif _cors:
 app.register_blueprint(chat_bp)
 app.register_blueprint(documents_bp)
 app.register_blueprint(admin_bp)
+app.register_blueprint(admin_users_bp)
 app.register_blueprint(auth_bp)
 app.register_blueprint(chat_attachments_bp)
 app.register_blueprint(issues_bp)
