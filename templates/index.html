@@ -11,6 +11,7 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='css/components.css') }}?v=25">
     <link rel="stylesheet" href="{{ url_for('static', filename='vendor/highlight.js/11.9.0/github-dark.min.css') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/solutions.css') }}?v=1">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/admin-pipeline.css') }}?v=1">
 </head>
 <body>
     <div class="app-container">
@@ -289,6 +290,7 @@
                     <div class="admin-subtabs" role="tablist" aria-label="Разделы админки">
                         <button class="tab-btn active" id="adminOverviewTab" type="button" data-admin-panel="adminOverviewPanel">Обзор</button>
                         <button class="tab-btn" id="adminSettingsTab" type="button" data-admin-panel="adminSettingsPanel">Настройки</button>
+                        <button class="tab-btn" id="adminPipelineTab" type="button" data-admin-panel="adminPipelinePanel">Пайплайн</button>
                         <button class="tab-btn" id="adminUsersTab" type="button" data-admin-panel="adminUsersPanel">Пользователи</button>
                         <button class="tab-btn" id="adminEvalsTab" type="button" data-admin-panel="adminEvalsPanel">Проверки</button>
                     </div>
@@ -306,6 +308,9 @@
                             </div>
                         </div>
                         <div class="admin-settings" id="adminSettings"></div>
+                    </div>
+                    <div class="admin-subpanel" id="adminPipelinePanel" role="tabpanel" aria-labelledby="adminPipelineTab">
+                        {% include 'admin_pipeline.html' %}
                     </div>
                     <div class="admin-subpanel" id="adminUsersPanel" role="tabpanel" aria-labelledby="adminUsersTab">
                         <div class="admin-users-toolbar">
@@ -649,6 +654,7 @@
     <script src="{{ url_for('static', filename='js/theme.js') }}?v=2"></script>
     <script src="{{ url_for('static', filename='js/clipboard.js') }}"></script>
     <script src="{{ url_for('static', filename='solutions.js') }}?v=1"></script>
-    <script src="{{ url_for('static', filename='script.js') }}?v=28"></script>
+    <script src="{{ url_for('static', filename='js/admin-pipeline.js') }}?v=1"></script>
+    <script src="{{ url_for('static', filename='script.js') }}?v=29"></script>
 </body>
 </html>

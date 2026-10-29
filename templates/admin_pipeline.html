@@ -1,0 +1,57 @@
+  <svg class="sprite" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <symbol id="pipeline-i-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></symbol>
+      <symbol id="pipeline-i-chat" viewBox="0 0 24 24"><path d="M21 11a8 8 0 0 1-8 8H6l-4 3 1-7a8 8 0 0 1-1-4 9 9 0 0 1 19 0Z"/><path d="M7 8h9M7 12h6"/></symbol>
+      <symbol id="pipeline-i-book" viewBox="0 0 24 24"><path d="M12 5v16M12 5C8 2 4 3 2 4v15c3-1 6-1 10 2 4-3 7-3 10-2V4c-3-1-6-1-10 1Z"/></symbol>
+      <symbol id="pipeline-i-settings" viewBox="0 0 24 24"><path d="m9 3-1 3-3 1-2 3 2 2v3l2 3 3-1 2 3h3l1-3 3-1 2-3-2-2V8l-2-3-3 1-2-3Z"/><circle cx="12" cy="12" r="3"/></symbol>
+      <symbol id="pipeline-i-flow" viewBox="0 0 24 24"><rect x="3" y="3" width="6" height="6" rx="1"/><rect x="15" y="15" width="6" height="6" rx="1"/><path d="M6 9v9h9M9 6h9v9"/></symbol>
+      <symbol id="pipeline-i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 1v2m0 18v2M1 12h2m18 0h2M4 4l2 2m12 12 2 2M4 20l2-2M18 6l2-2"/></symbol>
+      <symbol id="pipeline-i-play" viewBox="0 0 24 24"><path d="m8 4 12 8-12 8Z"/></symbol>
+      <symbol id="pipeline-i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+      <symbol id="pipeline-i-reset" viewBox="0 0 24 24"><path d="M3 10a9 9 0 1 1 2 8M3 3v7h7"/></symbol>
+      <symbol id="pipeline-i-fit" viewBox="0 0 24 24"><path d="M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5"/></symbol>
+      <symbol id="pipeline-i-arrow" viewBox="0 0 24 24"><path d="M4 12h16m-6-6 6 6-6 6"/></symbol>
+      <symbol id="pipeline-i-expand" viewBox="0 0 24 24"><path d="M4 7h10M4 12h16M4 17h10m3-13 4 3-4 3m0 4 4 3-4 3"/></symbol>
+      <symbol id="pipeline-i-spark" viewBox="0 0 24 24"><path d="m12 2 3 7 7 3-7 3-3 7-3-7-7-3 7-3Z"/></symbol>
+      <symbol id="pipeline-i-search" viewBox="0 0 24 24"><circle cx="10" cy="10" r="6"/><path d="m15 15 6 6"/></symbol>
+      <symbol id="pipeline-i-lines" viewBox="0 0 24 24"><path d="M8 5h13M8 12h13M8 19h13M3 5h.01M3 12h.01M3 19h.01"/></symbol>
+      <symbol id="pipeline-i-merge" viewBox="0 0 24 24"><path d="M4 4c8 0 4 8 12 8H21M4 20c8 0 4-8 12-8m1-4 4 4-4 4"/></symbol>
+      <symbol id="pipeline-i-rank" viewBox="0 0 24 24"><path d="M4 5h14M4 12h10M4 19h6m7-4 3 4 3-4M20 3v16"/></symbol>
+      <symbol id="pipeline-i-context" viewBox="0 0 24 24"><path d="m12 3 10 5-10 5L2 8Zm-10 9 10 5 10-5M2 16l10 5 10-5"/></symbol>
+      <symbol id="pipeline-i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v6m0-10h.01"/></symbol>
+      <symbol id="pipeline-i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M6 18 18 6"/></symbol>
+      <symbol id="pipeline-i-chevron" viewBox="0 0 24 24"><path d="m8 5 7 7-7 7"/></symbol>
+      <symbol id="pipeline-i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12"/></symbol>
+    </defs>
+  </svg>
+      <section class="page-heading"><div><div class="eyebrow"><span class="eyebrow-line"></span>ОТ ВОПРОСА К ОТВЕТУ</div><h1>Архитектура ответа<span class="title-dot">.</span></h1><p>Настройки сервера и общий черновик с вкладкой «Настройки».</p></div><div class="heading-actions"><button id="pipeline-reload" type="button" class="button secondary">Обновить</button><button id="pipeline-reset" class="button secondary" disabled><svg><use href="#pipeline-i-reset"/></svg>Сбросить</button><button id="pipeline-apply" class="button primary" disabled><svg><use href="#pipeline-i-check"/></svg><span>Применено</span></button></div></section>
+
+<div id="pipeline-notice" class="pipeline-notice" role="status" aria-live="polite">Откройте вкладку для загрузки настроек.</div>
+      <section data-pipeline-content hidden class="pipeline-workspace" aria-label="Визуальный редактор пайплайна">
+        <div class="board">
+          <div class="board-toolbar"><div class="board-title"><svg><use href="#pipeline-i-flow"/></svg><strong>Карта обработки</strong><span id="pipeline-active-count">8 активных этапов</span></div><div class="view-controls"><button id="pipeline-zoom-out" title="Уменьшить" aria-label="Уменьшить">−</button><span id="pipeline-zoom-value">100%</span><button id="pipeline-zoom-in" title="Увеличить" aria-label="Увеличить">+</button><span class="separator"></span><button id="pipeline-fit" title="Вписать схему" aria-label="Вписать схему"><svg><use href="#pipeline-i-fit"/></svg></button></div></div>
+          <div id="pipeline-viewport" class="viewport" aria-label="Схема обработки; перетаскивайте фон для перемещения">
+            <div id="pipeline-graph" class="graph">
+              <div class="phase-region region-preparation" aria-hidden="true"></div><div class="phase-region region-search" aria-hidden="true"></div><div class="phase-region region-answer" aria-hidden="true"></div><div class="search-family" aria-hidden="true"><span id="pipeline-search-mode-caption">ГИБРИДНЫЙ ПОИСК</span></div>
+              <div class="phase phase-preparation"><span>01</span> ПОДГОТОВКА ВОПРОСА</div><div class="phase phase-search"><span>02</span> ПОИСК ЗНАНИЙ</div><div class="phase phase-answer"><span>03</span> ФОРМИРОВАНИЕ ОТВЕТА <svg><use href="#pipeline-i-arrow"/></svg></div>
+              <svg id="pipeline-connections" class="connections" viewBox="0 0 1160 610" aria-hidden="true"><defs><marker id="pipeline-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0 1 L 8 5 L 0 9" fill="none" stroke="context-stroke" stroke-width="1.5"/></marker></defs><g id="pipeline-paths"></g></svg>
+              <div id="pipeline-nodes"></div>
+              <div id="pipeline-loop-label" class="loop-label">Дополнительный поиск, если данных мало</div>
+              <div class="flow-caption"><span></span> Исходный вопрос сохраняется при подготовке ответа</div>
+            </div>
+            <div class="canvas-hint"><span class="mouse-icon"></span> Перетаскивайте фон · Нажмите на этап для настройки</div>
+            <div id="pipeline-running-badge" class="running-badge" hidden><span class="spinner"></span><span>Демонстрационный прогон</span></div>
+          </div>
+          <div class="board-footer"><div class="legend"><span><i class="legend-active"></i>Включён</span><span><i class="legend-inactive"></i>Пропускается</span><span><i class="legend-conditional"></i>По условию</span></div><div id="pipeline-draft-status">Настройки загружены с сервера</div></div>
+        </div>
+
+        <aside id="pipeline-inspector" class="inspector" aria-label="Параметры выбранного этапа"></aside>
+      </section>
+
+      <section data-pipeline-content hidden class="sandbox" aria-label="Демонстрация обработки вопроса">
+        <div class="sandbox-top"><div class="sandbox-title"><div class="sandbox-icon"><svg><use href="#pipeline-i-play"/></svg></div><div><h2>Попробуйте свой вопрос</h2><p>Демонстрация маршрута и промежуточных результатов · без обращения к модели</p></div></div><div class="demo-options"><label class="demo-mode-label" for="pipeline-demo-mode">Стиль демо</label><select id="pipeline-demo-mode"><option value="default">Обычный</option><option value="brief">Кратко</option><option value="instruction">Инструкция</option></select><label class="history-toggle"><input id="pipeline-with-history" type="checkbox" checked> С историей диалога</label></div></div>
+        <form id="pipeline-run-form" class="run-form"><label class="sr-only" for="pipeline-question">Тестовый вопрос</label><input id="pipeline-question" maxlength="500" value="Как настроить принтер на ТСД?" placeholder="Введите вопрос для демонстрации…" required><button id="pipeline-run" type="submit" class="button primary"><svg><use href="#pipeline-i-play"/></svg><span>Показать путь</span></button></form>
+        <div class="quick-examples"><span>Например:</span><button data-question="Как настроить принтер на ТСД?">Настройка принтера</button><button data-question="А как подключить его по Bluetooth?">Уточнение в диалоге</button><button data-question="Привет!">Приветствие</button></div>
+        <div id="pipeline-run-output" class="run-output" hidden><div class="run-output-header"><strong id="pipeline-run-status">Вопрос отправлен</strong><button id="pipeline-close-output" class="icon-button" aria-label="Скрыть результаты"><svg><use href="#pipeline-i-close"/></svg></button></div><div id="pipeline-trace" class="trace" aria-live="polite"></div><div class="trace-note">Тексты и результаты в этой демонстрации условные. Реальный поиск и генерация не запускаются.</div></div>
+      </section>
+<div id="pipeline-toast" class="toast" role="status" hidden></div>

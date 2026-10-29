@@ -435,6 +435,23 @@ SPECS: list[SettingSpec] = [
         allowed="true/false",
     ),
     SettingSpec(
+        key="RAG_MULTI_QUERY_COUNT",
+        env="RAG_MULTI_QUERY_COUNT",
+        group=_GROUP_RAG,
+        type="int",
+        description="Максимум дополнительных формулировок вопроса при включённом multi-query (без исходного запроса).",
+        allowed="целое число от 1 до 4",
+        ui={"kind": "slider", "min": 1, "max": 4, "step": 1},
+    ),
+    SettingSpec(
+        key="RAG_CHITCHAT_SKIP_RETRIEVAL",
+        env="RAG_CHITCHAT_SKIP_RETRIEVAL",
+        group=_GROUP_RAG,
+        type="bool",
+        description="Отвечать на короткие приветствия и бытовые реплики без поиска по базе знаний, если нет вложений.",
+        allowed="true/false",
+    ),
+    SettingSpec(
         key="RAG_QUERY_EXPANSION_MAX_MESSAGES",
         env="RAG_QUERY_EXPANSION_MAX_MESSAGES",
         group=_GROUP_RAG,

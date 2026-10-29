@@ -407,6 +407,8 @@ def _coerce_value(type_name: str, value):
     if type_name == "int":
         if value is None or value == "":
             raise ValueError("Пустое значение")
+        if isinstance(value, bool) or (isinstance(value, float) and not value.is_integer()):
+            raise ValueError("Требуется целое число")
         return int(value)
     if type_name == "float":
         if value is None or value == "":
@@ -456,11 +458,9 @@ def update_setting():
         if action == "clear":
             updated_overrides = dict(overrides)
             updated_overrides.pop(key, None)
-            try:
-                apply_overrides(settings, updated_overrides)
-            except ValueError as exc:
-                return jsonify({"error": f"Некорректное значение: {exc}"}), 400
+            effective = {key: getattr(type(settings), key), **updated_overrides}
             save_overrides(updated_overrides)
+            apply_overrides(settings, effective)
             _clear_overview_cache()
             if key == "MAX_FILE_SIZE":
                 current_app.config["MAX_CONTENT_LENGTH"] = int(settings.MAX_FILE_SIZE)
@@ -474,14 +474,22 @@ def update_setting():
         bounds_error = _validate_numeric_bounds(spec, coerced)
         if bounds_error:
             return jsonify({"error": bounds_error}), 400
+        if key == "RETRIEVAL_MODE" and coerced not in {"hybrid", "dense", "sparse"}:
+            return jsonify({"error": "Режим поиска: hybrid, dense или sparse"}), 400
 
         updated_overrides = dict(overrides)
         updated_overrides[key] = coerced
-        try:
-            apply_overrides(settings, updated_overrides)
-        except ValueError as exc:
-            return jsonify({"error": f"Некорректное значение: {exc}"}), 400
+        if key in {"CHUNK_SIZE", "CHUNK_OVERLAP"}:
+            from config.validation import validate_chunk_bounds
+            try:
+                validate_chunk_bounds(
+                    int(updated_overrides.get("CHUNK_SIZE", settings.CHUNK_SIZE)),
+                    int(updated_overrides.get("CHUNK_OVERLAP", settings.CHUNK_OVERLAP)),
+                )
+            except ValueError as exc:
+                return jsonify({"error": f"Некорректное значение: {exc}"}), 400
         save_overrides(updated_overrides)
+        apply_overrides(settings, updated_overrides)
         _clear_overview_cache()
         if key == "MAX_FILE_SIZE":
             current_app.config["MAX_CONTENT_LENGTH"] = int(settings.MAX_FILE_SIZE)

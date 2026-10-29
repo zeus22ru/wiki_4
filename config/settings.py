@@ -176,6 +176,7 @@ class Settings:
     # Память диалога: переписывание запроса, HyDE, multi-query
     CONVERSATIONAL_REWRITE_ENABLED: bool = _env_bool("CONVERSATIONAL_REWRITE_ENABLED", True)
     RAG_MULTI_QUERY_ENABLED: bool = _env_bool("RAG_MULTI_QUERY_ENABLED", False)
+    RAG_MULTI_QUERY_COUNT: int = max(1, min(4, int(os.getenv("RAG_MULTI_QUERY_COUNT", "3"))))
     RAG_HYDE_ENABLED: bool = _env_bool("RAG_HYDE_ENABLED", False)
     RAG_QUERY_EXPANSION_MAX_MESSAGES: int = int(os.getenv("RAG_QUERY_EXPANSION_MAX_MESSAGES", "6"))
     # Короткие приветствия / small talk — ответ без поиска по Chroma

@@ -934,13 +934,14 @@ class RAGSystem:
         return re.sub(r"^[\"']|[\"']$", "", text).strip()
 
     def _llm_multi_query_variants(self, core_query: str, original: str) -> List[str]:
+        count = max(1, min(4, int(settings.RAG_MULTI_QUERY_COUNT)))
         prompt = f"""Базовый поисковый запрос: {core_query}
 Исходная реплика пользователя: {original}
 
-Сгенерируй 2–3 коротких альтернативных запроса к базе знаний (другие формулировки, синонимы).
+Сгенерируй ровно {count} коротких альтернативных поисковых формулировок для базы знаний (синонимы, другие термины).
 Верни только JSON-массив строк на русском."""
         raw = chat_completion(prompt, timeout=90) or ""
-        return _parse_json_array_of_strings(raw)[:4]
+        return _parse_json_array_of_strings(raw)[:count]
 
     def _llm_hyde_passage(self, question: str) -> str:
         prompt = f"""Вопрос пользователя: {question}

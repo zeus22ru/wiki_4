@@ -705,7 +705,7 @@ document.addEventListener('DOMContentLoaded', () => {
     uploadForm.addEventListener('submit', uploadDocument);
     refreshAdminBtn.addEventListener('click', loadAdminOverview);
     if (refreshAdminSettingsBtn) {
-        refreshAdminSettingsBtn.addEventListener('click', loadAdminSettings);
+        refreshAdminSettingsBtn.addEventListener('click', () => loadAdminSettings({force: true}));
     }
     if (saveAdminSettingsDraftBtn) {
         saveAdminSettingsDraftBtn.addEventListener('click', saveAdminSettingsDraft);
@@ -769,6 +769,29 @@ document.addEventListener('DOMContentLoaded', () => {
     initAdminSubtabs();
     initAdminSettingsSearch();
     initAdminSettingsEditorEvents();
+    window.AdminPipelineUI?.init({
+        change: (key, value) => {
+            setAdminSettingsDraftValue(key, value);
+            if (_adminSettingsCache) renderAdminSettings(_adminSettingsCache, adminSettingsSearch?.value || '');
+        },
+        save: saveAdminSettingsDraft,
+        reset: resetAdminSettingsDraft,
+        reload: () => loadAdminSettings({force: true}),
+        openSetting: async (key) => {
+            if (adminSettingsSearch) adminSettingsSearch.value = '';
+            adminSettingsTab?.click();
+            await loadAdminSettings();
+            const input = adminSettings.querySelector(`[data-setting-input="${CSS.escape(key)}"]`);
+            const group = input?.closest('.admin-settings-group');
+            if (group?.classList.contains('is-collapsed')) {
+                group.classList.remove('is-collapsed');
+                updateAdminSettingsGroupCollapsedUi(group, false);
+            }
+            input?.scrollIntoView({block: 'center'});
+            input?.focus();
+        },
+    });
+    updateAdminSettingsDraftToolbar();
     initTooltips();
     initMermaidLightboxClicks();
     if (messageInput) {
@@ -909,6 +932,16 @@ function applyAuthState() {
     document.querySelectorAll('.admin-only').forEach((node) => {
         node.hidden = !isAdminRole;
     });
+    if (!isAdminRole) {
+        _adminSettingsRequestId += 1;
+        _adminSettingsCache = null;
+        _adminSettingsBaseByKey = {};
+        _adminSettingsDraft = {};
+        _adminSettingsDirty = new Set();
+        _adminSettingsError = '';
+        if (adminSettings) adminSettings.innerHTML = '';
+        updateAdminSettingsDraftToolbar();
+    }
     if (!isAdminRole && document.getElementById('adminPanel').classList.contains('active')) {
         switchPanel('chatPanel');
     }
@@ -1092,6 +1125,7 @@ function switchPanel(panelId) {
     document.querySelectorAll('.workspace-panel').forEach((panel) => {
         panel.classList.toggle('active', panel.id === panelId);
     });
+    document.querySelector('.main-shell')?.classList.toggle('admin-workspace-open', panelId === 'adminPanel');
     if (panelId === 'documentsPanel') {
         loadDocuments();
     }
@@ -3685,13 +3719,31 @@ function initAdminSubtabs() {
         return;
     }
     buttons.forEach((btn) => {
+        btn.setAttribute('role', 'tab');
+        btn.setAttribute('aria-controls', btn.dataset.adminPanel);
+        btn.setAttribute('aria-selected', String(btn.classList.contains('active')));
+        btn.tabIndex = btn.classList.contains('active') ? 0 : -1;
+        btn.addEventListener('keydown', (event) => {
+            const tabs = [...buttons];
+            const index = tabs.indexOf(btn);
+            let target;
+            if (event.key === 'ArrowRight') target = tabs[(index + 1) % tabs.length];
+            if (event.key === 'ArrowLeft') target = tabs[(index + tabs.length - 1) % tabs.length];
+            if (event.key === 'Home') target = tabs[0];
+            if (event.key === 'End') target = tabs[tabs.length - 1];
+            if (target) { event.preventDefault(); target.focus(); target.click(); }
+        });
         btn.addEventListener('click', () => {
             const panelId = btn.getAttribute('data-admin-panel');
-            buttons.forEach((b) => b.classList.toggle('active', b === btn));
+            buttons.forEach((b) => {
+                b.classList.toggle('active', b === btn);
+                b.setAttribute('aria-selected', String(b === btn));
+                b.tabIndex = b === btn ? 0 : -1;
+            });
             document.querySelectorAll('.admin-subpanel').forEach((panel) => {
                 panel.classList.toggle('active', panel.id === panelId);
             });
-            if (panelId === 'adminSettingsPanel') {
+            if (panelId === 'adminSettingsPanel' || panelId === 'adminPipelinePanel') {
                 loadAdminSettings();
             } else if (panelId === 'adminUsersPanel') {
                 loadAdminUsers(1);
@@ -3708,8 +3760,12 @@ let _adminSettingsBaseByKey = {};
 let _adminSettingsDraft = {};
 let _adminSettingsDirty = new Set();
 let _adminSettingsEditorEventsInitialized = false;
+let _adminSettingsSaving = false;
+let _adminSettingsLoadPromise = null;
+let _adminSettingsRequestId = 0;
+let _adminSettingsError = '';
 
-async function loadAdminSettings() {
+async function loadAdminSettings({force = false} = {}) {
     if (!adminSettings) {
         return;
     }
@@ -3718,18 +3774,42 @@ async function loadAdminSettings() {
         _adminSettingsCache = null;
         return;
     }
+    if (_adminSettingsLoadPromise) return _adminSettingsLoadPromise;
+    if (_adminSettingsCache && !force) {
+        renderAdminSettings(_adminSettingsCache, (adminSettingsSearch?.value || '').trim());
+        updateAdminSettingsDraftToolbar();
+        return true;
+    }
+    const requestId = ++_adminSettingsRequestId;
+    _adminSettingsError = '';
     adminSettings.innerHTML = '<div class="empty-state">Загрузка настроек...</div>';
     _adminModelsCache = null;
-    try {
+    _adminSettingsLoadPromise = (async () => { try {
         const data = await apiJson('/api/admin/settings/schema');
+        if (requestId !== _adminSettingsRequestId || currentAuth.role !== 'admin') return false;
         _adminSettingsCache = data;
         _adminSettingsBaseByKey = indexAdminSettingsByKey(data);
+        // Refreshing or switching tabs preserves the shared unsaved draft.
+        for (const key of [..._adminSettingsDirty]) {
+            const item = _adminSettingsBaseByKey[key];
+            if (!item || (!item.secret && normalizeValueForCompare(item.type, _adminSettingsDraft[key]) === normalizeValueForCompare(item.type, item.value))) {
+                delete _adminSettingsDraft[key];
+                _adminSettingsDirty.delete(key);
+            }
+        }
         renderAdminSettings(data, (adminSettingsSearch?.value || '').trim());
-        updateAdminSettingsDraftToolbar();
+        return true;
     } catch (error) {
+        if (requestId !== _adminSettingsRequestId) return false;
+        _adminSettingsError = error.message;
         adminSettings.innerHTML = `<div class="empty-state">${escapeHtml(error.message)}</div>`;
-        _adminSettingsCache = null;
-    }
+        return false;
+    } finally {
+        _adminSettingsLoadPromise = null;
+        updateAdminSettingsDraftToolbar();
+    } })();
+    updateAdminSettingsDraftToolbar();
+    return _adminSettingsLoadPromise;
 }
 
 function indexAdminSettingsByKey(payload) {
@@ -4076,7 +4156,10 @@ function initAdminSettingsEditorEvents() {
             const key = target.getAttribute('data-setting-range');
             const wrap = adminSettings.querySelector(`[data-setting-slider="${CSS.escape(key)}"]`);
             const num = wrap?.querySelector(`input[data-setting-input="${CSS.escape(key)}"]`);
-            if (num) num.value = target.value;
+            if (num) {
+                num.value = target.value;
+                updateAdminSettingsDraftFromInput(key, num);
+            }
         } else if (target.matches('input[data-setting-input]')) {
             const key = target.getAttribute('data-setting-input');
             const wrap = adminSettings.querySelector(`[data-setting-slider="${CSS.escape(key)}"]`);
@@ -4146,6 +4229,13 @@ function updateAdminSettingsDraftFromInput(key, el) {
     } else {
         return;
     }
+    setAdminSettingsDraftValue(key, value);
+}
+
+function setAdminSettingsDraftValue(key, value) {
+    const base = _adminSettingsBaseByKey[key];
+    if (!base || _adminSettingsSaving || currentAuth.role !== 'admin') return;
+    _adminSettingsError = '';
 
     // Секрет считаем "изменённым" только если есть ввод.
     if (base.secret) {
@@ -4222,10 +4312,10 @@ function updateAdminSettingsDraftToolbar() {
     }
 
     [saveAdminSettingsDraftBtn, saveAdminSettingsDraftFloatBtn].forEach((btn) => {
-        if (btn) btn.disabled = count === 0;
+        if (btn) btn.disabled = count === 0 || _adminSettingsSaving;
     });
     [resetAdminSettingsDraftBtn, resetAdminSettingsDraftFloatBtn].forEach((btn) => {
-        if (btn) btn.disabled = count === 0;
+        if (btn) btn.disabled = count === 0 || _adminSettingsSaving;
     });
 
     const showFloat = settingsVisible && count > 0;
@@ -4236,6 +4326,18 @@ function updateAdminSettingsDraftToolbar() {
     if (adminSettingsPanel) {
         adminSettingsPanel.classList.toggle('has-floating-draft', showFloat);
     }
+    if (adminSettings) adminSettings.inert = _adminSettingsSaving;
+    window.AdminPipelineUI?.update({
+        ready: Boolean(_adminSettingsCache),
+        isAdmin: currentAuth.role === 'admin',
+        visible: document.getElementById('adminPipelinePanel')?.classList.contains('active') && document.getElementById('adminPanel')?.classList.contains('active'),
+        items: _adminSettingsBaseByKey,
+        draft: _adminSettingsDraft,
+        dirtyCount: count,
+        saving: _adminSettingsSaving,
+        loading: Boolean(_adminSettingsLoadPromise),
+        error: _adminSettingsError,
+    });
 }
 
 function setAdminSettingsDraftStatus(text) {
@@ -4245,6 +4347,7 @@ function setAdminSettingsDraftStatus(text) {
     if (adminSettingsFloatInfo) {
         adminSettingsFloatInfo.textContent = text;
     }
+    window.AdminPipelineUI?.setStatus(text);
 }
 
 function setAdminSettingsSaveButtonsText(text) {
@@ -4260,6 +4363,8 @@ function setAdminSettingsSaveButtonsDisabled(disabled) {
 }
 
 async function resetAdminSettingsDraft() {
+    if (_adminSettingsSaving) return;
+    _adminSettingsError = '';
     _adminSettingsDraft = {};
     _adminSettingsDirty = new Set();
     if (_adminSettingsCache) {
@@ -4270,32 +4375,41 @@ async function resetAdminSettingsDraft() {
 
 async function saveAdminSettingsDraft() {
     const keys = Array.from(_adminSettingsDirty);
-    if (!keys.length) return;
+    if (!keys.length || _adminSettingsSaving || currentAuth.role !== 'admin') return;
+    const pending = keys.map((key) => [key, _adminSettingsDraft[key]]);
+    const adminId = currentAuth.user?.id;
+    _adminSettingsSaving = true;
+    _adminSettingsError = '';
+    updateAdminSettingsDraftToolbar();
     setAdminSettingsSaveButtonsDisabled(true);
     setAdminSettingsSaveButtonsText('Сохранение...');
+    let i = 0;
     try {
-        let i = 0;
-        for (const key of keys) {
-            i += 1;
-            setAdminSettingsDraftStatus(`Сохранение ${i}/${keys.length}...`);
-            const value = _adminSettingsDraft[key];
+        for (const [key, value] of pending) {
+            if (currentAuth.role !== 'admin' || currentAuth.user?.id !== adminId) throw new Error('Сессия администратора изменилась. Обновите настройки.');
+            setAdminSettingsDraftStatus(`Сохранение ${i + 1}/${keys.length}...`);
             await apiJson('/api/admin/settings', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({key, value, action: 'set'}),
             });
+            i += 1;
+            delete _adminSettingsDraft[key];
+            _adminSettingsDirty.delete(key);
+            if (_adminSettingsBaseByKey[key]) _adminSettingsBaseByKey[key].value = _adminSettingsBaseByKey[key].secret ? '' : value;
         }
-        _adminSettingsDraft = {};
-        _adminSettingsDirty = new Set();
-        await loadAdminSettings();
+        const refreshed = await loadAdminSettings({force: true});
         await syncRagToolbarDefaults();
-        setAdminSettingsDraftStatus('Сохранено');
+        setAdminSettingsDraftStatus(refreshed ? 'Сохранено' : 'Настройки сохранены. Не удалось обновить список; нажмите «Обновить».');
         setTimeout(() => {
-            setAdminSettingsDraftStatus('');
+            if (!_adminSettingsSaving && !_adminSettingsError) setAdminSettingsDraftStatus('');
         }, 2000);
     } catch (error) {
-        setAdminSettingsDraftStatus(error.message);
+        _adminSettingsError = `${i ? `Сохранено ${i} из ${keys.length}. ` : ''}${error.message}`;
+        setAdminSettingsDraftStatus(_adminSettingsError);
+        if (i) await syncRagToolbarDefaults();
     } finally {
+        _adminSettingsSaving = false;
         setAdminSettingsSaveButtonsText('Сохранить всё');
         updateAdminSettingsDraftToolbar();
     }
@@ -4340,13 +4454,14 @@ async function saveAdminSetting(key) {
             body: JSON.stringify({key, value, action: 'set'}),
         });
         if (status) status.textContent = 'Сохранено';
-        await loadAdminSettings();
+        await loadAdminSettings({force: true});
     } catch (error) {
         if (status) status.textContent = error.message;
     }
 }
 
 async function clearAdminSetting(key) {
+    if (_adminSettingsSaving) return;
     const status = adminSettings.querySelector(`[data-setting-status="${CSS.escape(key)}"]`);
     if (status) status.textContent = 'Сброс...';
     try {
@@ -4358,7 +4473,7 @@ async function clearAdminSetting(key) {
         if (status) status.textContent = 'Сброшено';
         delete _adminSettingsDraft[key];
         _adminSettingsDirty.delete(key);
-        await loadAdminSettings();
+        await loadAdminSettings({force: true});
     } catch (error) {
         if (status) status.textContent = error.message;
     }
